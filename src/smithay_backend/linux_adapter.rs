@@ -101,6 +101,88 @@ impl SmithayLinuxAdapterPumpStats {
     }
 }
 
+/// Smithay Linux adapter 未来计划提供的协议 global 类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterGlobalKind {
+    /// Wayland compositor global 的纯数据计划。
+    Compositor,
+
+    /// Wayland shared-memory global 的纯数据计划。
+    Shm,
+
+    /// XDG shell base global 的纯数据计划。
+    XdgWmBase,
+}
+
+/// Smithay Linux adapter global 计划的注册状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterGlobalRegistrationState {
+    /// 只存在计划，尚未执行任何真实注册。
+    PlannedOnly,
+
+    /// 为未来阶段保留的已注册状态；Phase 48D 不会产生该状态。
+    Registered,
+}
+
+/// 单项 Smithay Linux adapter protocol global 计划。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterGlobalPlan {
+    /// global 的稳定类别。
+    pub kind: SmithayLinuxAdapterGlobalKind,
+
+    /// global 的协议名称；仅为纯字符串计划。
+    pub name: &'static str,
+
+    /// 计划提供的固定协议版本。
+    pub version: u32,
+
+    /// 当前注册状态；Phase 48D 恒为 `PlannedOnly`。
+    pub state: SmithayLinuxAdapterGlobalRegistrationState,
+
+    /// 当前计划是否仍然只属于 skeleton。
+    pub skeleton_only: bool,
+}
+
+/// Smithay Linux adapter protocol global 计划报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterGlobalPlanReport {
+    /// 按稳定顺序排列的 global 计划。
+    pub planned: Vec<SmithayLinuxAdapterGlobalPlan>,
+
+    /// global 计划总数。
+    pub planned_count: usize,
+
+    /// 已注册 global 数量；Phase 48D 恒为零。
+    pub registered_count: usize,
+
+    /// 当前报告是否仍然只描述 skeleton 计划。
+    pub skeleton_only: bool,
+}
+
+const PROTOCOL_GLOBAL_PLAN: [SmithayLinuxAdapterGlobalPlan; 3] = [
+    SmithayLinuxAdapterGlobalPlan {
+        kind: SmithayLinuxAdapterGlobalKind::Compositor,
+        name: "wl_compositor",
+        version: 6,
+        state: SmithayLinuxAdapterGlobalRegistrationState::PlannedOnly,
+        skeleton_only: true,
+    },
+    SmithayLinuxAdapterGlobalPlan {
+        kind: SmithayLinuxAdapterGlobalKind::Shm,
+        name: "wl_shm",
+        version: 1,
+        state: SmithayLinuxAdapterGlobalRegistrationState::PlannedOnly,
+        skeleton_only: true,
+    },
+    SmithayLinuxAdapterGlobalPlan {
+        kind: SmithayLinuxAdapterGlobalKind::XdgWmBase,
+        name: "xdg_wm_base",
+        version: 6,
+        state: SmithayLinuxAdapterGlobalRegistrationState::PlannedOnly,
+        skeleton_only: true,
+    },
+];
+
 /// Smithay Linux adapter skeleton 的结构化诊断类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SmithayLinuxAdapterDiagnostic {
@@ -124,6 +206,12 @@ pub enum SmithayLinuxAdapterDiagnostic {
 
     /// adapter 未分发协议事件。
     ProtocolEventsNotDispatched,
+
+    /// adapter 提供 protocol global 计划边界。
+    ProtocolGlobalPlanPresent,
+
+    /// 所有 protocol global 当前都只存在于计划中。
+    ProtocolGlobalsPlannedOnly,
 
     /// adapter 未注册协议 global。
     ProtocolGlobalsNotRegistered,
@@ -165,6 +253,9 @@ pub struct SmithayLinuxAdapterCapabilities {
     /// 是否接受真实客户端连接。
     pub accepts_clients: bool,
 
+    /// 是否提供 protocol global 的纯数据计划边界。
+    pub has_protocol_global_plan_boundary: bool,
+
     /// 是否注册协议对象。
     pub registers_protocol_globals: bool,
 
@@ -192,6 +283,7 @@ impl SmithayLinuxAdapterCapabilities {
             pumps_once: true,
             runs_event_loop: false,
             accepts_clients: false,
+            has_protocol_global_plan_boundary: true,
             registers_protocol_globals: false,
             dispatches_protocol_events: false,
             supports_real_wayland_surfaces: false,
@@ -212,6 +304,9 @@ pub struct SmithayLinuxAdapterSnapshot {
 
     /// adapter 当前保守能力集合。
     pub capabilities: SmithayLinuxAdapterCapabilities,
+
+    /// adapter 当前 protocol global 计划报告。
+    pub global_plan: SmithayLinuxAdapterGlobalPlanReport,
 
     /// event pump 当前累计统计。
     pub pump_stats: SmithayLinuxAdapterPumpStats,
@@ -373,7 +468,7 @@ impl SmithayLinuxAdapterSkeleton {
     /// 返回按稳定顺序生成的 adapter 结构化诊断。
     pub fn diagnostics(&self) -> Vec<SmithayLinuxAdapterDiagnostic> {
         let capabilities = self.capabilities();
-        let mut diagnostics = Vec::with_capacity(12);
+        let mut diagnostics = Vec::with_capacity(14);
 
         if capabilities.is_skeleton_only {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::SkeletonOnly);
@@ -395,6 +490,10 @@ impl SmithayLinuxAdapterSkeleton {
         }
         if !capabilities.dispatches_protocol_events {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched);
+        }
+        if capabilities.has_protocol_global_plan_boundary {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalPlanPresent);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalsPlannedOnly);
         }
         if !capabilities.registers_protocol_globals {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalsNotRegistered);
@@ -419,12 +518,30 @@ impl SmithayLinuxAdapterSkeleton {
         diagnostics
     }
 
+    /// 返回按固定顺序排列的 protocol global 纯数据计划。
+    pub fn planned_globals(&self) -> Vec<SmithayLinuxAdapterGlobalPlan> {
+        PROTOCOL_GLOBAL_PLAN.to_vec()
+    }
+
+    /// 返回当前 protocol global 计划的保守报告。
+    pub fn global_plan_report(&self) -> SmithayLinuxAdapterGlobalPlanReport {
+        let planned = self.planned_globals();
+
+        SmithayLinuxAdapterGlobalPlanReport {
+            planned_count: planned.len(),
+            registered_count: 0,
+            skeleton_only: planned.iter().all(|plan| plan.skeleton_only),
+            planned,
+        }
+    }
+
     /// 返回 adapter 当前状态的纯数据只读快照。
     pub fn snapshot(&self) -> SmithayLinuxAdapterSnapshot {
         SmithayLinuxAdapterSnapshot {
             lifecycle: self.lifecycle,
             pump_state: self.pump_state,
             capabilities: self.capabilities(),
+            global_plan: self.global_plan_report(),
             pump_stats: self.pump_stats,
             last_pump_result: self.last_pump_result,
             diagnostics: self.diagnostics(),
@@ -557,9 +674,11 @@ fn resource_initialization_error(source: Box<dyn Error>) -> SmithayLinuxAdapterE
 #[cfg(test)]
 mod tests {
     use super::{
-        SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError, SmithayLinuxAdapterLifecycle,
-        SmithayLinuxAdapterOperation, SmithayLinuxAdapterPumpOperation,
-        SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
+        SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError, SmithayLinuxAdapterGlobalKind,
+        SmithayLinuxAdapterGlobalPlan, SmithayLinuxAdapterGlobalRegistrationState,
+        SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation,
+        SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpState,
+        SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
     };
     use crate::smithay_backend::{
         runtime_facade::{BackendBootstrapMode, BackendRuntimeDiagnostic, BackendRuntimeReport},
@@ -608,6 +727,8 @@ mod tests {
             SmithayLinuxAdapterDiagnostic::EventLoopNotRunning,
             SmithayLinuxAdapterDiagnostic::ClientsNotAccepted,
             SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched,
+            SmithayLinuxAdapterDiagnostic::ProtocolGlobalPlanPresent,
+            SmithayLinuxAdapterDiagnostic::ProtocolGlobalsPlannedOnly,
             SmithayLinuxAdapterDiagnostic::ProtocolGlobalsNotRegistered,
             SmithayLinuxAdapterDiagnostic::RealSurfacesUnsupported,
             SmithayLinuxAdapterDiagnostic::GpuRenderingUnsupported,
@@ -634,9 +755,87 @@ mod tests {
         assert_eq!(first.pump_state, SmithayLinuxAdapterPumpState::NotStarted);
         assert_eq!(first.pump_stats, stats_before);
         assert_eq!(first.last_pump_result, None);
+        assert_eq!(first.global_plan.planned_count, 3);
+        assert_eq!(first.global_plan.registered_count, 0);
+        assert!(first.global_plan.skeleton_only);
         assert_eq!(first.socket_name, socket_name);
         assert!(first.is_skeleton_only);
         assert_eq!(adapter.pump_stats(), stats_before);
+    }
+
+    #[test]
+    fn protocol_global_plan_has_stable_order_names_versions_and_states() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-global-plan");
+        let adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        let expected = vec![
+            SmithayLinuxAdapterGlobalPlan {
+                kind: SmithayLinuxAdapterGlobalKind::Compositor,
+                name: "wl_compositor",
+                version: 6,
+                state: SmithayLinuxAdapterGlobalRegistrationState::PlannedOnly,
+                skeleton_only: true,
+            },
+            SmithayLinuxAdapterGlobalPlan {
+                kind: SmithayLinuxAdapterGlobalKind::Shm,
+                name: "wl_shm",
+                version: 1,
+                state: SmithayLinuxAdapterGlobalRegistrationState::PlannedOnly,
+                skeleton_only: true,
+            },
+            SmithayLinuxAdapterGlobalPlan {
+                kind: SmithayLinuxAdapterGlobalKind::XdgWmBase,
+                name: "xdg_wm_base",
+                version: 6,
+                state: SmithayLinuxAdapterGlobalRegistrationState::PlannedOnly,
+                skeleton_only: true,
+            },
+        ];
+
+        assert_eq!(adapter.planned_globals(), expected);
+        assert_eq!(adapter.planned_globals(), expected);
+        assert!(adapter.planned_globals().iter().all(|plan| {
+            plan.state == SmithayLinuxAdapterGlobalRegistrationState::PlannedOnly
+                && plan.state != SmithayLinuxAdapterGlobalRegistrationState::Registered
+                && plan.skeleton_only
+        }));
+
+        let report = adapter.global_plan_report();
+        assert_eq!(report.planned, expected);
+        assert_eq!(report.planned_count, 3);
+        assert_eq!(report.registered_count, 0);
+        assert!(report.skeleton_only);
+        assert_eq!(adapter.snapshot().global_plan, report);
+    }
+
+    #[test]
+    fn protocol_global_plan_queries_do_not_mutate_adapter_state() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-global-plan-read-only");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        adapter.start_pump().expect("NotStarted 必须允许启动 pump");
+        let last_result = adapter
+            .pump_once()
+            .expect("Ready 必须允许一次 skeleton tick");
+
+        let lifecycle = adapter.lifecycle();
+        let pump_state = adapter.pump_state();
+        let pump_stats = adapter.pump_stats();
+        let last_pump_result = adapter.last_pump_result();
+
+        let first = adapter.planned_globals();
+        let second = adapter.global_plan_report();
+
+        assert_eq!(first, second.planned);
+        assert_eq!(adapter.lifecycle(), lifecycle);
+        assert_eq!(adapter.pump_state(), pump_state);
+        assert_eq!(adapter.pump_stats(), pump_stats);
+        assert_eq!(adapter.last_pump_result(), last_pump_result);
+        assert_eq!(adapter.last_pump_result(), Some(last_result));
     }
 
     #[test]
@@ -655,6 +854,7 @@ mod tests {
         assert!(capabilities.pumps_once);
         assert!(!capabilities.runs_event_loop);
         assert!(!capabilities.accepts_clients);
+        assert!(capabilities.has_protocol_global_plan_boundary);
         assert!(!capabilities.registers_protocol_globals);
         assert!(!capabilities.dispatches_protocol_events);
         assert!(!capabilities.supports_real_wayland_surfaces);
@@ -961,6 +1161,14 @@ mod tests {
                 registers_protocol_globals: false,
             }
         )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterProtocolGlobalPlan {
+                planned_count: 3,
+                registered_count: 0,
+                skeleton_only: true,
+            }
+        )));
     }
 
     #[test]
@@ -983,6 +1191,8 @@ mod tests {
             "display(",
             "wayland_server::Display",
             "GlobalDispatch",
+            "impl Dispatch",
+            "create_global",
             "register_global",
             "delegate_",
             "calloop",

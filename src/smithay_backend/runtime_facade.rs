@@ -175,6 +175,19 @@ pub enum BackendRuntimeDiagnostic {
         /// 是否注册协议 global。
         registers_protocol_globals: bool,
     },
+
+    /// Linux adapter 只提供 protocol global 计划，尚未执行注册。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterProtocolGlobalPlan {
+        /// global 计划数量。
+        planned_count: usize,
+
+        /// 已注册 global 数量。
+        registered_count: usize,
+
+        /// 当前计划是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -214,6 +227,16 @@ impl fmt::Display for BackendRuntimeDiagnostic {
                 "adapter event pump skeleton: boundary={has_event_pump_boundary}, \
                  pumps_once={pumps_once}, event_loop={runs_event_loop}, clients={accepts_clients}, \
                  protocol_events={dispatches_protocol_events}, globals={registers_protocol_globals}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterProtocolGlobalPlan {
+                planned_count,
+                registered_count,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter protocol global plan: planned={planned_count}, \
+                 registered={registered_count}, skeleton_only={skeleton_only}"
             ),
         }
     }
@@ -306,6 +329,13 @@ impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
                 accepts_clients: capabilities.accepts_clients,
                 dispatches_protocol_events: capabilities.dispatches_protocol_events,
                 registers_protocol_globals: capabilities.registers_protocol_globals,
+            });
+        report
+            .diagnostics
+            .push(BackendRuntimeDiagnostic::AdapterProtocolGlobalPlan {
+                planned_count: snapshot.global_plan.planned_count,
+                registered_count: snapshot.global_plan.registered_count,
+                skeleton_only: snapshot.global_plan.skeleton_only,
             });
 
         report
