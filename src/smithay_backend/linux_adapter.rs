@@ -359,6 +359,127 @@ pub struct SmithayLinuxAdapterClientSessionLedgerReport {
     pub skeleton_only: bool,
 }
 
+/// Smithay Linux adapter 未来可能激活的真实能力目标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterActivationTarget {
+    /// 真实事件循环。
+    RealEventLoop,
+
+    /// 真实 client 接受路径。
+    RealClientAccept,
+
+    /// 真实 protocol global 注册。
+    RealProtocolGlobalRegistration,
+
+    /// 真实协议请求分发。
+    RealProtocolDispatch,
+
+    /// 真实 surface 生命周期。
+    RealSurfaceLifecycle,
+
+    /// 真实 XDG toplevel 生命周期。
+    RealXdgToplevelLifecycle,
+
+    /// 核心接纳流程。
+    CoreAdmission,
+
+    /// GPU 渲染。
+    GpuRendering,
+}
+
+/// 阻止 Smithay Linux adapter 激活真实能力的结构化原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterActivationBlocker {
+    /// 当前 adapter 仍然只提供 skeleton。
+    SkeletonOnly,
+
+    /// 当前 adapter 不支持真实事件循环。
+    EventLoopUnsupported,
+
+    /// 当前 adapter 不支持接受真实 client。
+    ClientAcceptUnsupported,
+
+    /// 当前 adapter 不支持真实 protocol global 注册。
+    ProtocolGlobalRegistrationUnsupported,
+
+    /// 当前 adapter 不支持协议 dispatch。
+    ProtocolDispatchUnsupported,
+
+    /// 当前 adapter 不支持真实 surface。
+    RealSurfaceUnsupported,
+
+    /// 当前 adapter 不支持 XDG toplevel。
+    XdgToplevelUnsupported,
+
+    /// 当前 adapter 不支持进入核心接纳流程。
+    CoreAdmissionUnsupported,
+
+    /// 当前 adapter 不支持 GPU 渲染。
+    GpuRenderingUnsupported,
+
+    /// 尚未实现协议 dispatch。
+    MissingDispatchImplementation,
+
+    /// 尚未实现 protocol global 注册。
+    MissingProtocolGlobalImplementation,
+
+    /// 尚未实现真实 surface 生命周期。
+    MissingSurfaceLifecycleImplementation,
+
+    /// 尚未实现核心集成。
+    MissingCoreIntegration,
+}
+
+/// Smithay Linux adapter 真实能力激活决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterActivationDecision {
+    /// 当前目标被明确阻止激活。
+    Blocked,
+}
+
+/// 单项 Smithay Linux adapter 真实能力激活报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterActivationReport {
+    /// 被评估的真实能力目标。
+    pub target: SmithayLinuxAdapterActivationTarget,
+
+    /// 当前阶段恒为 blocked 的激活决策。
+    pub decision: SmithayLinuxAdapterActivationDecision,
+
+    /// 按固定顺序排列且非空的阻止原因。
+    pub blockers: Vec<SmithayLinuxAdapterActivationBlocker>,
+
+    /// 当前报告是否严格属于 skeleton。
+    pub skeleton_only: bool,
+}
+
+/// Smithay Linux adapter 全部真实能力的激活 gate 报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterActivationGateReport {
+    /// 按固定 target 顺序排列的激活报告。
+    pub reports: Vec<SmithayLinuxAdapterActivationReport>,
+
+    /// 被阻止激活的 target 数量。
+    pub blocked_count: usize,
+
+    /// 允许激活的 target 数量；当前阶段恒为零。
+    pub allowed_count: usize,
+
+    /// 当前 gate 是否严格属于 skeleton。
+    pub skeleton_only: bool,
+}
+
+const ACTIVATION_TARGETS: [SmithayLinuxAdapterActivationTarget; 8] = [
+    SmithayLinuxAdapterActivationTarget::RealEventLoop,
+    SmithayLinuxAdapterActivationTarget::RealClientAccept,
+    SmithayLinuxAdapterActivationTarget::RealProtocolGlobalRegistration,
+    SmithayLinuxAdapterActivationTarget::RealProtocolDispatch,
+    SmithayLinuxAdapterActivationTarget::RealSurfaceLifecycle,
+    SmithayLinuxAdapterActivationTarget::RealXdgToplevelLifecycle,
+    SmithayLinuxAdapterActivationTarget::CoreAdmission,
+    SmithayLinuxAdapterActivationTarget::GpuRendering,
+];
+
 const PROTOCOL_GLOBAL_PLAN: [SmithayLinuxAdapterGlobalPlan; 3] = [
     SmithayLinuxAdapterGlobalPlan {
         kind: SmithayLinuxAdapterGlobalKind::Compositor,
@@ -397,6 +518,30 @@ pub enum SmithayLinuxAdapterDiagnostic {
 
     /// adapter 提供 event pump 的显式状态边界。
     EventPumpBoundaryPresent,
+
+    /// adapter 提供真实能力激活 gate。
+    ActivationGatePresent,
+
+    /// 所有真实能力当前都被明确阻止激活。
+    AllRealCapabilitiesBlocked,
+
+    /// 真实事件循环被阻止激活。
+    RealEventLoopBlocked,
+
+    /// 真实 client 接受路径被阻止激活。
+    RealClientAcceptBlocked,
+
+    /// 真实协议分发被阻止激活。
+    RealProtocolDispatchBlocked,
+
+    /// 真实 surface 生命周期被阻止激活。
+    RealSurfaceLifecycleBlocked,
+
+    /// 核心接纳流程被阻止激活。
+    CoreAdmissionBlocked,
+
+    /// GPU 渲染被阻止激活。
+    GpuRenderingBlocked,
 
     /// adapter 未运行真实事件循环。
     EventLoopNotRunning,
@@ -468,6 +613,9 @@ pub struct SmithayLinuxAdapterCapabilities {
     /// 是否提供显式 adapter 生命周期边界。
     pub has_adapter_lifecycle_boundary: bool,
 
+    /// 是否提供真实能力激活 gate。
+    pub has_activation_gate: bool,
+
     /// 是否提供显式 event pump 边界。
     pub has_event_pump_boundary: bool,
 
@@ -515,6 +663,7 @@ impl SmithayLinuxAdapterCapabilities {
             holds_wayland_display: true,
             holds_listening_socket: true,
             has_adapter_lifecycle_boundary: true,
+            has_activation_gate: true,
             has_event_pump_boundary: true,
             pumps_once: true,
             runs_event_loop: false,
@@ -543,6 +692,9 @@ pub struct SmithayLinuxAdapterSnapshot {
 
     /// adapter 当前保守能力集合。
     pub capabilities: SmithayLinuxAdapterCapabilities,
+
+    /// adapter 当前真实能力激活 gate 报告。
+    pub activation_gate: SmithayLinuxAdapterActivationGateReport,
 
     /// adapter 当前 unsupported client session ledger。
     pub client_session_ledger: SmithayLinuxAdapterClientSessionLedgerReport,
@@ -759,7 +911,7 @@ impl SmithayLinuxAdapterSkeleton {
     /// 返回按稳定顺序生成的 adapter 结构化诊断。
     pub fn diagnostics(&self) -> Vec<SmithayLinuxAdapterDiagnostic> {
         let capabilities = self.capabilities();
-        let mut diagnostics = Vec::with_capacity(23);
+        let mut diagnostics = Vec::with_capacity(31);
 
         if capabilities.is_skeleton_only {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::SkeletonOnly);
@@ -772,6 +924,16 @@ impl SmithayLinuxAdapterSkeleton {
         }
         if capabilities.has_event_pump_boundary {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::EventPumpBoundaryPresent);
+        }
+        if capabilities.has_activation_gate {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::ActivationGatePresent);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::AllRealCapabilitiesBlocked);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::RealEventLoopBlocked);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::RealClientAcceptBlocked);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::RealProtocolDispatchBlocked);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::RealSurfaceLifecycleBlocked);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::CoreAdmissionBlocked);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::GpuRenderingBlocked);
         }
         if !capabilities.runs_event_loop {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::EventLoopNotRunning);
@@ -958,12 +1120,49 @@ impl SmithayLinuxAdapterSkeleton {
         }
     }
 
+    /// 返回指定真实能力目标的固定阻塞报告。
+    pub fn activation_report_for(
+        &self,
+        target: SmithayLinuxAdapterActivationTarget,
+    ) -> SmithayLinuxAdapterActivationReport {
+        SmithayLinuxAdapterActivationReport {
+            target,
+            decision: SmithayLinuxAdapterActivationDecision::Blocked,
+            blockers: activation_blockers_for(target),
+            skeleton_only: true,
+        }
+    }
+
+    /// 返回全部真实能力目标的固定激活 gate 报告。
+    pub fn activation_gate_report(&self) -> SmithayLinuxAdapterActivationGateReport {
+        let reports = ACTIVATION_TARGETS
+            .into_iter()
+            .map(|target| self.activation_report_for(target))
+            .collect::<Vec<_>>();
+
+        SmithayLinuxAdapterActivationGateReport {
+            blocked_count: reports.len(),
+            allowed_count: 0,
+            skeleton_only: true,
+            reports,
+        }
+    }
+
+    /// 判断指定真实能力目标是否允许激活；当前阶段恒为 `false`。
+    pub fn can_activate(&self, target: SmithayLinuxAdapterActivationTarget) -> bool {
+        !matches!(
+            self.activation_report_for(target).decision,
+            SmithayLinuxAdapterActivationDecision::Blocked
+        )
+    }
+
     /// 返回 adapter 当前状态的纯数据只读快照。
     pub fn snapshot(&self) -> SmithayLinuxAdapterSnapshot {
         SmithayLinuxAdapterSnapshot {
             lifecycle: self.lifecycle,
             pump_state: self.pump_state,
             capabilities: self.capabilities(),
+            activation_gate: self.activation_gate_report(),
             client_session_ledger: self.client_session_ledger_report(),
             global_plan: self.global_plan_report(),
             global_registration_report: self.global_registration_report(),
@@ -1108,6 +1307,49 @@ fn unsupported_request_reason(
     }
 }
 
+fn activation_blockers_for(
+    target: SmithayLinuxAdapterActivationTarget,
+) -> Vec<SmithayLinuxAdapterActivationBlocker> {
+    use SmithayLinuxAdapterActivationBlocker as Blocker;
+
+    match target {
+        SmithayLinuxAdapterActivationTarget::RealEventLoop => {
+            vec![Blocker::SkeletonOnly, Blocker::EventLoopUnsupported]
+        }
+        SmithayLinuxAdapterActivationTarget::RealClientAccept => {
+            vec![Blocker::SkeletonOnly, Blocker::ClientAcceptUnsupported]
+        }
+        SmithayLinuxAdapterActivationTarget::RealProtocolGlobalRegistration => vec![
+            Blocker::SkeletonOnly,
+            Blocker::ProtocolGlobalRegistrationUnsupported,
+            Blocker::MissingProtocolGlobalImplementation,
+        ],
+        SmithayLinuxAdapterActivationTarget::RealProtocolDispatch => vec![
+            Blocker::SkeletonOnly,
+            Blocker::ProtocolDispatchUnsupported,
+            Blocker::MissingDispatchImplementation,
+        ],
+        SmithayLinuxAdapterActivationTarget::RealSurfaceLifecycle => vec![
+            Blocker::SkeletonOnly,
+            Blocker::RealSurfaceUnsupported,
+            Blocker::MissingSurfaceLifecycleImplementation,
+        ],
+        SmithayLinuxAdapterActivationTarget::RealXdgToplevelLifecycle => vec![
+            Blocker::SkeletonOnly,
+            Blocker::XdgToplevelUnsupported,
+            Blocker::MissingSurfaceLifecycleImplementation,
+        ],
+        SmithayLinuxAdapterActivationTarget::CoreAdmission => vec![
+            Blocker::SkeletonOnly,
+            Blocker::CoreAdmissionUnsupported,
+            Blocker::MissingCoreIntegration,
+        ],
+        SmithayLinuxAdapterActivationTarget::GpuRendering => {
+            vec![Blocker::SkeletonOnly, Blocker::GpuRenderingUnsupported]
+        }
+    }
+}
+
 fn resource_initialization_error(source: Box<dyn Error>) -> SmithayLinuxAdapterError {
     SmithayLinuxAdapterError::ResourceInitialization {
         source: Box::new(std::io::Error::other(source.to_string())),
@@ -1117,15 +1359,16 @@ fn resource_initialization_error(source: Box<dyn Error>) -> SmithayLinuxAdapterE
 #[cfg(test)]
 mod tests {
     use super::{
-        SmithayLinuxAdapterClientSessionLedgerReport, SmithayLinuxAdapterClientSessionOutcome,
-        SmithayLinuxAdapterClientSessionState, SmithayLinuxAdapterClientUnsupportedReason,
-        SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError, SmithayLinuxAdapterGlobalKind,
-        SmithayLinuxAdapterGlobalPlan, SmithayLinuxAdapterGlobalRegistrationOperation,
-        SmithayLinuxAdapterGlobalRegistrationState, SmithayLinuxAdapterLifecycle,
-        SmithayLinuxAdapterOperation, SmithayLinuxAdapterProtocolRequestKind,
-        SmithayLinuxAdapterProtocolRequestLedgerReport, SmithayLinuxAdapterProtocolRequestOutcome,
-        SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpState,
-        SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
+        SmithayLinuxAdapterActivationBlocker, SmithayLinuxAdapterActivationDecision,
+        SmithayLinuxAdapterActivationTarget, SmithayLinuxAdapterClientSessionLedgerReport,
+        SmithayLinuxAdapterClientSessionOutcome, SmithayLinuxAdapterClientSessionState,
+        SmithayLinuxAdapterClientUnsupportedReason, SmithayLinuxAdapterDiagnostic,
+        SmithayLinuxAdapterError, SmithayLinuxAdapterGlobalKind, SmithayLinuxAdapterGlobalPlan,
+        SmithayLinuxAdapterGlobalRegistrationOperation, SmithayLinuxAdapterGlobalRegistrationState,
+        SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation,
+        SmithayLinuxAdapterProtocolRequestKind, SmithayLinuxAdapterProtocolRequestLedgerReport,
+        SmithayLinuxAdapterProtocolRequestOutcome, SmithayLinuxAdapterPumpOperation,
+        SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
         SmithayLinuxAdapterUnsupportedRequestReason,
     };
     use crate::smithay_backend::{
@@ -1191,6 +1434,14 @@ mod tests {
             SmithayLinuxAdapterDiagnostic::HoldsWaylandDisplay,
             SmithayLinuxAdapterDiagnostic::HoldsListeningSocket,
             SmithayLinuxAdapterDiagnostic::EventPumpBoundaryPresent,
+            SmithayLinuxAdapterDiagnostic::ActivationGatePresent,
+            SmithayLinuxAdapterDiagnostic::AllRealCapabilitiesBlocked,
+            SmithayLinuxAdapterDiagnostic::RealEventLoopBlocked,
+            SmithayLinuxAdapterDiagnostic::RealClientAcceptBlocked,
+            SmithayLinuxAdapterDiagnostic::RealProtocolDispatchBlocked,
+            SmithayLinuxAdapterDiagnostic::RealSurfaceLifecycleBlocked,
+            SmithayLinuxAdapterDiagnostic::CoreAdmissionBlocked,
+            SmithayLinuxAdapterDiagnostic::GpuRenderingBlocked,
             SmithayLinuxAdapterDiagnostic::EventLoopNotRunning,
             SmithayLinuxAdapterDiagnostic::ClientsNotAccepted,
             SmithayLinuxAdapterDiagnostic::ClientSessionLedgerPresent,
@@ -1227,6 +1478,10 @@ mod tests {
         assert_eq!(first.pump_state, SmithayLinuxAdapterPumpState::NotStarted);
         assert_eq!(first.pump_stats, stats_before);
         assert_eq!(first.last_pump_result, None);
+        assert_eq!(first.activation_gate.reports.len(), 8);
+        assert_eq!(first.activation_gate.blocked_count, 8);
+        assert_eq!(first.activation_gate.allowed_count, 0);
+        assert!(first.activation_gate.skeleton_only);
         assert_eq!(first.global_plan.planned_count, 3);
         assert_eq!(first.global_plan.registered_count, 0);
         assert!(first.global_plan.skeleton_only);
@@ -1619,6 +1874,155 @@ mod tests {
     }
 
     #[test]
+    fn activation_gate_blocks_every_target_with_fixed_reasons_without_mutation() {
+        assert_runtime_dir();
+
+        use SmithayLinuxAdapterActivationBlocker as Blocker;
+        use SmithayLinuxAdapterActivationTarget as Target;
+
+        let socket_name = unique_socket_name("adapter-activation-gate");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        adapter
+            .register_planned_globals_skeleton()
+            .expect("registration skeleton 必须能够建立");
+        adapter.start_pump().expect("NotStarted 必须允许启动 pump");
+        let last_result = adapter
+            .pump_once()
+            .expect("Ready 必须允许一次 skeleton tick");
+        adapter.observe_unsupported_protocol_request(
+            SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface,
+        );
+        adapter.observe_unsupported_client_session();
+
+        let lifecycle = adapter.lifecycle();
+        let pump_state = adapter.pump_state();
+        let pump_stats = adapter.pump_stats();
+        let registration_report = adapter.global_registration_report();
+        let global_plan = adapter.global_plan_report();
+        let protocol_request_ledger = adapter.protocol_request_ledger_report();
+        let client_session_ledger = adapter.client_session_ledger_report();
+        let expected = [
+            (
+                Target::RealEventLoop,
+                vec![Blocker::SkeletonOnly, Blocker::EventLoopUnsupported],
+            ),
+            (
+                Target::RealClientAccept,
+                vec![Blocker::SkeletonOnly, Blocker::ClientAcceptUnsupported],
+            ),
+            (
+                Target::RealProtocolGlobalRegistration,
+                vec![
+                    Blocker::SkeletonOnly,
+                    Blocker::ProtocolGlobalRegistrationUnsupported,
+                    Blocker::MissingProtocolGlobalImplementation,
+                ],
+            ),
+            (
+                Target::RealProtocolDispatch,
+                vec![
+                    Blocker::SkeletonOnly,
+                    Blocker::ProtocolDispatchUnsupported,
+                    Blocker::MissingDispatchImplementation,
+                ],
+            ),
+            (
+                Target::RealSurfaceLifecycle,
+                vec![
+                    Blocker::SkeletonOnly,
+                    Blocker::RealSurfaceUnsupported,
+                    Blocker::MissingSurfaceLifecycleImplementation,
+                ],
+            ),
+            (
+                Target::RealXdgToplevelLifecycle,
+                vec![
+                    Blocker::SkeletonOnly,
+                    Blocker::XdgToplevelUnsupported,
+                    Blocker::MissingSurfaceLifecycleImplementation,
+                ],
+            ),
+            (
+                Target::CoreAdmission,
+                vec![
+                    Blocker::SkeletonOnly,
+                    Blocker::CoreAdmissionUnsupported,
+                    Blocker::MissingCoreIntegration,
+                ],
+            ),
+            (
+                Target::GpuRendering,
+                vec![Blocker::SkeletonOnly, Blocker::GpuRenderingUnsupported],
+            ),
+        ];
+
+        for (target, blockers) in &expected {
+            let report = adapter.activation_report_for(*target);
+
+            assert_eq!(report.target, *target);
+            assert_eq!(
+                report.decision,
+                SmithayLinuxAdapterActivationDecision::Blocked
+            );
+            assert_eq!(report.blockers.as_slice(), blockers.as_slice());
+            assert!(!report.blockers.is_empty());
+            assert!(report.skeleton_only);
+            assert!(!adapter.can_activate(*target));
+        }
+
+        let gate = adapter.activation_gate_report();
+        assert_eq!(
+            gate.reports
+                .iter()
+                .map(|report| report.target)
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|(target, _)| *target)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(gate.blocked_count, expected.len());
+        assert_eq!(gate.allowed_count, 0);
+        assert!(gate.skeleton_only);
+        assert!(gate.reports.iter().all(|report| {
+            report.decision == SmithayLinuxAdapterActivationDecision::Blocked
+                && !report.blockers.is_empty()
+                && report.skeleton_only
+        }));
+
+        assert_eq!(adapter.lifecycle(), lifecycle);
+        assert_eq!(adapter.pump_state(), pump_state);
+        assert_eq!(adapter.pump_stats(), pump_stats);
+        assert_eq!(adapter.last_pump_result(), Some(last_result));
+        assert_eq!(adapter.global_registration_report(), registration_report);
+        assert_eq!(adapter.global_plan_report(), global_plan);
+        assert_eq!(
+            adapter.protocol_request_ledger_report(),
+            protocol_request_ledger
+        );
+        assert_eq!(
+            adapter.client_session_ledger_report(),
+            client_session_ledger
+        );
+
+        let snapshot = adapter.snapshot();
+        assert_eq!(snapshot.activation_gate, gate);
+        assert_eq!(snapshot.protocol_request_ledger, protocol_request_ledger);
+        assert_eq!(snapshot.client_session_ledger, client_session_ledger);
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ActivationGatePresent)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::AllRealCapabilitiesBlocked)
+        );
+    }
+
+    #[test]
     fn adapter_skeleton_capabilities_remain_conservative() {
         assert_runtime_dir();
 
@@ -1630,6 +2034,7 @@ mod tests {
         assert!(capabilities.holds_wayland_display);
         assert!(capabilities.holds_listening_socket);
         assert!(capabilities.has_adapter_lifecycle_boundary);
+        assert!(capabilities.has_activation_gate);
         assert!(capabilities.has_event_pump_boundary);
         assert!(capabilities.pumps_once);
         assert!(!capabilities.runs_event_loop);
@@ -1971,6 +2376,20 @@ mod tests {
         )));
         assert!(report.has_diagnostic(|diagnostic| matches!(
             diagnostic,
+            BackendRuntimeDiagnostic::AdapterActivationGatePresent {
+                report_count: 8,
+                blocked_count: 8,
+                allowed_count: 0,
+                accepts_clients: false,
+                registers_protocol_globals: false,
+                dispatches_protocol_events: false,
+                supports_real_wayland_surfaces: false,
+                supports_gpu_rendering: false,
+                skeleton_only: true,
+            }
+        )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
             BackendRuntimeDiagnostic::AdapterProtocolGlobalRegistrationSkeleton {
                 attempted: false,
                 skeleton_registered_count: 0,
@@ -2022,6 +2441,20 @@ mod tests {
                 observed_count: 1,
                 rejected_unsupported_count: 1,
                 accepts_clients: false,
+                skeleton_only: true,
+            }
+        )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterActivationGatePresent {
+                report_count: 8,
+                blocked_count: 8,
+                allowed_count: 0,
+                accepts_clients: false,
+                registers_protocol_globals: false,
+                dispatches_protocol_events: false,
+                supports_real_wayland_surfaces: false,
+                supports_gpu_rendering: false,
                 skeleton_only: true,
             }
         )));

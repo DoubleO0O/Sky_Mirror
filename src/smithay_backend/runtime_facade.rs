@@ -233,6 +233,37 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前 ledger 是否仍然只属于 skeleton。
         skeleton_only: bool,
     },
+
+    /// Linux adapter 提供纯数据 activation gate，且全部真实能力被阻止。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterActivationGatePresent {
+        /// gate 中的 target 总数。
+        report_count: usize,
+
+        /// 被阻止激活的 target 数量。
+        blocked_count: usize,
+
+        /// 允许激活的 target 数量。
+        allowed_count: usize,
+
+        /// 是否接受真实 client。
+        accepts_clients: bool,
+
+        /// 是否注册真实 protocol global。
+        registers_protocol_globals: bool,
+
+        /// 是否分发真实协议事件。
+        dispatches_protocol_events: bool,
+
+        /// 是否支持真实 Wayland surface。
+        supports_real_wayland_surfaces: bool,
+
+        /// 是否支持 GPU 渲染。
+        supports_gpu_rendering: bool,
+
+        /// 当前 gate 是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -317,6 +348,26 @@ impl fmt::Display for BackendRuntimeDiagnostic {
                 "adapter client session ledger: observed={observed_count}, \
                  rejected_unsupported={rejected_unsupported_count}, \
                  accepts_clients={accepts_clients}, skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterActivationGatePresent {
+                report_count,
+                blocked_count,
+                allowed_count,
+                accepts_clients,
+                registers_protocol_globals,
+                dispatches_protocol_events,
+                supports_real_wayland_surfaces,
+                supports_gpu_rendering,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter activation gate: reports={report_count}, blocked={blocked_count}, \
+                 allowed={allowed_count}, clients={accepts_clients}, \
+                 globals={registers_protocol_globals}, \
+                 protocol_events={dispatches_protocol_events}, \
+                 real_surfaces={supports_real_wayland_surfaces}, \
+                 gpu_rendering={supports_gpu_rendering}, skeleton_only={skeleton_only}"
             ),
         }
     }
@@ -446,6 +497,19 @@ impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
                     .rejected_unsupported_count,
                 accepts_clients: capabilities.accepts_clients,
                 skeleton_only: snapshot.client_session_ledger.skeleton_only,
+            });
+        report
+            .diagnostics
+            .push(BackendRuntimeDiagnostic::AdapterActivationGatePresent {
+                report_count: snapshot.activation_gate.reports.len(),
+                blocked_count: snapshot.activation_gate.blocked_count,
+                allowed_count: snapshot.activation_gate.allowed_count,
+                accepts_clients: capabilities.accepts_clients,
+                registers_protocol_globals: capabilities.registers_protocol_globals,
+                dispatches_protocol_events: capabilities.dispatches_protocol_events,
+                supports_real_wayland_surfaces: capabilities.supports_real_wayland_surfaces,
+                supports_gpu_rendering: capabilities.supports_gpu_rendering,
+                skeleton_only: snapshot.activation_gate.skeleton_only,
             });
 
         report

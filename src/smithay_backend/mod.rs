@@ -137,18 +137,21 @@ pub use driver::{SmithayBackendDriverMode, SmithayBackendDriverProbe};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_adapter::{
-    SmithayLinuxAdapterCapabilities, SmithayLinuxAdapterClientSessionId,
-    SmithayLinuxAdapterClientSessionLedgerReport, SmithayLinuxAdapterClientSessionObservation,
-    SmithayLinuxAdapterClientSessionOutcome, SmithayLinuxAdapterClientSessionState,
-    SmithayLinuxAdapterClientUnsupportedReason, SmithayLinuxAdapterDiagnostic,
-    SmithayLinuxAdapterError, SmithayLinuxAdapterGlobalKind, SmithayLinuxAdapterGlobalPlan,
-    SmithayLinuxAdapterGlobalPlanReport, SmithayLinuxAdapterGlobalRegistrationOperation,
-    SmithayLinuxAdapterGlobalRegistrationReport, SmithayLinuxAdapterGlobalRegistrationState,
-    SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation,
-    SmithayLinuxAdapterProtocolRequestKind, SmithayLinuxAdapterProtocolRequestLedgerReport,
-    SmithayLinuxAdapterProtocolRequestObservation, SmithayLinuxAdapterProtocolRequestOutcome,
-    SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpResult, SmithayLinuxAdapterPumpState,
-    SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton, SmithayLinuxAdapterSnapshot,
+    SmithayLinuxAdapterActivationBlocker, SmithayLinuxAdapterActivationDecision,
+    SmithayLinuxAdapterActivationGateReport, SmithayLinuxAdapterActivationReport,
+    SmithayLinuxAdapterActivationTarget, SmithayLinuxAdapterCapabilities,
+    SmithayLinuxAdapterClientSessionId, SmithayLinuxAdapterClientSessionLedgerReport,
+    SmithayLinuxAdapterClientSessionObservation, SmithayLinuxAdapterClientSessionOutcome,
+    SmithayLinuxAdapterClientSessionState, SmithayLinuxAdapterClientUnsupportedReason,
+    SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError, SmithayLinuxAdapterGlobalKind,
+    SmithayLinuxAdapterGlobalPlan, SmithayLinuxAdapterGlobalPlanReport,
+    SmithayLinuxAdapterGlobalRegistrationOperation, SmithayLinuxAdapterGlobalRegistrationReport,
+    SmithayLinuxAdapterGlobalRegistrationState, SmithayLinuxAdapterLifecycle,
+    SmithayLinuxAdapterOperation, SmithayLinuxAdapterProtocolRequestKind,
+    SmithayLinuxAdapterProtocolRequestLedgerReport, SmithayLinuxAdapterProtocolRequestObservation,
+    SmithayLinuxAdapterProtocolRequestOutcome, SmithayLinuxAdapterPumpOperation,
+    SmithayLinuxAdapterPumpResult, SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats,
+    SmithayLinuxAdapterSkeleton, SmithayLinuxAdapterSnapshot,
     SmithayLinuxAdapterUnsupportedRequestReason,
 };
 #[allow(unused_imports)]
