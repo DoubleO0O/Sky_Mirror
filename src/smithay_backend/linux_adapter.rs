@@ -120,7 +120,10 @@ pub enum SmithayLinuxAdapterGlobalRegistrationState {
     /// 只存在计划，尚未执行任何真实注册。
     PlannedOnly,
 
-    /// 为未来阶段保留的已注册状态；Phase 48D 不会产生该状态。
+    /// registration skeleton ledger 已记录该 global。
+    RegistrationSkeleton,
+
+    /// 为未来阶段保留的已注册状态；Phase 48E 不会产生该状态。
     Registered,
 }
 
@@ -136,7 +139,7 @@ pub struct SmithayLinuxAdapterGlobalPlan {
     /// 计划提供的固定协议版本。
     pub version: u32,
 
-    /// 当前注册状态；Phase 48D 恒为 `PlannedOnly`。
+    /// 当前 ledger 状态；初始为计划，Phase 48E 可进入 registration skeleton。
     pub state: SmithayLinuxAdapterGlobalRegistrationState,
 
     /// 当前计划是否仍然只属于 skeleton。
@@ -152,10 +155,39 @@ pub struct SmithayLinuxAdapterGlobalPlanReport {
     /// global 计划总数。
     pub planned_count: usize,
 
-    /// 已注册 global 数量；Phase 48D 恒为零。
+    /// 真实注册 global 数量；skeleton 阶段恒为零。
     pub registered_count: usize,
 
     /// 当前报告是否仍然只描述 skeleton 计划。
+    pub skeleton_only: bool,
+}
+
+/// Smithay Linux adapter global registration skeleton 操作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxAdapterGlobalRegistrationOperation {
+    /// 把所有计划 global 记录到 registration skeleton ledger。
+    RegisterPlannedGlobalsSkeleton,
+}
+
+/// Smithay Linux adapter global registration skeleton 报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterGlobalRegistrationReport {
+    /// 是否已经尝试建立 registration skeleton。
+    pub attempted: bool,
+
+    /// 进入 registration skeleton 状态的 global 数量。
+    pub skeleton_registered_count: usize,
+
+    /// 真实注册的 global 数量；Phase 48E 恒为零。
+    pub real_registered_count: usize,
+
+    /// global 计划总数。
+    pub planned_count: usize,
+
+    /// 按稳定顺序排列的当前 global ledger。
+    pub globals: Vec<SmithayLinuxAdapterGlobalPlan>,
+
+    /// 当前报告是否仍然只描述 skeleton。
     pub skeleton_only: bool,
 }
 
@@ -213,6 +245,18 @@ pub enum SmithayLinuxAdapterDiagnostic {
     /// 所有 protocol global 当前都只存在于计划中。
     ProtocolGlobalsPlannedOnly,
 
+    /// adapter 提供 protocol global registration skeleton 边界。
+    ProtocolGlobalRegistrationBoundaryPresent,
+
+    /// registration 边界只记录 skeleton ledger。
+    ProtocolGlobalRegistrationSkeletonOnly,
+
+    /// registration skeleton 已经执行过一次。
+    ProtocolGlobalsRegistrationAttempted,
+
+    /// 真实 protocol global 注册在当前阶段不受支持。
+    ProtocolGlobalsRealRegistrationUnsupported,
+
     /// adapter 未注册协议 global。
     ProtocolGlobalsNotRegistered,
 
@@ -256,6 +300,9 @@ pub struct SmithayLinuxAdapterCapabilities {
     /// 是否提供 protocol global 的纯数据计划边界。
     pub has_protocol_global_plan_boundary: bool,
 
+    /// 是否提供 protocol global registration skeleton 边界。
+    pub has_protocol_global_registration_boundary: bool,
+
     /// 是否注册协议对象。
     pub registers_protocol_globals: bool,
 
@@ -284,6 +331,7 @@ impl SmithayLinuxAdapterCapabilities {
             runs_event_loop: false,
             accepts_clients: false,
             has_protocol_global_plan_boundary: true,
+            has_protocol_global_registration_boundary: true,
             registers_protocol_globals: false,
             dispatches_protocol_events: false,
             supports_real_wayland_surfaces: false,
@@ -307,6 +355,9 @@ pub struct SmithayLinuxAdapterSnapshot {
 
     /// adapter 当前 protocol global 计划报告。
     pub global_plan: SmithayLinuxAdapterGlobalPlanReport,
+
+    /// adapter 当前 registration skeleton 报告。
+    pub global_registration_report: Option<SmithayLinuxAdapterGlobalRegistrationReport>,
 
     /// event pump 当前累计统计。
     pub pump_stats: SmithayLinuxAdapterPumpStats,
@@ -360,6 +411,15 @@ pub enum SmithayLinuxAdapterError {
         /// 被拒绝的 event pump 操作。
         operation: SmithayLinuxAdapterPumpOperation,
     },
+
+    /// 请求的 global registration skeleton 操作已经执行过。
+    InvalidGlobalRegistrationTransition {
+        /// 收到操作时是否已经尝试 registration skeleton。
+        attempted: bool,
+
+        /// 被拒绝的 registration skeleton 操作。
+        operation: SmithayLinuxAdapterGlobalRegistrationOperation,
+    },
 }
 
 impl fmt::Display for SmithayLinuxAdapterError {
@@ -376,6 +436,14 @@ impl fmt::Display for SmithayLinuxAdapterError {
                 formatter,
                 "Smithay Linux adapter event pump 转换无效: state={from:?}, operation={operation:?}"
             ),
+            Self::InvalidGlobalRegistrationTransition {
+                attempted,
+                operation,
+            } => write!(
+                formatter,
+                "Smithay Linux adapter global registration skeleton 转换无效: \
+                 attempted={attempted}, operation={operation:?}"
+            ),
         }
     }
 }
@@ -384,7 +452,9 @@ impl Error for SmithayLinuxAdapterError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ResourceInitialization { source } => Some(source.as_ref()),
-            Self::InvalidLifecycleTransition { .. } | Self::InvalidPumpTransition { .. } => None,
+            Self::InvalidLifecycleTransition { .. }
+            | Self::InvalidPumpTransition { .. }
+            | Self::InvalidGlobalRegistrationTransition { .. } => None,
         }
     }
 }
@@ -408,6 +478,9 @@ pub struct SmithayLinuxAdapterSkeleton {
 
     /// 最近一次成功的 skeleton pump 结果。
     last_pump_result: Option<SmithayLinuxAdapterPumpResult>,
+
+    /// 一次性 protocol global registration skeleton ledger。
+    global_registration_report: Option<SmithayLinuxAdapterGlobalRegistrationReport>,
 }
 
 impl SmithayLinuxAdapterSkeleton {
@@ -437,6 +510,7 @@ impl SmithayLinuxAdapterSkeleton {
             pump_state: SmithayLinuxAdapterPumpState::NotStarted,
             pump_stats: SmithayLinuxAdapterPumpStats::empty(),
             last_pump_result: None,
+            global_registration_report: None,
         }
     }
 
@@ -468,7 +542,7 @@ impl SmithayLinuxAdapterSkeleton {
     /// 返回按稳定顺序生成的 adapter 结构化诊断。
     pub fn diagnostics(&self) -> Vec<SmithayLinuxAdapterDiagnostic> {
         let capabilities = self.capabilities();
-        let mut diagnostics = Vec::with_capacity(14);
+        let mut diagnostics = Vec::with_capacity(18);
 
         if capabilities.is_skeleton_only {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::SkeletonOnly);
@@ -493,7 +567,20 @@ impl SmithayLinuxAdapterSkeleton {
         }
         if capabilities.has_protocol_global_plan_boundary {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalPlanPresent);
-            diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalsPlannedOnly);
+            if self.global_registration_report.is_none() {
+                diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalsPlannedOnly);
+            }
+        }
+        if capabilities.has_protocol_global_registration_boundary {
+            diagnostics
+                .push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalRegistrationBoundaryPresent);
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalRegistrationSkeletonOnly);
+            if self.global_registration_report.is_some() {
+                diagnostics
+                    .push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalsRegistrationAttempted);
+            }
+            diagnostics
+                .push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalsRealRegistrationUnsupported);
         }
         if !capabilities.registers_protocol_globals {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalsNotRegistered);
@@ -520,7 +607,10 @@ impl SmithayLinuxAdapterSkeleton {
 
     /// 返回按固定顺序排列的 protocol global 纯数据计划。
     pub fn planned_globals(&self) -> Vec<SmithayLinuxAdapterGlobalPlan> {
-        PROTOCOL_GLOBAL_PLAN.to_vec()
+        self.global_registration_report.as_ref().map_or_else(
+            || PROTOCOL_GLOBAL_PLAN.to_vec(),
+            |report| report.globals.clone(),
+        )
     }
 
     /// 返回当前 protocol global 计划的保守报告。
@@ -535,6 +625,47 @@ impl SmithayLinuxAdapterSkeleton {
         }
     }
 
+    /// 记录全部计划 global 的一次性 registration skeleton ledger。
+    pub fn register_planned_globals_skeleton(
+        &mut self,
+    ) -> Result<SmithayLinuxAdapterGlobalRegistrationReport, SmithayLinuxAdapterError> {
+        let operation =
+            SmithayLinuxAdapterGlobalRegistrationOperation::RegisterPlannedGlobalsSkeleton;
+
+        if self.global_registration_report.is_some() {
+            return Err(
+                SmithayLinuxAdapterError::InvalidGlobalRegistrationTransition {
+                    attempted: true,
+                    operation,
+                },
+            );
+        }
+
+        let mut globals = PROTOCOL_GLOBAL_PLAN.to_vec();
+        for global in &mut globals {
+            global.state = SmithayLinuxAdapterGlobalRegistrationState::RegistrationSkeleton;
+        }
+
+        let report = SmithayLinuxAdapterGlobalRegistrationReport {
+            attempted: true,
+            skeleton_registered_count: globals.len(),
+            real_registered_count: 0,
+            planned_count: globals.len(),
+            skeleton_only: globals.iter().all(|global| global.skeleton_only),
+            globals,
+        };
+        self.global_registration_report = Some(report.clone());
+
+        Ok(report)
+    }
+
+    /// 返回当前 registration skeleton ledger 报告。
+    pub fn global_registration_report(
+        &self,
+    ) -> Option<SmithayLinuxAdapterGlobalRegistrationReport> {
+        self.global_registration_report.clone()
+    }
+
     /// 返回 adapter 当前状态的纯数据只读快照。
     pub fn snapshot(&self) -> SmithayLinuxAdapterSnapshot {
         SmithayLinuxAdapterSnapshot {
@@ -542,6 +673,7 @@ impl SmithayLinuxAdapterSkeleton {
             pump_state: self.pump_state,
             capabilities: self.capabilities(),
             global_plan: self.global_plan_report(),
+            global_registration_report: self.global_registration_report(),
             pump_stats: self.pump_stats,
             last_pump_result: self.last_pump_result,
             diagnostics: self.diagnostics(),
@@ -675,10 +807,10 @@ fn resource_initialization_error(source: Box<dyn Error>) -> SmithayLinuxAdapterE
 mod tests {
     use super::{
         SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError, SmithayLinuxAdapterGlobalKind,
-        SmithayLinuxAdapterGlobalPlan, SmithayLinuxAdapterGlobalRegistrationState,
-        SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation,
-        SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpState,
-        SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
+        SmithayLinuxAdapterGlobalPlan, SmithayLinuxAdapterGlobalRegistrationOperation,
+        SmithayLinuxAdapterGlobalRegistrationState, SmithayLinuxAdapterLifecycle,
+        SmithayLinuxAdapterOperation, SmithayLinuxAdapterPumpOperation,
+        SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
     };
     use crate::smithay_backend::{
         runtime_facade::{BackendBootstrapMode, BackendRuntimeDiagnostic, BackendRuntimeReport},
@@ -709,6 +841,7 @@ mod tests {
         );
         assert_eq!(adapter.socket_name_string(), socket_name);
         assert_eq!(adapter.last_pump_result(), None);
+        assert_eq!(adapter.global_registration_report(), None);
         assert!(adapter.is_skeleton_only());
     }
 
@@ -729,6 +862,9 @@ mod tests {
             SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched,
             SmithayLinuxAdapterDiagnostic::ProtocolGlobalPlanPresent,
             SmithayLinuxAdapterDiagnostic::ProtocolGlobalsPlannedOnly,
+            SmithayLinuxAdapterDiagnostic::ProtocolGlobalRegistrationBoundaryPresent,
+            SmithayLinuxAdapterDiagnostic::ProtocolGlobalRegistrationSkeletonOnly,
+            SmithayLinuxAdapterDiagnostic::ProtocolGlobalsRealRegistrationUnsupported,
             SmithayLinuxAdapterDiagnostic::ProtocolGlobalsNotRegistered,
             SmithayLinuxAdapterDiagnostic::RealSurfacesUnsupported,
             SmithayLinuxAdapterDiagnostic::GpuRenderingUnsupported,
@@ -758,6 +894,7 @@ mod tests {
         assert_eq!(first.global_plan.planned_count, 3);
         assert_eq!(first.global_plan.registered_count, 0);
         assert!(first.global_plan.skeleton_only);
+        assert_eq!(first.global_registration_report, None);
         assert_eq!(first.socket_name, socket_name);
         assert!(first.is_skeleton_only);
         assert_eq!(adapter.pump_stats(), stats_before);
@@ -839,6 +976,104 @@ mod tests {
     }
 
     #[test]
+    fn protocol_global_registration_skeleton_records_once_without_real_registration() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-global-registration");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        adapter.start_pump().expect("NotStarted 必须允许启动 pump");
+        let last_result = adapter
+            .pump_once()
+            .expect("Ready 必须允许一次 skeleton tick");
+
+        let lifecycle = adapter.lifecycle();
+        let pump_state = adapter.pump_state();
+        let pump_stats = adapter.pump_stats();
+        let report = adapter
+            .register_planned_globals_skeleton()
+            .expect("首次 registration skeleton 必须成功");
+
+        assert!(report.attempted);
+        assert_eq!(report.planned_count, 3);
+        assert_eq!(report.skeleton_registered_count, 3);
+        assert_eq!(report.real_registered_count, 0);
+        assert!(report.skeleton_only);
+        assert!(report.globals.iter().all(|global| {
+            global.state == SmithayLinuxAdapterGlobalRegistrationState::RegistrationSkeleton
+                && global.state != SmithayLinuxAdapterGlobalRegistrationState::Registered
+                && global.skeleton_only
+        }));
+        assert_eq!(adapter.global_registration_report(), Some(report.clone()));
+        assert_eq!(adapter.planned_globals(), report.globals);
+        assert_eq!(adapter.lifecycle(), lifecycle);
+        assert_eq!(adapter.pump_state(), pump_state);
+        assert_eq!(adapter.pump_stats(), pump_stats);
+        assert_eq!(adapter.last_pump_result(), Some(last_result));
+
+        let plan_report = adapter.global_plan_report();
+        assert_eq!(plan_report.planned_count, 3);
+        assert_eq!(plan_report.registered_count, 0);
+        assert!(plan_report.planned.iter().all(|global| {
+            global.state == SmithayLinuxAdapterGlobalRegistrationState::RegistrationSkeleton
+        }));
+
+        let snapshot = adapter.snapshot();
+        assert_eq!(snapshot.global_registration_report, Some(report));
+        assert_eq!(snapshot.diagnostics, adapter.diagnostics());
+        assert_eq!(adapter.diagnostics(), adapter.diagnostics());
+        assert!(
+            !snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ProtocolGlobalsPlannedOnly)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ProtocolGlobalsRegistrationAttempted)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ProtocolGlobalRegistrationSkeletonOnly)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ProtocolGlobalsNotRegistered)
+        );
+    }
+
+    #[test]
+    fn repeated_protocol_global_registration_skeleton_returns_structured_error() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-global-registration-repeat");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        adapter
+            .register_planned_globals_skeleton()
+            .expect("首次 registration skeleton 必须成功");
+        let report_before = adapter
+            .global_registration_report()
+            .expect("首次调用后必须保存报告");
+
+        let error = adapter
+            .register_planned_globals_skeleton()
+            .expect_err("重复 registration skeleton 必须失败");
+
+        assert!(matches!(
+            error,
+            SmithayLinuxAdapterError::InvalidGlobalRegistrationTransition {
+                attempted: true,
+                operation:
+                    SmithayLinuxAdapterGlobalRegistrationOperation::RegisterPlannedGlobalsSkeleton,
+            }
+        ));
+        assert_eq!(adapter.global_registration_report(), Some(report_before));
+    }
+
+    #[test]
     fn adapter_skeleton_capabilities_remain_conservative() {
         assert_runtime_dir();
 
@@ -855,6 +1090,7 @@ mod tests {
         assert!(!capabilities.runs_event_loop);
         assert!(!capabilities.accepts_clients);
         assert!(capabilities.has_protocol_global_plan_boundary);
+        assert!(capabilities.has_protocol_global_registration_boundary);
         assert!(!capabilities.registers_protocol_globals);
         assert!(!capabilities.dispatches_protocol_events);
         assert!(!capabilities.supports_real_wayland_surfaces);
@@ -1166,6 +1402,41 @@ mod tests {
             BackendRuntimeDiagnostic::AdapterProtocolGlobalPlan {
                 planned_count: 3,
                 registered_count: 0,
+                skeleton_only: true,
+            }
+        )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterProtocolGlobalRegistrationSkeleton {
+                attempted: false,
+                skeleton_registered_count: 0,
+                real_registered_count: 0,
+                skeleton_only: true,
+            }
+        )));
+    }
+
+    #[test]
+    fn registered_skeleton_runtime_report_remains_conservative() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-registration-report");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        adapter
+            .register_planned_globals_skeleton()
+            .expect("首次 registration skeleton 必须成功");
+        let report = BackendRuntimeReport::from(&adapter);
+
+        assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
+        assert!(!report.capabilities.supports_real_wayland_surfaces);
+        assert!(!report.capabilities.supports_gpu_rendering);
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterProtocolGlobalRegistrationSkeleton {
+                attempted: true,
+                skeleton_registered_count: 3,
+                real_registered_count: 0,
                 skeleton_only: true,
             }
         )));

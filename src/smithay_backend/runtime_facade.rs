@@ -188,6 +188,22 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前计划是否仍然只属于 skeleton。
         skeleton_only: bool,
     },
+
+    /// Linux adapter 只建立了 protocol global registration skeleton ledger。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterProtocolGlobalRegistrationSkeleton {
+        /// 是否已经尝试 registration skeleton。
+        attempted: bool,
+
+        /// 进入 registration skeleton 状态的 global 数量。
+        skeleton_registered_count: usize,
+
+        /// 真实注册的 global 数量。
+        real_registered_count: usize,
+
+        /// 当前 registration 状态是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -237,6 +253,18 @@ impl fmt::Display for BackendRuntimeDiagnostic {
                 formatter,
                 "adapter protocol global plan: planned={planned_count}, \
                  registered={registered_count}, skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterProtocolGlobalRegistrationSkeleton {
+                attempted,
+                skeleton_registered_count,
+                real_registered_count,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter protocol global registration skeleton: attempted={attempted}, \
+                 skeleton_registered={skeleton_registered_count}, \
+                 real_registered={real_registered_count}, skeleton_only={skeleton_only}"
             ),
         }
     }
@@ -337,6 +365,17 @@ impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
                 registered_count: snapshot.global_plan.registered_count,
                 skeleton_only: snapshot.global_plan.skeleton_only,
             });
+        let registration = snapshot.global_registration_report.as_ref();
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterProtocolGlobalRegistrationSkeleton {
+                attempted: registration.is_some(),
+                skeleton_registered_count: registration
+                    .map_or(0, |report| report.skeleton_registered_count),
+                real_registered_count: registration
+                    .map_or(0, |report| report.real_registered_count),
+                skeleton_only: registration.map_or(true, |report| report.skeleton_only),
+            },
+        );
 
         report
     }

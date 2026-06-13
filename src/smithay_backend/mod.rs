@@ -139,7 +139,8 @@ pub use driver::{SmithayBackendDriverMode, SmithayBackendDriverProbe};
 pub use linux_adapter::{
     SmithayLinuxAdapterCapabilities, SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError,
     SmithayLinuxAdapterGlobalKind, SmithayLinuxAdapterGlobalPlan,
-    SmithayLinuxAdapterGlobalPlanReport, SmithayLinuxAdapterGlobalRegistrationState,
+    SmithayLinuxAdapterGlobalPlanReport, SmithayLinuxAdapterGlobalRegistrationOperation,
+    SmithayLinuxAdapterGlobalRegistrationReport, SmithayLinuxAdapterGlobalRegistrationState,
     SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation, SmithayLinuxAdapterPumpOperation,
     SmithayLinuxAdapterPumpResult, SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats,
     SmithayLinuxAdapterSkeleton, SmithayLinuxAdapterSnapshot,
