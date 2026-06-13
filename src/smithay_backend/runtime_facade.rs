@@ -153,6 +153,28 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前 Rust 目标操作系统名称。
         platform: &'static str,
     },
+
+    /// Linux adapter 仅提供 event pump skeleton 边界。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterEventPumpSkeleton {
+        /// 是否提供 event pump 边界。
+        has_event_pump_boundary: bool,
+
+        /// 是否支持执行一次纯计数 skeleton tick。
+        pumps_once: bool,
+
+        /// 是否运行真实事件循环。
+        runs_event_loop: bool,
+
+        /// 是否接受客户端。
+        accepts_clients: bool,
+
+        /// 是否分发协议事件。
+        dispatches_protocol_events: bool,
+
+        /// 是否注册协议 global。
+        registers_protocol_globals: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -179,6 +201,20 @@ impl fmt::Display for BackendRuntimeDiagnostic {
             Self::UnsupportedPlatform { platform } => {
                 write!(formatter, "当前平台不支持 Linux 后端: {platform}")
             }
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterEventPumpSkeleton {
+                has_event_pump_boundary,
+                pumps_once,
+                runs_event_loop,
+                accepts_clients,
+                dispatches_protocol_events,
+                registers_protocol_globals,
+            } => write!(
+                formatter,
+                "adapter event pump skeleton: boundary={has_event_pump_boundary}, \
+                 pumps_once={pumps_once}, event_loop={runs_event_loop}, clients={accepts_clients}, \
+                 protocol_events={dispatches_protocol_events}, globals={registers_protocol_globals}"
+            ),
         }
     }
 }
@@ -252,13 +288,26 @@ impl From<&SmithayLinuxRuntimeProbe> for BackendRuntimeReport {
 
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
-    /// 从 Phase 48A adapter skeleton 创建保守的后端中立报告。
+    /// 从 adapter event pump skeleton 创建保守的后端中立报告。
     fn from(adapter: &SmithayLinuxAdapterSkeleton) -> Self {
-        linux_resource_report(
+        let capabilities = adapter.capabilities();
+        let mut report = linux_resource_report(
             "smithay-linux-adapter-skeleton",
             BackendBootstrapMode::ProbeOnly,
             adapter.socket_name_string(),
-        )
+        );
+        report
+            .diagnostics
+            .push(BackendRuntimeDiagnostic::AdapterEventPumpSkeleton {
+                has_event_pump_boundary: capabilities.has_event_pump_boundary,
+                pumps_once: capabilities.pumps_once,
+                runs_event_loop: capabilities.runs_event_loop,
+                accepts_clients: capabilities.accepts_clients,
+                dispatches_protocol_events: capabilities.dispatches_protocol_events,
+                registers_protocol_globals: capabilities.registers_protocol_globals,
+            });
+
+        report
     }
 }
 
