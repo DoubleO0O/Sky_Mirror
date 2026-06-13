@@ -101,6 +101,46 @@ impl SmithayLinuxAdapterPumpStats {
     }
 }
 
+/// Smithay Linux adapter skeleton 的结构化诊断类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterDiagnostic {
+    /// 当前 adapter 仍然只提供结构骨架。
+    SkeletonOnly,
+
+    /// adapter 持有已封装的 Wayland Display 资源。
+    HoldsWaylandDisplay,
+
+    /// adapter 持有已封装的 listening socket。
+    HoldsListeningSocket,
+
+    /// adapter 提供 event pump 的显式状态边界。
+    EventPumpBoundaryPresent,
+
+    /// adapter 未运行真实事件循环。
+    EventLoopNotRunning,
+
+    /// adapter 未接受客户端连接。
+    ClientsNotAccepted,
+
+    /// adapter 未分发协议事件。
+    ProtocolEventsNotDispatched,
+
+    /// adapter 未注册协议 global。
+    ProtocolGlobalsNotRegistered,
+
+    /// adapter 不支持真实 Wayland surface。
+    RealSurfacesUnsupported,
+
+    /// adapter 不支持 GPU 渲染。
+    GpuRenderingUnsupported,
+
+    /// adapter 已收到关闭请求。
+    ShutdownRequested,
+
+    /// adapter 生命周期已经停止。
+    AdapterStopped,
+}
+
 /// Smithay Linux adapter skeleton 当前具备的保守能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmithayLinuxAdapterCapabilities {
@@ -159,6 +199,34 @@ impl SmithayLinuxAdapterCapabilities {
             is_skeleton_only: true,
         }
     }
+}
+
+/// Smithay Linux adapter skeleton 的稳定只读状态快照。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterSnapshot {
+    /// adapter 当前生命周期。
+    pub lifecycle: SmithayLinuxAdapterLifecycle,
+
+    /// event pump 当前状态。
+    pub pump_state: SmithayLinuxAdapterPumpState,
+
+    /// adapter 当前保守能力集合。
+    pub capabilities: SmithayLinuxAdapterCapabilities,
+
+    /// event pump 当前累计统计。
+    pub pump_stats: SmithayLinuxAdapterPumpStats,
+
+    /// 最近一次成功的 skeleton pump 结果。
+    pub last_pump_result: Option<SmithayLinuxAdapterPumpResult>,
+
+    /// 按稳定顺序生成的结构化诊断。
+    pub diagnostics: Vec<SmithayLinuxAdapterDiagnostic>,
+
+    /// bootstrap 已绑定的 listening socket 名称。
+    pub socket_name: String,
+
+    /// 当前 adapter 是否仍然只提供结构骨架。
+    pub is_skeleton_only: bool,
 }
 
 /// Smithay Linux adapter skeleton 支持的生命周期操作。
@@ -242,6 +310,9 @@ pub struct SmithayLinuxAdapterSkeleton {
 
     /// event pump skeleton 累计统计。
     pump_stats: SmithayLinuxAdapterPumpStats,
+
+    /// 最近一次成功的 skeleton pump 结果。
+    last_pump_result: Option<SmithayLinuxAdapterPumpResult>,
 }
 
 impl SmithayLinuxAdapterSkeleton {
@@ -270,6 +341,7 @@ impl SmithayLinuxAdapterSkeleton {
             lifecycle: SmithayLinuxAdapterLifecycle::Prepared,
             pump_state: SmithayLinuxAdapterPumpState::NotStarted,
             pump_stats: SmithayLinuxAdapterPumpStats::empty(),
+            last_pump_result: None,
         }
     }
 
@@ -291,6 +363,74 @@ impl SmithayLinuxAdapterSkeleton {
     /// 返回 event pump skeleton 累计统计的只读快照。
     pub fn pump_stats(&self) -> SmithayLinuxAdapterPumpStats {
         self.pump_stats
+    }
+
+    /// 返回最近一次成功的 skeleton pump 结果。
+    pub fn last_pump_result(&self) -> Option<SmithayLinuxAdapterPumpResult> {
+        self.last_pump_result
+    }
+
+    /// 返回按稳定顺序生成的 adapter 结构化诊断。
+    pub fn diagnostics(&self) -> Vec<SmithayLinuxAdapterDiagnostic> {
+        let capabilities = self.capabilities();
+        let mut diagnostics = Vec::with_capacity(12);
+
+        if capabilities.is_skeleton_only {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::SkeletonOnly);
+        }
+        if capabilities.holds_wayland_display {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::HoldsWaylandDisplay);
+        }
+        if capabilities.holds_listening_socket {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::HoldsListeningSocket);
+        }
+        if capabilities.has_event_pump_boundary {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::EventPumpBoundaryPresent);
+        }
+        if !capabilities.runs_event_loop {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::EventLoopNotRunning);
+        }
+        if !capabilities.accepts_clients {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::ClientsNotAccepted);
+        }
+        if !capabilities.dispatches_protocol_events {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched);
+        }
+        if !capabilities.registers_protocol_globals {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalsNotRegistered);
+        }
+        if !capabilities.supports_real_wayland_surfaces {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::RealSurfacesUnsupported);
+        }
+        if !capabilities.supports_gpu_rendering {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::GpuRenderingUnsupported);
+        }
+
+        match self.lifecycle {
+            SmithayLinuxAdapterLifecycle::Prepared => {}
+            SmithayLinuxAdapterLifecycle::ShutdownRequested => {
+                diagnostics.push(SmithayLinuxAdapterDiagnostic::ShutdownRequested);
+            }
+            SmithayLinuxAdapterLifecycle::Stopped => {
+                diagnostics.push(SmithayLinuxAdapterDiagnostic::AdapterStopped);
+            }
+        }
+
+        diagnostics
+    }
+
+    /// 返回 adapter 当前状态的纯数据只读快照。
+    pub fn snapshot(&self) -> SmithayLinuxAdapterSnapshot {
+        SmithayLinuxAdapterSnapshot {
+            lifecycle: self.lifecycle,
+            pump_state: self.pump_state,
+            capabilities: self.capabilities(),
+            pump_stats: self.pump_stats,
+            last_pump_result: self.last_pump_result,
+            diagnostics: self.diagnostics(),
+            socket_name: self.socket_name_string(),
+            is_skeleton_only: self.is_skeleton_only(),
+        }
     }
 
     /// 返回 bootstrap 已绑定的 listening socket 名称。
@@ -348,14 +488,17 @@ impl SmithayLinuxAdapterSkeleton {
 
         self.pump_stats.total_ticks = self.pump_stats.total_ticks.saturating_add(1);
 
-        Ok(SmithayLinuxAdapterPumpResult {
+        let result = SmithayLinuxAdapterPumpResult {
             state: self.pump_state,
             tick_index: self.pump_stats.total_ticks,
             processed_clients: self.pump_stats.processed_clients,
             processed_protocol_events: self.pump_stats.processed_protocol_events,
             registered_globals: self.pump_stats.registered_globals,
             is_skeleton_only: true,
-        })
+        };
+        self.last_pump_result = Some(result);
+
+        Ok(result)
     }
 
     /// 停止 event pump skeleton；不执行真实资源或协议收尾。
@@ -414,9 +557,9 @@ fn resource_initialization_error(source: Box<dyn Error>) -> SmithayLinuxAdapterE
 #[cfg(test)]
 mod tests {
     use super::{
-        SmithayLinuxAdapterError, SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation,
-        SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpState,
-        SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
+        SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError, SmithayLinuxAdapterLifecycle,
+        SmithayLinuxAdapterOperation, SmithayLinuxAdapterPumpOperation,
+        SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
     };
     use crate::smithay_backend::{
         runtime_facade::{BackendBootstrapMode, BackendRuntimeDiagnostic, BackendRuntimeReport},
@@ -446,7 +589,54 @@ mod tests {
             }
         );
         assert_eq!(adapter.socket_name_string(), socket_name);
+        assert_eq!(adapter.last_pump_result(), None);
         assert!(adapter.is_skeleton_only());
+    }
+
+    #[test]
+    fn adapter_diagnostics_have_stable_conservative_order() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-diagnostics");
+        let adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        let expected = vec![
+            SmithayLinuxAdapterDiagnostic::SkeletonOnly,
+            SmithayLinuxAdapterDiagnostic::HoldsWaylandDisplay,
+            SmithayLinuxAdapterDiagnostic::HoldsListeningSocket,
+            SmithayLinuxAdapterDiagnostic::EventPumpBoundaryPresent,
+            SmithayLinuxAdapterDiagnostic::EventLoopNotRunning,
+            SmithayLinuxAdapterDiagnostic::ClientsNotAccepted,
+            SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched,
+            SmithayLinuxAdapterDiagnostic::ProtocolGlobalsNotRegistered,
+            SmithayLinuxAdapterDiagnostic::RealSurfacesUnsupported,
+            SmithayLinuxAdapterDiagnostic::GpuRenderingUnsupported,
+        ];
+
+        assert_eq!(adapter.diagnostics(), expected);
+        assert_eq!(adapter.diagnostics(), expected);
+    }
+
+    #[test]
+    fn adapter_snapshot_is_stable_comparable_read_only_data() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-snapshot");
+        let adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name.clone())
+            .expect("adapter skeleton 必须能够构造");
+        let stats_before = adapter.pump_stats();
+        let first = adapter.snapshot();
+        let second = adapter.snapshot();
+
+        assert_eq!(first, second);
+        assert_eq!(first.clone(), first);
+        assert_eq!(first.lifecycle, SmithayLinuxAdapterLifecycle::Prepared);
+        assert_eq!(first.pump_state, SmithayLinuxAdapterPumpState::NotStarted);
+        assert_eq!(first.pump_stats, stats_before);
+        assert_eq!(first.last_pump_result, None);
+        assert_eq!(first.socket_name, socket_name);
+        assert!(first.is_skeleton_only);
+        assert_eq!(adapter.pump_stats(), stats_before);
     }
 
     #[test]
@@ -515,6 +705,7 @@ mod tests {
 
         adapter.start_pump().expect("NotStarted 必须允许启动 pump");
         assert_eq!(adapter.pump_state(), SmithayLinuxAdapterPumpState::Ready);
+        assert_eq!(adapter.last_pump_result(), None);
 
         let first = adapter
             .pump_once()
@@ -525,6 +716,8 @@ mod tests {
         assert_eq!(first.processed_protocol_events, 0);
         assert_eq!(first.registered_globals, 0);
         assert!(first.is_skeleton_only);
+        assert_eq!(adapter.last_pump_result(), Some(first));
+        assert_eq!(adapter.snapshot().last_pump_result, Some(first));
 
         let second = adapter
             .pump_once()
@@ -539,6 +732,7 @@ mod tests {
                 registered_globals: 0,
             }
         );
+        assert_eq!(adapter.last_pump_result(), Some(second));
     }
 
     #[test]
@@ -601,6 +795,36 @@ mod tests {
     }
 
     #[test]
+    fn failed_pump_and_stop_preserve_last_successful_result() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-last-pump-result");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+
+        adapter.start_pump().expect("NotStarted 必须允许启动 pump");
+        let successful = adapter
+            .pump_once()
+            .expect("Ready 必须允许一次 skeleton tick");
+        adapter.stop_pump().expect("Ready 必须允许停止 pump");
+
+        let error = adapter
+            .pump_once()
+            .expect_err("Stopped 不得执行 skeleton tick");
+        assert!(matches!(
+            error,
+            SmithayLinuxAdapterError::InvalidPumpTransition {
+                from: SmithayLinuxAdapterPumpState::Stopped,
+                operation: SmithayLinuxAdapterPumpOperation::PumpOnce,
+            }
+        ));
+        assert_eq!(adapter.last_pump_result(), Some(successful));
+        let snapshot = adapter.snapshot();
+        assert_eq!(snapshot.pump_state, SmithayLinuxAdapterPumpState::Stopped);
+        assert_eq!(snapshot.last_pump_result, Some(successful));
+    }
+
+    #[test]
     fn shutdown_requests_and_finishes_pump_stop() {
         assert_runtime_dir();
 
@@ -609,12 +833,20 @@ mod tests {
             .expect("adapter skeleton 必须能够构造");
 
         adapter.start_pump().expect("NotStarted 必须允许启动 pump");
+        let successful = adapter
+            .pump_once()
+            .expect("Ready 必须允许一次 skeleton tick");
         adapter
             .request_shutdown()
             .expect("Prepared 必须允许请求关闭");
         assert_eq!(
             adapter.pump_state(),
             SmithayLinuxAdapterPumpState::StopRequested
+        );
+        assert!(
+            adapter
+                .diagnostics()
+                .contains(&SmithayLinuxAdapterDiagnostic::ShutdownRequested)
         );
 
         let error = adapter
@@ -632,6 +864,15 @@ mod tests {
             .finish_shutdown()
             .expect("ShutdownRequested 必须允许完成关闭");
         assert_eq!(adapter.pump_state(), SmithayLinuxAdapterPumpState::Stopped);
+        let snapshot = adapter.snapshot();
+        assert_eq!(snapshot.lifecycle, SmithayLinuxAdapterLifecycle::Stopped);
+        assert_eq!(snapshot.pump_state, SmithayLinuxAdapterPumpState::Stopped);
+        assert_eq!(snapshot.last_pump_result, Some(successful));
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::AdapterStopped)
+        );
     }
 
     #[test]
@@ -737,12 +978,16 @@ mod tests {
             "BackendDriverRunner",
             "smithay::",
             "DisplayHandle",
+            "Display<",
             "display_handle",
+            "display(",
             "wayland_server::Display",
             "GlobalDispatch",
             "register_global",
             "delegate_",
             "calloop",
+            "run_once",
+            "accept(",
             "wl_surface",
             "xdg_toplevel",
             "drm",

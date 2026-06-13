@@ -137,9 +137,10 @@ pub use driver::{SmithayBackendDriverMode, SmithayBackendDriverProbe};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_adapter::{
-    SmithayLinuxAdapterCapabilities, SmithayLinuxAdapterError, SmithayLinuxAdapterLifecycle,
-    SmithayLinuxAdapterOperation, SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpResult,
-    SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
+    SmithayLinuxAdapterCapabilities, SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError,
+    SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation, SmithayLinuxAdapterPumpOperation,
+    SmithayLinuxAdapterPumpResult, SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats,
+    SmithayLinuxAdapterSkeleton, SmithayLinuxAdapterSnapshot,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]

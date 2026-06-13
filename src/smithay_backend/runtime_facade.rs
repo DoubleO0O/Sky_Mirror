@@ -290,11 +290,12 @@ impl From<&SmithayLinuxRuntimeProbe> for BackendRuntimeReport {
 impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
     /// 从 adapter event pump skeleton 创建保守的后端中立报告。
     fn from(adapter: &SmithayLinuxAdapterSkeleton) -> Self {
-        let capabilities = adapter.capabilities();
+        let snapshot = adapter.snapshot();
+        let capabilities = snapshot.capabilities;
         let mut report = linux_resource_report(
             "smithay-linux-adapter-skeleton",
             BackendBootstrapMode::ProbeOnly,
-            adapter.socket_name_string(),
+            snapshot.socket_name,
         );
         report
             .diagnostics
