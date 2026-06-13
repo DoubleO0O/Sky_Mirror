@@ -1,9 +1,12 @@
 #![cfg(all(feature = "smithay-linux", target_os = "linux"))]
 
-//! Smithay handler 边界的隔离类型形状探针。
+//! Smithay handler 边界的隔离类型形状探针与 requirement matrix。
 //!
-//! 本模块只记录 Phase 49C 的编译审计结果。它不实现 Smithay handler trait，
-//! 不持有原生对象，也不进入 adapter、runtime 或核心状态。
+//! 本模块只记录 Phase 49C 的编译审计结果和 Phase 49D 的 blocker evidence。
+//! 它不实现 Smithay handler trait，不持有原生对象，也不进入 adapter、runtime
+//! 或核心状态。
+
+use super::linux_adapter::SmithayLinuxAdapterGlobalHandlerKind;
 
 /// Phase 49C handler compile probe 的完成范围。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +97,137 @@ impl SmithayLinuxInertHandlerProbe {
     }
 }
 
+/// 建立各类 protocol global handler 前必须满足的稳定要求。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxHandlerRequirement {
+    /// global bind 入口所需的 trait 边界。
+    GlobalDispatchBind,
+
+    /// protocol object request 入口所需的 trait 边界。
+    DispatchRequest,
+
+    /// compositor surface 状态与回调边界。
+    CompositorHandler,
+
+    /// shared-memory buffer 生命周期回调边界。
+    BufferHandler,
+
+    /// shared-memory state 回调边界。
+    ShmHandler,
+
+    /// XDG shell state 与回调边界。
+    XdgShellHandler,
+
+    /// compositor surface request 处理能力。
+    SurfaceRequestHandling,
+
+    /// XDG surface request 处理能力。
+    XdgSurfaceRequestHandling,
+
+    /// client 与 protocol object 的身份可见性。
+    ClientObjectVisibility,
+
+    /// protocol resource 的生命周期跟踪能力。
+    ProtocolResourceTracking,
+
+    /// surface 到核心窗口接纳的映射边界。
+    CoreAdmissionMapping,
+}
+
+/// Phase 49D requirement matrix 中单项要求的保守状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxHandlerRequirementState {
+    /// 必需 trait 或 handler 尚未实现。
+    Missing,
+
+    /// 当前 skeleton policy 或 activation gate 阻止该能力。
+    Blocked,
+
+    /// 为未来尚未进入审计的 requirement 保留。
+    NotAttempted,
+}
+
+/// 支撑 handler requirement 状态判断的纯数据证据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxHandlerRequirementEvidence {
+    /// 该要求会建立真实 client bind 入口。
+    RequiresClientBindEntry,
+
+    /// 该要求会建立真实 protocol request 入口。
+    RequiresProtocolRequestEntry,
+
+    /// 该要求依赖真实 surface 生命周期。
+    RequiresSurfaceLifecycleSupport,
+
+    /// 该要求依赖真实 buffer 生命周期。
+    RequiresBufferLifecycleSupport,
+
+    /// 该要求依赖 shared-memory callback。
+    RequiresShmCallbackSupport,
+
+    /// 该要求依赖 XDG shell callback。
+    RequiresXdgShellCallbackSupport,
+
+    /// 该要求依赖 client 身份映射。
+    RequiresClientIdentityMapping,
+
+    /// 该要求依赖 protocol resource 跟踪。
+    RequiresResourceTracking,
+
+    /// 该要求依赖核心窗口接纳映射。
+    RequiresCoreWindowAdmission,
+
+    /// 该要求会安装实际 protocol dispatch 实现。
+    WouldInstallDispatchImplementation,
+
+    /// 常规 Smithay handler 集成路径会需要 delegate 宏。
+    WouldRequireDelegateMacro,
+
+    /// Phase 48 activation gate 阻止该要求进入生产路径。
+    BlockedByActivationGate,
+
+    /// skeleton-only policy 阻止该要求进入生产路径。
+    BlockedBySkeletonOnlyPolicy,
+}
+
+/// 单项 handler requirement 及其 blocker evidence。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxHandlerRequirementMatrixItem {
+    /// requirement 所属的 global handler。
+    pub handler: SmithayLinuxAdapterGlobalHandlerKind,
+
+    /// 必须满足的稳定要求。
+    pub requirement: SmithayLinuxHandlerRequirement,
+
+    /// 当前要求的保守状态。
+    pub state: SmithayLinuxHandlerRequirementState,
+
+    /// 支撑当前状态判断的非空稳定证据。
+    pub evidence: Vec<SmithayLinuxHandlerRequirementEvidence>,
+
+    /// 当前 item 是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// Phase 49D handler requirement matrix 的纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxHandlerRequirementMatrixReport {
+    /// 按 handler 和 requirement 固定顺序排列的矩阵项。
+    pub items: Vec<SmithayLinuxHandlerRequirementMatrixItem>,
+
+    /// 尚未实现的 trait 或 handler requirement 数量。
+    pub missing_count: usize,
+
+    /// 被能力边界阻止的 requirement 数量。
+    pub blocked_count: usize,
+
+    /// 已安全就绪的 requirement 数量；Phase 49D 恒为零。
+    pub ready_count: usize,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// 返回 Phase 49C handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -120,14 +254,222 @@ pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     }
 }
 
+/// 返回 Phase 49D handler requirements 和 blocker evidence 的固定矩阵。
+pub fn smithay_linux_handler_requirement_matrix_report()
+-> SmithayLinuxHandlerRequirementMatrixReport {
+    use SmithayLinuxAdapterGlobalHandlerKind as Handler;
+    use SmithayLinuxHandlerRequirement as Requirement;
+    use SmithayLinuxHandlerRequirementEvidence as Evidence;
+    use SmithayLinuxHandlerRequirementState as State;
+
+    let items = vec![
+        requirement_item(
+            Handler::CompositorGlobalHandler,
+            Requirement::GlobalDispatchBind,
+            State::Missing,
+            vec![
+                Evidence::RequiresClientBindEntry,
+                Evidence::WouldInstallDispatchImplementation,
+            ],
+        ),
+        requirement_item(
+            Handler::CompositorGlobalHandler,
+            Requirement::DispatchRequest,
+            State::Missing,
+            vec![
+                Evidence::RequiresProtocolRequestEntry,
+                Evidence::WouldInstallDispatchImplementation,
+            ],
+        ),
+        requirement_item(
+            Handler::CompositorGlobalHandler,
+            Requirement::CompositorHandler,
+            State::Missing,
+            vec![
+                Evidence::RequiresSurfaceLifecycleSupport,
+                Evidence::WouldInstallDispatchImplementation,
+                Evidence::WouldRequireDelegateMacro,
+            ],
+        ),
+        requirement_item(
+            Handler::CompositorGlobalHandler,
+            Requirement::SurfaceRequestHandling,
+            State::Blocked,
+            vec![Evidence::RequiresSurfaceLifecycleSupport],
+        ),
+        requirement_item(
+            Handler::CompositorGlobalHandler,
+            Requirement::ClientObjectVisibility,
+            State::Blocked,
+            vec![Evidence::RequiresClientIdentityMapping],
+        ),
+        requirement_item(
+            Handler::CompositorGlobalHandler,
+            Requirement::ProtocolResourceTracking,
+            State::Blocked,
+            vec![Evidence::RequiresResourceTracking],
+        ),
+        requirement_item(
+            Handler::CompositorGlobalHandler,
+            Requirement::CoreAdmissionMapping,
+            State::Blocked,
+            vec![Evidence::RequiresCoreWindowAdmission],
+        ),
+        requirement_item(
+            Handler::ShmGlobalHandler,
+            Requirement::GlobalDispatchBind,
+            State::Missing,
+            vec![
+                Evidence::RequiresClientBindEntry,
+                Evidence::WouldInstallDispatchImplementation,
+            ],
+        ),
+        requirement_item(
+            Handler::ShmGlobalHandler,
+            Requirement::DispatchRequest,
+            State::Missing,
+            vec![
+                Evidence::RequiresProtocolRequestEntry,
+                Evidence::WouldInstallDispatchImplementation,
+            ],
+        ),
+        requirement_item(
+            Handler::ShmGlobalHandler,
+            Requirement::BufferHandler,
+            State::Missing,
+            vec![
+                Evidence::RequiresBufferLifecycleSupport,
+                Evidence::WouldInstallDispatchImplementation,
+                Evidence::WouldRequireDelegateMacro,
+            ],
+        ),
+        requirement_item(
+            Handler::ShmGlobalHandler,
+            Requirement::ShmHandler,
+            State::Missing,
+            vec![
+                Evidence::RequiresShmCallbackSupport,
+                Evidence::WouldInstallDispatchImplementation,
+                Evidence::WouldRequireDelegateMacro,
+            ],
+        ),
+        requirement_item(
+            Handler::ShmGlobalHandler,
+            Requirement::ClientObjectVisibility,
+            State::Blocked,
+            vec![Evidence::RequiresClientIdentityMapping],
+        ),
+        requirement_item(
+            Handler::ShmGlobalHandler,
+            Requirement::ProtocolResourceTracking,
+            State::Blocked,
+            vec![Evidence::RequiresResourceTracking],
+        ),
+        requirement_item(
+            Handler::XdgWmBaseGlobalHandler,
+            Requirement::GlobalDispatchBind,
+            State::Missing,
+            vec![
+                Evidence::RequiresClientBindEntry,
+                Evidence::WouldInstallDispatchImplementation,
+            ],
+        ),
+        requirement_item(
+            Handler::XdgWmBaseGlobalHandler,
+            Requirement::DispatchRequest,
+            State::Missing,
+            vec![
+                Evidence::RequiresProtocolRequestEntry,
+                Evidence::WouldInstallDispatchImplementation,
+            ],
+        ),
+        requirement_item(
+            Handler::XdgWmBaseGlobalHandler,
+            Requirement::XdgShellHandler,
+            State::Missing,
+            vec![
+                Evidence::RequiresXdgShellCallbackSupport,
+                Evidence::WouldInstallDispatchImplementation,
+                Evidence::WouldRequireDelegateMacro,
+            ],
+        ),
+        requirement_item(
+            Handler::XdgWmBaseGlobalHandler,
+            Requirement::XdgSurfaceRequestHandling,
+            State::Blocked,
+            vec![
+                Evidence::RequiresSurfaceLifecycleSupport,
+                Evidence::RequiresXdgShellCallbackSupport,
+            ],
+        ),
+        requirement_item(
+            Handler::XdgWmBaseGlobalHandler,
+            Requirement::ClientObjectVisibility,
+            State::Blocked,
+            vec![Evidence::RequiresClientIdentityMapping],
+        ),
+        requirement_item(
+            Handler::XdgWmBaseGlobalHandler,
+            Requirement::ProtocolResourceTracking,
+            State::Blocked,
+            vec![Evidence::RequiresResourceTracking],
+        ),
+        requirement_item(
+            Handler::XdgWmBaseGlobalHandler,
+            Requirement::CoreAdmissionMapping,
+            State::Blocked,
+            vec![Evidence::RequiresCoreWindowAdmission],
+        ),
+    ];
+    let missing_count = items
+        .iter()
+        .filter(|item| item.state == State::Missing)
+        .count();
+    let blocked_count = items
+        .iter()
+        .filter(|item| item.state == State::Blocked)
+        .count();
+
+    SmithayLinuxHandlerRequirementMatrixReport {
+        items,
+        missing_count,
+        blocked_count,
+        ready_count: 0,
+        skeleton_only: true,
+    }
+}
+
+fn requirement_item(
+    handler: SmithayLinuxAdapterGlobalHandlerKind,
+    requirement: SmithayLinuxHandlerRequirement,
+    state: SmithayLinuxHandlerRequirementState,
+    mut evidence: Vec<SmithayLinuxHandlerRequirementEvidence>,
+) -> SmithayLinuxHandlerRequirementMatrixItem {
+    evidence.extend([
+        SmithayLinuxHandlerRequirementEvidence::BlockedByActivationGate,
+        SmithayLinuxHandlerRequirementEvidence::BlockedBySkeletonOnlyPolicy,
+    ]);
+
+    SmithayLinuxHandlerRequirementMatrixItem {
+        handler,
+        requirement,
+        state,
+        evidence,
+        skeleton_only: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind,
-        SmithayLinuxInertHandlerProbe, smithay_linux_handler_probe_report,
+        SmithayLinuxHandlerRequirement, SmithayLinuxHandlerRequirementEvidence,
+        SmithayLinuxHandlerRequirementState, SmithayLinuxInertHandlerProbe,
+        smithay_linux_handler_probe_report, smithay_linux_handler_requirement_matrix_report,
     };
     use crate::smithay_backend::{
         linux_adapter::{
+            SmithayLinuxAdapterGlobalHandlerBlocker, SmithayLinuxAdapterGlobalHandlerKind,
             SmithayLinuxAdapterGlobalHandlerReadiness,
             SmithayLinuxAdapterRealGlobalRegistrationMode, SmithayLinuxAdapterSkeleton,
         },
@@ -177,6 +519,196 @@ mod tests {
     }
 
     #[test]
+    fn requirement_matrix_has_stable_complete_order() {
+        use SmithayLinuxAdapterGlobalHandlerKind as Handler;
+        use SmithayLinuxHandlerRequirement as Requirement;
+        use SmithayLinuxHandlerRequirementState as State;
+
+        let report = smithay_linux_handler_requirement_matrix_report();
+        let actual = report
+            .items
+            .iter()
+            .map(|item| (item.handler, item.requirement, item.state))
+            .collect::<Vec<_>>();
+        let expected = vec![
+            (
+                Handler::CompositorGlobalHandler,
+                Requirement::GlobalDispatchBind,
+                State::Missing,
+            ),
+            (
+                Handler::CompositorGlobalHandler,
+                Requirement::DispatchRequest,
+                State::Missing,
+            ),
+            (
+                Handler::CompositorGlobalHandler,
+                Requirement::CompositorHandler,
+                State::Missing,
+            ),
+            (
+                Handler::CompositorGlobalHandler,
+                Requirement::SurfaceRequestHandling,
+                State::Blocked,
+            ),
+            (
+                Handler::CompositorGlobalHandler,
+                Requirement::ClientObjectVisibility,
+                State::Blocked,
+            ),
+            (
+                Handler::CompositorGlobalHandler,
+                Requirement::ProtocolResourceTracking,
+                State::Blocked,
+            ),
+            (
+                Handler::CompositorGlobalHandler,
+                Requirement::CoreAdmissionMapping,
+                State::Blocked,
+            ),
+            (
+                Handler::ShmGlobalHandler,
+                Requirement::GlobalDispatchBind,
+                State::Missing,
+            ),
+            (
+                Handler::ShmGlobalHandler,
+                Requirement::DispatchRequest,
+                State::Missing,
+            ),
+            (
+                Handler::ShmGlobalHandler,
+                Requirement::BufferHandler,
+                State::Missing,
+            ),
+            (
+                Handler::ShmGlobalHandler,
+                Requirement::ShmHandler,
+                State::Missing,
+            ),
+            (
+                Handler::ShmGlobalHandler,
+                Requirement::ClientObjectVisibility,
+                State::Blocked,
+            ),
+            (
+                Handler::ShmGlobalHandler,
+                Requirement::ProtocolResourceTracking,
+                State::Blocked,
+            ),
+            (
+                Handler::XdgWmBaseGlobalHandler,
+                Requirement::GlobalDispatchBind,
+                State::Missing,
+            ),
+            (
+                Handler::XdgWmBaseGlobalHandler,
+                Requirement::DispatchRequest,
+                State::Missing,
+            ),
+            (
+                Handler::XdgWmBaseGlobalHandler,
+                Requirement::XdgShellHandler,
+                State::Missing,
+            ),
+            (
+                Handler::XdgWmBaseGlobalHandler,
+                Requirement::XdgSurfaceRequestHandling,
+                State::Blocked,
+            ),
+            (
+                Handler::XdgWmBaseGlobalHandler,
+                Requirement::ClientObjectVisibility,
+                State::Blocked,
+            ),
+            (
+                Handler::XdgWmBaseGlobalHandler,
+                Requirement::ProtocolResourceTracking,
+                State::Blocked,
+            ),
+            (
+                Handler::XdgWmBaseGlobalHandler,
+                Requirement::CoreAdmissionMapping,
+                State::Blocked,
+            ),
+        ];
+
+        assert_eq!(actual, expected);
+        assert!(report.skeleton_only);
+        assert!(!report.items.is_empty());
+        assert_eq!(report.ready_count, 0);
+        assert_eq!(
+            report.missing_count + report.blocked_count,
+            report.items.len()
+        );
+        assert_eq!(report.missing_count, 10);
+        assert_eq!(report.blocked_count, 10);
+        assert!(report.items.iter().all(|item| {
+            item.skeleton_only
+                && !item.evidence.is_empty()
+                && item.state != SmithayLinuxHandlerRequirementState::NotAttempted
+        }));
+    }
+
+    #[test]
+    fn requirement_matrix_evidence_matches_requirement_semantics() {
+        use SmithayLinuxHandlerRequirement as Requirement;
+        use SmithayLinuxHandlerRequirementEvidence as Evidence;
+
+        let report = smithay_linux_handler_requirement_matrix_report();
+        let evidence_for = |requirement| {
+            report
+                .items
+                .iter()
+                .filter(|item| item.requirement == requirement)
+                .flat_map(|item| item.evidence.iter().copied())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(
+            evidence_for(Requirement::GlobalDispatchBind)
+                .contains(&Evidence::RequiresClientBindEntry)
+        );
+        assert!(
+            evidence_for(Requirement::DispatchRequest)
+                .contains(&Evidence::RequiresProtocolRequestEntry)
+        );
+        assert!(
+            evidence_for(Requirement::SurfaceRequestHandling)
+                .contains(&Evidence::RequiresSurfaceLifecycleSupport)
+        );
+        assert!(
+            evidence_for(Requirement::BufferHandler)
+                .contains(&Evidence::RequiresBufferLifecycleSupport)
+        );
+        assert!(
+            evidence_for(Requirement::ShmHandler).contains(&Evidence::RequiresShmCallbackSupport)
+        );
+        assert!(
+            evidence_for(Requirement::XdgShellHandler)
+                .contains(&Evidence::RequiresXdgShellCallbackSupport)
+        );
+        assert!(
+            evidence_for(Requirement::ClientObjectVisibility)
+                .contains(&Evidence::RequiresClientIdentityMapping)
+        );
+        assert!(
+            evidence_for(Requirement::ProtocolResourceTracking)
+                .contains(&Evidence::RequiresResourceTracking)
+        );
+        assert!(
+            evidence_for(Requirement::CoreAdmissionMapping)
+                .contains(&Evidence::RequiresCoreWindowAdmission)
+        );
+        assert!(report.items.iter().all(|item| {
+            item.evidence.contains(&Evidence::BlockedByActivationGate)
+                && item
+                    .evidence
+                    .contains(&Evidence::BlockedBySkeletonOnlyPolicy)
+        }));
+    }
+
+    #[test]
     fn existing_adapter_boundaries_remain_blocked() {
         assert_runtime_dir();
         let socket_name = unique_socket_name("phase49c-boundary");
@@ -201,6 +733,101 @@ mod tests {
                 && report.skeleton_only
                 && !report.blockers.is_empty()
         }));
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        assert_eq!(matrix.ready_count, handler_boundary.ready_count);
+        assert_eq!(
+            matrix
+                .items
+                .iter()
+                .map(|item| item.handler)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            handler_boundary.blocked_count
+        );
+        for handler_report in &handler_boundary.reports {
+            let requirements = matrix
+                .items
+                .iter()
+                .filter(|item| item.handler == handler_report.kind)
+                .map(|item| item.requirement)
+                .collect::<Vec<_>>();
+
+            assert!(requirements.contains(&SmithayLinuxHandlerRequirement::GlobalDispatchBind));
+            assert!(requirements.contains(&SmithayLinuxHandlerRequirement::DispatchRequest));
+            assert!(handler_report.blockers.contains(
+                &SmithayLinuxAdapterGlobalHandlerBlocker::MissingGlobalDispatchImplementation
+            ));
+            assert!(
+                handler_report.blockers.contains(
+                    &SmithayLinuxAdapterGlobalHandlerBlocker::MissingDispatchImplementation
+                )
+            );
+            assert!(
+                handler_report
+                    .blockers
+                    .contains(&SmithayLinuxAdapterGlobalHandlerBlocker::ActivationGateBlocked)
+            );
+            match handler_report.kind {
+                SmithayLinuxAdapterGlobalHandlerKind::CompositorGlobalHandler => {
+                    assert!(
+                        requirements.contains(&SmithayLinuxHandlerRequirement::CompositorHandler)
+                    );
+                    assert!(
+                        requirements
+                            .contains(&SmithayLinuxHandlerRequirement::SurfaceRequestHandling)
+                    );
+                    assert!(
+                        requirements
+                            .contains(&SmithayLinuxHandlerRequirement::CoreAdmissionMapping)
+                    );
+                    assert!(handler_report.blockers.contains(
+                        &SmithayLinuxAdapterGlobalHandlerBlocker::MissingCompositorHandler
+                    ));
+                    assert!(handler_report.blockers.contains(
+                        &SmithayLinuxAdapterGlobalHandlerBlocker::SurfaceRequestsUnsupported
+                    ));
+                    assert!(handler_report.blockers.contains(
+                        &SmithayLinuxAdapterGlobalHandlerBlocker::CoreIntegrationUnsupported
+                    ));
+                }
+                SmithayLinuxAdapterGlobalHandlerKind::ShmGlobalHandler => {
+                    assert!(requirements.contains(&SmithayLinuxHandlerRequirement::BufferHandler));
+                    assert!(requirements.contains(&SmithayLinuxHandlerRequirement::ShmHandler));
+                    assert!(
+                        handler_report.blockers.contains(
+                            &SmithayLinuxAdapterGlobalHandlerBlocker::MissingBufferHandler
+                        )
+                    );
+                    assert!(
+                        handler_report
+                            .blockers
+                            .contains(&SmithayLinuxAdapterGlobalHandlerBlocker::MissingShmHandler)
+                    );
+                }
+                SmithayLinuxAdapterGlobalHandlerKind::XdgWmBaseGlobalHandler => {
+                    assert!(
+                        requirements.contains(&SmithayLinuxHandlerRequirement::XdgShellHandler)
+                    );
+                    assert!(
+                        requirements
+                            .contains(&SmithayLinuxHandlerRequirement::XdgSurfaceRequestHandling)
+                    );
+                    assert!(
+                        requirements
+                            .contains(&SmithayLinuxHandlerRequirement::CoreAdmissionMapping)
+                    );
+                    assert!(handler_report.blockers.contains(
+                        &SmithayLinuxAdapterGlobalHandlerBlocker::MissingXdgShellHandler
+                    ));
+                    assert!(handler_report.blockers.contains(
+                        &SmithayLinuxAdapterGlobalHandlerBlocker::SurfaceRequestsUnsupported
+                    ));
+                    assert!(handler_report.blockers.contains(
+                        &SmithayLinuxAdapterGlobalHandlerBlocker::CoreIntegrationUnsupported
+                    ));
+                }
+            }
+        }
 
         let registration = adapter.attempt_real_global_registration_feasibility();
         assert_eq!(
@@ -230,6 +857,34 @@ mod tests {
     }
 
     #[test]
+    fn probe_report_and_requirement_matrix_remain_aligned() {
+        let probe = smithay_linux_handler_probe_report();
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+
+        assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
+        assert!(!probe.compiled_trait_shape);
+        assert_eq!(matrix.ready_count, 0);
+        assert!(matrix.items.iter().any(|item| {
+            item.requirement == SmithayLinuxHandlerRequirement::GlobalDispatchBind
+                && item.state == SmithayLinuxHandlerRequirementState::Missing
+        }));
+        assert!(matrix.items.iter().any(|item| {
+            item.requirement == SmithayLinuxHandlerRequirement::DispatchRequest
+                && item.state == SmithayLinuxHandlerRequirementState::Missing
+        }));
+        assert!(
+            probe
+                .blockers
+                .contains(&SmithayLinuxHandlerProbeBlocker::AdapterIntegrationForbidden)
+        );
+        assert!(
+            probe
+                .blockers
+                .contains(&SmithayLinuxHandlerProbeBlocker::CreateGlobalStillRequiredForRuntimeUse)
+        );
+    }
+
+    #[test]
     fn production_sources_keep_probe_isolated() {
         let probe_source = include_str!("linux_handler_probe.rs");
         let production_source = probe_source
@@ -254,7 +909,8 @@ mod tests {
             (".create_", "global"),
             ("register_", "global("),
             (".register_", "global"),
-            ("Global", "Dispatch"),
+            ("impl Global", "Dispatch"),
+            ("GlobalDispatch", "<"),
             ("impl Dis", "patch"),
             ("delegate_", "compositor"),
             ("delegate_", "shm"),
@@ -284,10 +940,14 @@ mod tests {
         let probe_type = ["SmithayLinux", "InertHandlerProbe"].concat();
         let probe_report_type = ["SmithayLinux", "HandlerProbeReport"].concat();
         let probe_function = ["smithay_linux_", "handler_probe_report"].concat();
+        let matrix_report_type = ["SmithayLinux", "HandlerRequirementMatrixReport"].concat();
+        let matrix_function = ["smithay_linux_", "handler_requirement_matrix_report"].concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
             assert!(!source.contains(&probe_function));
+            assert!(!source.contains(&matrix_report_type));
+            assert!(!source.contains(&matrix_function));
         }
     }
 }
