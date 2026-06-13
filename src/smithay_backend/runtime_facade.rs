@@ -305,6 +305,31 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前报告是否仍然只属于 skeleton 可行性边界。
         skeleton_only: bool,
     },
+
+    /// Linux adapter 的 protocol global handler 边界仍为纯数据 blocked 报告。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterGlobalHandlerBoundaryPresent {
+        /// handler 报告数量。
+        report_count: usize,
+
+        /// 已安全建立边界的 handler 数量。
+        ready_count: usize,
+
+        /// 被可行性边界阻止的 handler 数量。
+        blocked_count: usize,
+
+        /// 是否注册真实 protocol global。
+        registers_protocol_globals: bool,
+
+        /// 是否分发真实协议事件。
+        dispatches_protocol_events: bool,
+
+        /// 是否接受真实 client。
+        accepts_clients: bool,
+
+        /// 当前报告是否仍然只属于 skeleton 可行性边界。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -437,6 +462,22 @@ impl fmt::Display for BackendRuntimeDiagnostic {
                  blocked={blocked_count}, real_registered={real_registered_count}, \
                  enabled={registration_enabled}, clients={accepts_clients}, \
                  protocol_events={dispatches_protocol_events}, \
+                 skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterGlobalHandlerBoundaryPresent {
+                report_count,
+                ready_count,
+                blocked_count,
+                registers_protocol_globals,
+                dispatches_protocol_events,
+                accepts_clients,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter global handler boundary: reports={report_count}, ready={ready_count}, \
+                 blocked={blocked_count}, globals={registers_protocol_globals}, \
+                 protocol_events={dispatches_protocol_events}, clients={accepts_clients}, \
                  skeleton_only={skeleton_only}"
             ),
         }
@@ -600,6 +641,17 @@ impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
                 accepts_clients: capabilities.accepts_clients,
                 dispatches_protocol_events: capabilities.dispatches_protocol_events,
                 skeleton_only: real_registration.map_or(true, |report| report.skeleton_only),
+            },
+        );
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterGlobalHandlerBoundaryPresent {
+                report_count: snapshot.global_handler_boundary.reports.len(),
+                ready_count: snapshot.global_handler_boundary.ready_count,
+                blocked_count: snapshot.global_handler_boundary.blocked_count,
+                registers_protocol_globals: capabilities.registers_protocol_globals,
+                dispatches_protocol_events: capabilities.dispatches_protocol_events,
+                accepts_clients: capabilities.accepts_clients,
+                skeleton_only: snapshot.global_handler_boundary.skeleton_only,
             },
         );
 
