@@ -137,6 +137,8 @@ pub use driver::{SmithayBackendDriverMode, SmithayBackendDriverProbe};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_adapter::{
+    SmithayLinuxAdapterActivationAttemptLedgerReport,
+    SmithayLinuxAdapterActivationAttemptObservation, SmithayLinuxAdapterActivationAttemptOutcome,
     SmithayLinuxAdapterActivationBlocker, SmithayLinuxAdapterActivationDecision,
     SmithayLinuxAdapterActivationGateReport, SmithayLinuxAdapterActivationReport,
     SmithayLinuxAdapterActivationTarget, SmithayLinuxAdapterCapabilities,

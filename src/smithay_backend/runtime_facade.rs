@@ -264,6 +264,22 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前 gate 是否仍然只属于 skeleton。
         skeleton_only: bool,
     },
+
+    /// Linux adapter 只记录被 gate 阻止的纯数据 activation attempts。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterActivationAttemptLedgerPresent {
+        /// 已观察 attempt 数量。
+        observed_count: usize,
+
+        /// 被明确阻止的 attempt 数量。
+        blocked_count: usize,
+
+        /// 允许激活的 attempt 数量。
+        allowed_count: usize,
+
+        /// 当前 ledger 是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -368,6 +384,18 @@ impl fmt::Display for BackendRuntimeDiagnostic {
                  protocol_events={dispatches_protocol_events}, \
                  real_surfaces={supports_real_wayland_surfaces}, \
                  gpu_rendering={supports_gpu_rendering}, skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterActivationAttemptLedgerPresent {
+                observed_count,
+                blocked_count,
+                allowed_count,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter activation attempt ledger: observed={observed_count}, \
+                 blocked={blocked_count}, allowed={allowed_count}, \
+                 skeleton_only={skeleton_only}"
             ),
         }
     }
@@ -511,6 +539,14 @@ impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
                 supports_gpu_rendering: capabilities.supports_gpu_rendering,
                 skeleton_only: snapshot.activation_gate.skeleton_only,
             });
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterActivationAttemptLedgerPresent {
+                observed_count: snapshot.activation_attempt_ledger.observed_count,
+                blocked_count: snapshot.activation_attempt_ledger.blocked_count,
+                allowed_count: snapshot.activation_attempt_ledger.allowed_count,
+                skeleton_only: snapshot.activation_attempt_ledger.skeleton_only,
+            },
+        );
 
         report
     }
