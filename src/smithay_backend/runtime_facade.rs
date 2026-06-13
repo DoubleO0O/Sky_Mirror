@@ -217,6 +217,22 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前 ledger 是否仍然只属于 skeleton。
         skeleton_only: bool,
     },
+
+    /// Linux adapter 只记录被拒绝的纯数据 client session observations。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterClientSessionLedger {
+        /// 已观察 client session 数量。
+        observed_count: usize,
+
+        /// 被明确拒绝为 unsupported 的 client session 数量。
+        rejected_unsupported_count: usize,
+
+        /// 是否接受真实 client。
+        accepts_clients: bool,
+
+        /// 当前 ledger 是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -289,6 +305,18 @@ impl fmt::Display for BackendRuntimeDiagnostic {
                 "adapter inert protocol request ledger: observed={observed_count}, \
                  rejected_unsupported={rejected_unsupported_count}, \
                  skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterClientSessionLedger {
+                observed_count,
+                rejected_unsupported_count,
+                accepts_clients,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter client session ledger: observed={observed_count}, \
+                 rejected_unsupported={rejected_unsupported_count}, \
+                 accepts_clients={accepts_clients}, skeleton_only={skeleton_only}"
             ),
         }
     }
@@ -409,6 +437,16 @@ impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
                 skeleton_only: snapshot.protocol_request_ledger.skeleton_only,
             },
         );
+        report
+            .diagnostics
+            .push(BackendRuntimeDiagnostic::AdapterClientSessionLedger {
+                observed_count: snapshot.client_session_ledger.observed_count,
+                rejected_unsupported_count: snapshot
+                    .client_session_ledger
+                    .rejected_unsupported_count,
+                accepts_clients: capabilities.accepts_clients,
+                skeleton_only: snapshot.client_session_ledger.skeleton_only,
+            });
 
         report
     }

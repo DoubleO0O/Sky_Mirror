@@ -277,6 +277,88 @@ pub struct SmithayLinuxAdapterProtocolRequestLedgerReport {
     pub skeleton_only: bool,
 }
 
+/// Smithay Linux adapter 观察到的纯数据 client session 标识。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SmithayLinuxAdapterClientSessionId(u64);
+
+impl SmithayLinuxAdapterClientSessionId {
+    /// 返回从 1 开始分配的稳定纯数据标识值。
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// Smithay Linux adapter client session ledger 的状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterClientSessionState {
+    /// client session 只在 skeleton 可见性边界中被观察到。
+    ObservedSkeleton,
+
+    /// client session 已被明确记录为当前阶段不支持。
+    RejectedUnsupported,
+}
+
+/// Smithay Linux adapter 拒绝 client session 的结构化原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterClientUnsupportedReason {
+    /// 当前 adapter 仍然只提供 skeleton。
+    SkeletonOnly,
+
+    /// 当前 adapter 不支持接受真实 client。
+    ClientAcceptUnsupported,
+
+    /// 当前 adapter 不支持协议 dispatch。
+    ProtocolDispatchUnsupported,
+
+    /// 当前 adapter 不支持接入核心状态。
+    CoreIntegrationUnsupported,
+}
+
+/// Smithay Linux adapter 对 client session observation 的保守结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxAdapterClientSessionOutcome {
+    /// client session 被明确拒绝，不会被静默忽略或伪装为成功。
+    RejectedUnsupported {
+        /// 拒绝 client session 的固定结构化原因。
+        reason: SmithayLinuxAdapterClientUnsupportedReason,
+    },
+}
+
+/// 单次 unsupported client session observation。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterClientSessionObservation {
+    /// 从 1 开始递增的稳定 ledger 序号。
+    pub sequence: u64,
+
+    /// 从 1 开始分配的纯数据 session 标识。
+    pub session_id: SmithayLinuxAdapterClientSessionId,
+
+    /// 当前阶段恒为明确拒绝的 ledger 状态。
+    pub state: SmithayLinuxAdapterClientSessionState,
+
+    /// 当前阶段恒为明确拒绝的结果。
+    pub outcome: SmithayLinuxAdapterClientSessionOutcome,
+
+    /// 当前 observation 是否严格属于 skeleton。
+    pub skeleton_only: bool,
+}
+
+/// Smithay Linux adapter unsupported client session ledger 报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterClientSessionLedgerReport {
+    /// 已观察 client session 数量。
+    pub observed_count: usize,
+
+    /// 被明确拒绝为 unsupported 的 client session 数量。
+    pub rejected_unsupported_count: usize,
+
+    /// 按 observation 顺序保存的纯数据 ledger。
+    pub observations: Vec<SmithayLinuxAdapterClientSessionObservation>,
+
+    /// 当前 ledger 是否严格属于 skeleton。
+    pub skeleton_only: bool,
+}
+
 const PROTOCOL_GLOBAL_PLAN: [SmithayLinuxAdapterGlobalPlan; 3] = [
     SmithayLinuxAdapterGlobalPlan {
         kind: SmithayLinuxAdapterGlobalKind::Compositor,
@@ -321,6 +403,15 @@ pub enum SmithayLinuxAdapterDiagnostic {
 
     /// adapter 未接受客户端连接。
     ClientsNotAccepted,
+
+    /// adapter 提供纯数据 client session ledger。
+    ClientSessionLedgerPresent,
+
+    /// 所有已观察 client session 都被明确拒绝为 unsupported。
+    ClientSessionsRejectedUnsupported,
+
+    /// client session 因当前不支持接受真实 client 而被拒绝。
+    ClientAcceptUnsupported,
 
     /// adapter 未分发协议事件。
     ProtocolEventsNotDispatched,
@@ -389,6 +480,9 @@ pub struct SmithayLinuxAdapterCapabilities {
     /// 是否接受真实客户端连接。
     pub accepts_clients: bool,
 
+    /// 是否提供纯数据 client session ledger。
+    pub has_client_session_ledger: bool,
+
     /// 是否提供 protocol global 的纯数据计划边界。
     pub has_protocol_global_plan_boundary: bool,
 
@@ -425,6 +519,7 @@ impl SmithayLinuxAdapterCapabilities {
             pumps_once: true,
             runs_event_loop: false,
             accepts_clients: false,
+            has_client_session_ledger: true,
             has_protocol_global_plan_boundary: true,
             has_protocol_global_registration_boundary: true,
             has_inert_protocol_request_ledger: true,
@@ -448,6 +543,9 @@ pub struct SmithayLinuxAdapterSnapshot {
 
     /// adapter 当前保守能力集合。
     pub capabilities: SmithayLinuxAdapterCapabilities,
+
+    /// adapter 当前 unsupported client session ledger。
+    pub client_session_ledger: SmithayLinuxAdapterClientSessionLedgerReport,
 
     /// adapter 当前 protocol global 计划报告。
     pub global_plan: SmithayLinuxAdapterGlobalPlanReport,
@@ -586,6 +684,15 @@ pub struct SmithayLinuxAdapterSkeleton {
 
     /// 下一个 protocol request observation 序号。
     next_protocol_request_sequence: u64,
+
+    /// 已观察的 unsupported client session ledger。
+    client_session_observations: Vec<SmithayLinuxAdapterClientSessionObservation>,
+
+    /// 下一个 client session observation 序号。
+    next_client_session_sequence: u64,
+
+    /// 下一个纯数据 client session 标识。
+    next_client_session_id: u64,
 }
 
 impl SmithayLinuxAdapterSkeleton {
@@ -618,6 +725,9 @@ impl SmithayLinuxAdapterSkeleton {
             global_registration_report: None,
             protocol_request_observations: Vec::new(),
             next_protocol_request_sequence: 1,
+            client_session_observations: Vec::new(),
+            next_client_session_sequence: 1,
+            next_client_session_id: 1,
         }
     }
 
@@ -649,7 +759,7 @@ impl SmithayLinuxAdapterSkeleton {
     /// 返回按稳定顺序生成的 adapter 结构化诊断。
     pub fn diagnostics(&self) -> Vec<SmithayLinuxAdapterDiagnostic> {
         let capabilities = self.capabilities();
-        let mut diagnostics = Vec::with_capacity(20);
+        let mut diagnostics = Vec::with_capacity(23);
 
         if capabilities.is_skeleton_only {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::SkeletonOnly);
@@ -668,6 +778,13 @@ impl SmithayLinuxAdapterSkeleton {
         }
         if !capabilities.accepts_clients {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::ClientsNotAccepted);
+        }
+        if capabilities.has_client_session_ledger {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::ClientSessionLedgerPresent);
+            if !self.client_session_observations.is_empty() {
+                diagnostics.push(SmithayLinuxAdapterDiagnostic::ClientSessionsRejectedUnsupported);
+                diagnostics.push(SmithayLinuxAdapterDiagnostic::ClientAcceptUnsupported);
+            }
         }
         if !capabilities.dispatches_protocol_events {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched);
@@ -810,12 +927,44 @@ impl SmithayLinuxAdapterSkeleton {
         }
     }
 
+    /// 把 client session 记录为明确拒绝的纯数据 ledger observation。
+    pub fn observe_unsupported_client_session(
+        &mut self,
+    ) -> SmithayLinuxAdapterClientSessionObservation {
+        let observation = SmithayLinuxAdapterClientSessionObservation {
+            sequence: self.next_client_session_sequence,
+            session_id: SmithayLinuxAdapterClientSessionId(self.next_client_session_id),
+            state: SmithayLinuxAdapterClientSessionState::RejectedUnsupported,
+            outcome: SmithayLinuxAdapterClientSessionOutcome::RejectedUnsupported {
+                reason: SmithayLinuxAdapterClientUnsupportedReason::ClientAcceptUnsupported,
+            },
+            skeleton_only: true,
+        };
+
+        self.next_client_session_sequence = self.next_client_session_sequence.saturating_add(1);
+        self.next_client_session_id = self.next_client_session_id.saturating_add(1);
+        self.client_session_observations.push(observation);
+
+        observation
+    }
+
+    /// 返回当前 unsupported client session ledger 的纯数据报告。
+    pub fn client_session_ledger_report(&self) -> SmithayLinuxAdapterClientSessionLedgerReport {
+        SmithayLinuxAdapterClientSessionLedgerReport {
+            observed_count: self.client_session_observations.len(),
+            rejected_unsupported_count: self.client_session_observations.len(),
+            observations: self.client_session_observations.clone(),
+            skeleton_only: true,
+        }
+    }
+
     /// 返回 adapter 当前状态的纯数据只读快照。
     pub fn snapshot(&self) -> SmithayLinuxAdapterSnapshot {
         SmithayLinuxAdapterSnapshot {
             lifecycle: self.lifecycle,
             pump_state: self.pump_state,
             capabilities: self.capabilities(),
+            client_session_ledger: self.client_session_ledger_report(),
             global_plan: self.global_plan_report(),
             global_registration_report: self.global_registration_report(),
             protocol_request_ledger: self.protocol_request_ledger_report(),
@@ -968,6 +1117,8 @@ fn resource_initialization_error(source: Box<dyn Error>) -> SmithayLinuxAdapterE
 #[cfg(test)]
 mod tests {
     use super::{
+        SmithayLinuxAdapterClientSessionLedgerReport, SmithayLinuxAdapterClientSessionOutcome,
+        SmithayLinuxAdapterClientSessionState, SmithayLinuxAdapterClientUnsupportedReason,
         SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError, SmithayLinuxAdapterGlobalKind,
         SmithayLinuxAdapterGlobalPlan, SmithayLinuxAdapterGlobalRegistrationOperation,
         SmithayLinuxAdapterGlobalRegistrationState, SmithayLinuxAdapterLifecycle,
@@ -1008,6 +1159,15 @@ mod tests {
         assert_eq!(adapter.last_pump_result(), None);
         assert_eq!(adapter.global_registration_report(), None);
         assert_eq!(
+            adapter.client_session_ledger_report(),
+            SmithayLinuxAdapterClientSessionLedgerReport {
+                observed_count: 0,
+                rejected_unsupported_count: 0,
+                observations: Vec::new(),
+                skeleton_only: true,
+            }
+        );
+        assert_eq!(
             adapter.protocol_request_ledger_report(),
             SmithayLinuxAdapterProtocolRequestLedgerReport {
                 observed_count: 0,
@@ -1033,6 +1193,7 @@ mod tests {
             SmithayLinuxAdapterDiagnostic::EventPumpBoundaryPresent,
             SmithayLinuxAdapterDiagnostic::EventLoopNotRunning,
             SmithayLinuxAdapterDiagnostic::ClientsNotAccepted,
+            SmithayLinuxAdapterDiagnostic::ClientSessionLedgerPresent,
             SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched,
             SmithayLinuxAdapterDiagnostic::InertProtocolRequestLedgerPresent,
             SmithayLinuxAdapterDiagnostic::ProtocolGlobalPlanPresent,
@@ -1070,6 +1231,10 @@ mod tests {
         assert_eq!(first.global_plan.registered_count, 0);
         assert!(first.global_plan.skeleton_only);
         assert_eq!(first.global_registration_report, None);
+        assert_eq!(first.client_session_ledger.observed_count, 0);
+        assert_eq!(first.client_session_ledger.rejected_unsupported_count, 0);
+        assert!(first.client_session_ledger.observations.is_empty());
+        assert!(first.client_session_ledger.skeleton_only);
         assert_eq!(first.protocol_request_ledger.observed_count, 0);
         assert_eq!(first.protocol_request_ledger.rejected_unsupported_count, 0);
         assert!(first.protocol_request_ledger.observations.is_empty());
@@ -1360,6 +1525,100 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_client_session_ledger_is_ordered_and_preserves_adapter_state() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-client-session-ledger");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        adapter
+            .register_planned_globals_skeleton()
+            .expect("registration skeleton 必须能够建立");
+        adapter.start_pump().expect("NotStarted 必须允许启动 pump");
+        let last_result = adapter
+            .pump_once()
+            .expect("Ready 必须允许一次 skeleton tick");
+        adapter.observe_unsupported_protocol_request(
+            SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface,
+        );
+
+        let lifecycle = adapter.lifecycle();
+        let pump_state = adapter.pump_state();
+        let pump_stats = adapter.pump_stats();
+        let registration_report = adapter.global_registration_report();
+        let global_plan = adapter.global_plan_report();
+        let protocol_request_ledger = adapter.protocol_request_ledger_report();
+
+        let first = adapter.observe_unsupported_client_session();
+        let second = adapter.observe_unsupported_client_session();
+
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 2);
+        assert_eq!(first.session_id.value(), 1);
+        assert_eq!(second.session_id.value(), 2);
+        for observation in [first, second] {
+            assert_eq!(
+                observation.state,
+                SmithayLinuxAdapterClientSessionState::RejectedUnsupported
+            );
+            assert_eq!(
+                observation.outcome,
+                SmithayLinuxAdapterClientSessionOutcome::RejectedUnsupported {
+                    reason: SmithayLinuxAdapterClientUnsupportedReason::ClientAcceptUnsupported,
+                }
+            );
+            assert!(observation.skeleton_only);
+        }
+
+        assert_eq!(adapter.lifecycle(), lifecycle);
+        assert_eq!(adapter.pump_state(), pump_state);
+        assert_eq!(adapter.pump_stats(), pump_stats);
+        assert_eq!(adapter.last_pump_result(), Some(last_result));
+        assert_eq!(adapter.global_registration_report(), registration_report);
+        assert_eq!(adapter.global_plan_report(), global_plan);
+        assert_eq!(
+            adapter.protocol_request_ledger_report(),
+            protocol_request_ledger
+        );
+
+        let report = adapter.client_session_ledger_report();
+        assert_eq!(report.observations, vec![first, second]);
+        assert_eq!(report.observed_count, 2);
+        assert_eq!(report.rejected_unsupported_count, 2);
+        assert!(report.skeleton_only);
+        assert!(report.observations.iter().all(|observation| matches!(
+            observation.outcome,
+            SmithayLinuxAdapterClientSessionOutcome::RejectedUnsupported {
+                reason: SmithayLinuxAdapterClientUnsupportedReason::ClientAcceptUnsupported,
+            }
+        )));
+
+        let snapshot = adapter.snapshot();
+        assert_eq!(snapshot.client_session_ledger, report);
+        assert_eq!(snapshot.protocol_request_ledger, protocol_request_ledger);
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ClientSessionLedgerPresent)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ClientSessionsRejectedUnsupported)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ClientAcceptUnsupported)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ProtocolRequestsRejectedUnsupported)
+        );
+    }
+
+    #[test]
     fn adapter_skeleton_capabilities_remain_conservative() {
         assert_runtime_dir();
 
@@ -1375,6 +1634,7 @@ mod tests {
         assert!(capabilities.pumps_once);
         assert!(!capabilities.runs_event_loop);
         assert!(!capabilities.accepts_clients);
+        assert!(capabilities.has_client_session_ledger);
         assert!(capabilities.has_protocol_global_plan_boundary);
         assert!(capabilities.has_protocol_global_registration_boundary);
         assert!(capabilities.has_inert_protocol_request_ledger);
@@ -1702,6 +1962,15 @@ mod tests {
         )));
         assert!(report.has_diagnostic(|diagnostic| matches!(
             diagnostic,
+            BackendRuntimeDiagnostic::AdapterClientSessionLedger {
+                observed_count: 0,
+                rejected_unsupported_count: 0,
+                accepts_clients: false,
+                skeleton_only: true,
+            }
+        )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
             BackendRuntimeDiagnostic::AdapterProtocolGlobalRegistrationSkeleton {
                 attempted: false,
                 skeleton_registered_count: 0,
@@ -1724,6 +1993,7 @@ mod tests {
         adapter.observe_unsupported_protocol_request(
             SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface,
         );
+        adapter.observe_unsupported_client_session();
         let report = BackendRuntimeReport::from(&adapter);
 
         assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
@@ -1743,6 +2013,15 @@ mod tests {
             BackendRuntimeDiagnostic::AdapterInertProtocolRequestLedger {
                 observed_count: 1,
                 rejected_unsupported_count: 1,
+                skeleton_only: true,
+            }
+        )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterClientSessionLedger {
+                observed_count: 1,
+                rejected_unsupported_count: 1,
+                accepts_clients: false,
                 skeleton_only: true,
             }
         )));
