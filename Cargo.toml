@@ -1,0 +1,18 @@
+[package]
+name = "sky_mirror"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+smithay-probe = []
+smithay-linux = ["smithay-probe", "dep:smithay"]
+smithay-backend = ["smithay-linux"]
+
+[dependencies]
+calloop = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay = { version = "0.7", optional = true, default-features = false, features = ["wayland_frontend"] }

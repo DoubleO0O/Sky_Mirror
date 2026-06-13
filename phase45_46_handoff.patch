@@ -1,0 +1,992 @@
+diff --git a/src/smithay_backend/bootstrap.rs b/src/smithay_backend/bootstrap.rs
+index 5a8b261..12adfaa 100755
+--- a/src/smithay_backend/bootstrap.rs
++++ b/src/smithay_backend/bootstrap.rs
+@@ -118,7 +118,10 @@ impl SmithayBootstrapProbe {
+ #[cfg(test)]
+ mod tests {
+     use super::{SmithayBootstrapMode, SmithayBootstrapProbe};
+-    use crate::smithay_backend::wayland_socket::SmithayWaylandSocketProbeMode;
++    use crate::smithay_backend::{
++        test_support::{assert_runtime_dir, unique_socket_name},
++        wayland_socket::SmithayWaylandSocketProbeMode,
++    };
+ 
+     /// 验证 bootstrap 模式固定为纯探针模式。
+     #[test]
+@@ -129,46 +132,35 @@ mod tests {
+         );
+     }
+ 
+-    /// 验证自动创建组合探针会返回正常结果，而不会因环境缺失 panic。
++    /// 验证自动创建组合探针会真实构造 Display 和 socket。
+     #[test]
+     fn smithay_bootstrap_new_auto_returns_result_without_panic() {
+-        let result = SmithayBootstrapProbe::new_auto();
+-
+-        match result {
+-            Ok(probe) => {
+-                // 创建成功时，Display 和 socket 都必须保持纯探针状态。
+-                assert!(probe.is_probe_only());
+-                assert_eq!(probe.mode(), SmithayBootstrapMode::ProbeOnly);
+-                assert_eq!(
+-                    probe.socket_mode(),
+-                    SmithayWaylandSocketProbeMode::ProbeOnly
+-                );
+-                assert_eq!(probe.mode_description(), "smithay-bootstrap-probe-only");
+-
+-                let socket_name = probe.socket_name_string();
+-
+-                // 自动选择的 Wayland socket 名称必须可读且非空。
+-                assert!(!socket_name.is_empty());
+-                assert!(socket_name.contains("wayland"));
+-
+-                // 这里只取得 handle 以验证组合资源路径，不注册任何协议对象。
+-                let _handle = probe.display_handle();
+-            }
+-            Err(error) => {
+-                // 某些持续集成或非桌面环境可能没有有效运行时目录。
+-                // 环境缺失不是核心业务失败，只要求错误被正常返回。
+-                assert!(!error.to_string().is_empty());
+-            }
+-        }
++        assert_runtime_dir();
++
++        let probe =
++            SmithayBootstrapProbe::new_auto().expect("bootstrap 必须真实构造 Display 和 socket");
++
++        assert!(probe.is_probe_only());
++        assert_eq!(probe.mode(), SmithayBootstrapMode::ProbeOnly);
++        assert_eq!(
++            probe.socket_mode(),
++            SmithayWaylandSocketProbeMode::ProbeOnly
++        );
++        assert_eq!(probe.mode_description(), "smithay-bootstrap-probe-only");
++        assert!(probe.socket_name_string().contains("wayland"));
++
++        // 这里只取得 handle 以验证组合资源路径，不注册任何协议对象。
++        let _handle = probe.display_handle();
+     }
+ 
+     /// 验证组合探针创建成功时可以取得 Display handle。
+     #[test]
+     fn smithay_bootstrap_display_handle_is_available_when_created() {
+-        let Ok(probe) = SmithayBootstrapProbe::new_auto() else {
+-            // 缺少运行时目录时直接结束测试，不修改全局环境变量。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let socket_name = unique_socket_name("bootstrap-display");
++        let probe = SmithayBootstrapProbe::with_socket_name(&socket_name)
++            .expect("bootstrap 必须真实构造指定名称的 socket");
+ 
+         let _handle = probe.display_handle();
+ 
+@@ -178,13 +170,14 @@ mod tests {
+     /// 验证组合探针创建成功时可以读取 socket 名称。
+     #[test]
+     fn smithay_bootstrap_socket_name_is_available_when_created() {
+-        let Ok(probe) = SmithayBootstrapProbe::new_auto() else {
+-            // 缺少运行时目录时直接结束测试，不修改全局环境变量。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let expected_name = unique_socket_name("bootstrap-name");
++        let probe = SmithayBootstrapProbe::with_socket_name(&expected_name)
++            .expect("bootstrap 必须真实构造指定名称的 socket");
+ 
+         let socket_name = probe.socket_name_string();
+ 
+-        assert!(!socket_name.is_empty());
++        assert_eq!(socket_name, expected_name);
+     }
+ }
+diff --git a/src/smithay_backend/linux_runtime.rs b/src/smithay_backend/linux_runtime.rs
+index d57ab73..d9b1c7f 100644
+--- a/src/smithay_backend/linux_runtime.rs
++++ b/src/smithay_backend/linux_runtime.rs
+@@ -97,29 +97,36 @@ mod tests {
+     use super::SmithayLinuxRuntimeProbe;
+     use crate::{
+         core::{backend_event::BackendEvent, state::State},
+-        smithay_backend::bootstrap::SmithayBootstrapMode,
++        smithay_backend::{
++            bootstrap::SmithayBootstrapMode,
++            driver::SmithayBackendDriverProbe,
++            runtime::SmithayRuntimeProbe,
++            test_support::{assert_runtime_dir, unique_socket_name},
++        },
+     };
+ 
+     /// 验证 Linux runtime 创建后仍保持探针模式。
+     #[test]
+     fn smithay_linux_runtime_is_probe_only_when_created() {
+-        let Ok(runtime) = SmithayLinuxRuntimeProbe::new_auto() else {
+-            // 缺少有效运行时目录时结束资源测试，不修改进程环境。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let socket_name = unique_socket_name("linux-runtime-mode");
++        let runtime = SmithayLinuxRuntimeProbe::with_socket_name(&socket_name)
++            .expect("Linux runtime 必须真实构造 Display 和指定名称的 socket");
+ 
+         assert!(runtime.is_probe_only());
+         assert_eq!(runtime.bootstrap_mode(), SmithayBootstrapMode::ProbeOnly);
+-        assert!(!runtime.socket_name_string().is_empty());
++        assert_eq!(runtime.socket_name_string(), socket_name);
+     }
+ 
+     /// 验证 Linux 资源外壳仍通过纯数据 runtime 推进核心事件。
+     #[test]
+     fn smithay_linux_runtime_runs_event_through_probe_runtime() {
+-        let Ok(mut runtime) = SmithayLinuxRuntimeProbe::new_auto() else {
+-            // 缺少有效运行时目录时结束资源测试，不修改进程环境。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let socket_name = unique_socket_name("linux-runtime-event");
++        let mut runtime = SmithayLinuxRuntimeProbe::with_socket_name(&socket_name)
++            .expect("Linux runtime 必须真实构造资源后才能验证事件链");
+         let mut state = State::new();
+ 
+         runtime.push_event(BackendEvent::OutputResized {
+@@ -135,4 +142,28 @@ mod tests {
+         assert_eq!(output.width, 1440);
+         assert_eq!(output.height, 900);
+     }
++
++    /// 验证旧 `SmithayRuntimeProbe` Linux 构造和查询 API 仍可工作。
++    #[test]
++    fn smithay_runtime_legacy_linux_api_remains_available() {
++        assert_runtime_dir();
++
++        let socket_name = unique_socket_name("legacy-runtime");
++        let runtime = SmithayRuntimeProbe::with_socket_name(&socket_name)
++            .expect("旧 runtime API 必须真实构造指定名称的 socket");
++
++        assert!(runtime.is_probe_only());
++        assert_eq!(runtime.bootstrap_mode(), SmithayBootstrapMode::ProbeOnly);
++        assert_eq!(runtime.socket_name_string(), socket_name);
++
++        let bootstrap_name = unique_socket_name("legacy-from-parts");
++        let bootstrap = crate::smithay_backend::bootstrap::SmithayBootstrapProbe::with_socket_name(
++            &bootstrap_name,
++        )
++        .expect("旧 from_parts 测试必须真实构造 bootstrap");
++        let runtime =
++            SmithayRuntimeProbe::from_parts(bootstrap, SmithayBackendDriverProbe::new_probe_only());
++
++        assert_eq!(runtime.socket_name_string(), bootstrap_name);
++    }
+ }
+diff --git a/src/smithay_backend/mod.rs b/src/smithay_backend/mod.rs
+index e608a89..2252021 100755
+--- a/src/smithay_backend/mod.rs
++++ b/src/smithay_backend/mod.rs
+@@ -10,6 +10,34 @@
+ #[cfg(all(feature = "smithay-linux", not(target_os = "linux")))]
+ compile_error!("smithay-linux 只能在 Linux 上启用；macOS 请使用 smithay-probe。");
+ 
++/// Linux 资源测试共用的环境检查和唯一名称生成器。
++#[cfg(all(test, feature = "smithay-linux", target_os = "linux"))]
++pub(crate) mod test_support {
++    use std::sync::atomic::{AtomicU64, Ordering};
++
++    static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
++
++    /// 确认 Linux 资源测试具备有效的 Wayland 运行时目录。
++    ///
++    /// 缺失该目录时测试必须明确失败，不能通过提前返回掩盖资源路径未执行。
++    pub fn assert_runtime_dir() {
++        let runtime_dir =
++            std::env::var_os("XDG_RUNTIME_DIR").expect("Linux Smithay 测试需要 XDG_RUNTIME_DIR");
++
++        assert!(
++            std::path::Path::new(&runtime_dir).is_dir(),
++            "XDG_RUNTIME_DIR 必须指向已存在的目录"
++        );
++    }
++
++    /// 为并行测试生成当前进程内唯一的 Wayland socket 名称。
++    pub fn unique_socket_name(label: &str) -> String {
++        let id = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
++
++        format!("wayland-sky-mirror-{label}-{}-{id}", std::process::id())
++    }
++}
++
+ /// Smithay 动作请求事件适配探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod action_event;
+@@ -37,6 +65,9 @@ pub mod output_event;
+ /// Smithay 纯数据运行时探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod runtime;
++/// 后端中立的运行时门面与结构化启动报告。
++#[cfg(feature = "smithay-probe")]
++pub mod runtime_facade;
+ /// Smithay runtime 场景回放探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod scenario;
+@@ -95,6 +126,12 @@ pub use output_event::{
+ pub use runtime::{SmithayRuntimeMode, SmithayRuntimeProbe};
+ #[allow(unused_imports)]
+ #[cfg(feature = "smithay-probe")]
++pub use runtime_facade::{
++    BackendBootstrapMode, BackendRuntimeCapabilities, BackendRuntimeDiagnostic,
++    BackendRuntimeReport,
++};
++#[allow(unused_imports)]
++#[cfg(feature = "smithay-probe")]
+ pub use scenario::{
+     SmithayRuntimeScenario, SmithayRuntimeScenarioMode, SmithayRuntimeScenarioReport,
+     SmithayRuntimeScenarioStepReport,
+diff --git a/src/smithay_backend/runtime.rs b/src/smithay_backend/runtime.rs
+index 3c8af2b..a7f7597 100755
+--- a/src/smithay_backend/runtime.rs
++++ b/src/smithay_backend/runtime.rs
+@@ -29,6 +29,9 @@ use crate::{
+     },
+ };
+ 
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++use crate::smithay_backend::bootstrap::{SmithayBootstrapMode, SmithayBootstrapProbe};
++
+ /// Smithay runtime 当前运行模式。
+ ///
+ /// 当前只允许 `ProbeOnly`，表示 runtime 只组合纯数据 driver 与 ID 分配器，
+@@ -49,6 +52,13 @@ pub enum SmithayRuntimeMode {
+ /// 所有真实 Smithay 回调未来都必须先转换为 `BackendEvent`，再由 driver 产出并
+ /// 通过 `BackendDriverRunner` 进入核心。该结构不会直接修改 `State`。
+ pub struct SmithayRuntimeProbe {
++    /// 旧 Linux runtime API 使用的 bootstrap 兼容资源。
++    ///
++    /// 该字段只在 `smithay-linux` 下存在。纯 `smithay-probe` 构建不会引用
++    /// Smithay crate，也不会保存 Display 或 listening socket。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    compatibility_bootstrap: Option<SmithayBootstrapProbe>,
++
+     /// Smithay 后端驱动接口探针。
+     ///
+     /// 当前只维护 `BackendEvent` 队列，不直接修改 `State`。
+@@ -74,6 +84,8 @@ impl SmithayRuntimeProbe {
+     /// 该构造器不会读取环境变量，也不会构造 Display、socket 或真实 client。
+     pub fn new_probe_only() -> Self {
+         Self {
++            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++            compatibility_bootstrap: None,
+             driver: SmithayBackendDriverProbe::new_probe_only(),
+             client_id_allocator: SmithayClientIdAllocatorProbe::new(),
+             surface_id_allocator: SmithaySurfaceIdAllocatorProbe::new(),
+@@ -83,12 +95,49 @@ impl SmithayRuntimeProbe {
+ 
+     /// 兼容旧调用方式创建纯数据 runtime。
+     ///
+-    /// `new_auto` 在 `smithay-probe` 中不构造真实 socket 或 Display；真实资源构造
+-    /// 已移动到 `smithay-linux` 下的 `SmithayLinuxRuntimeProbe`。
++    /// `new_auto` 在纯 `smithay-probe` 中不构造真实 socket 或 Display。
++    /// Linux feature 下保留旧行为并持有 bootstrap，以保证原有公共 API 可继续使用；
++    /// 新代码仍应优先使用 `SmithayLinuxRuntimeProbe` 组合系统资源。
+     pub fn new_auto() -> Result<Self, Box<dyn std::error::Error>> {
++        #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++        {
++            return Ok(Self::from_parts(
++                SmithayBootstrapProbe::new_auto()?,
++                SmithayBackendDriverProbe::new_probe_only(),
++            ));
++        }
++
++        #[cfg(not(all(feature = "smithay-linux", target_os = "linux")))]
+         Ok(Self::new_probe_only())
+     }
+ 
++    /// 使用指定 socket 名称创建旧式 Linux runtime。
++    ///
++    /// 该兼容入口只在 `smithay-linux` 下提供。它不会启动 compositor、接收 client
++    /// 或绕过 `BackendDriverRunner`；新代码应优先使用 `SmithayLinuxRuntimeProbe`。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub fn with_socket_name(name: &str) -> Result<Self, Box<dyn std::error::Error>> {
++        Ok(Self::from_parts(
++            SmithayBootstrapProbe::with_socket_name(name)?,
++            SmithayBackendDriverProbe::new_probe_only(),
++        ))
++    }
++
++    /// 使用旧式 bootstrap 与 driver 构造 Linux runtime。
++    ///
++    /// 该方法保留原公共签名。bootstrap 只承担资源兼容，所有事件仍由传入的
++    /// driver 产出，并通过 `BackendDriverRunner` 进入核心。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub fn from_parts(bootstrap: SmithayBootstrapProbe, driver: SmithayBackendDriverProbe) -> Self {
++        Self {
++            compatibility_bootstrap: Some(bootstrap),
++            driver,
++            client_id_allocator: SmithayClientIdAllocatorProbe::new(),
++            surface_id_allocator: SmithaySurfaceIdAllocatorProbe::new(),
++            mode: SmithayRuntimeMode::ProbeOnly,
++        }
++    }
++
+     /// 向内部 driver 追加一条后端事件。
+     ///
+     /// 未来真实 Smithay callback 也应先转换为 `BackendEvent`，再进入 driver
+@@ -281,7 +330,43 @@ impl SmithayRuntimeProbe {
+ 
+     /// 当前是否仍然只是纯探针模式。
+     pub fn is_probe_only(&self) -> bool {
+-        self.mode == SmithayRuntimeMode::ProbeOnly && self.driver.is_probe_only()
++        let resources_are_probe_only = {
++            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++            {
++                self.compatibility_bootstrap
++                    .as_ref()
++                    .map_or(true, SmithayBootstrapProbe::is_probe_only)
++            }
++
++            #[cfg(not(all(feature = "smithay-linux", target_os = "linux")))]
++            {
++                true
++            }
++        };
++
++        self.mode == SmithayRuntimeMode::ProbeOnly
++            && self.driver.is_probe_only()
++            && resources_are_probe_only
++    }
++
++    /// 返回旧式 Linux bootstrap 当前模式。
++    ///
++    /// 纯数据构造器没有 bootstrap，但其语义仍然是 `ProbeOnly`。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub fn bootstrap_mode(&self) -> SmithayBootstrapMode {
++        self.compatibility_bootstrap
++            .as_ref()
++            .map_or(SmithayBootstrapMode::ProbeOnly, SmithayBootstrapProbe::mode)
++    }
++
++    /// 返回旧式 Linux runtime 持有的 socket 名称。
++    ///
++    /// 对通过 `new_probe_only` 创建的实例返回空字符串，明确表示没有系统资源。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub fn socket_name_string(&self) -> String {
++        self.compatibility_bootstrap
++            .as_ref()
++            .map_or_else(String::new, SmithayBootstrapProbe::socket_name_string)
+     }
+ 
+     /// 返回 driver 模式。
+@@ -324,32 +409,25 @@ mod tests {
+         assert_eq!(SmithayRuntimeMode::ProbeOnly, SmithayRuntimeMode::ProbeOnly);
+     }
+ 
+-    /// 验证兼容构造器只创建纯数据 runtime。
++    /// 验证兼容构造器能够完成当前 feature 对应的 runtime 构造。
+     #[test]
+     fn smithay_runtime_new_auto_returns_result_without_panic() {
+-        let result = SmithayRuntimeProbe::new_auto();
+-
+-        match result {
+-            Ok(runtime) => {
+-                // 创建成功时，driver、ID 分配器和 runtime 必须都保持纯探针模式。
+-                assert!(runtime.is_probe_only());
+-                assert_eq!(runtime.mode(), SmithayRuntimeMode::ProbeOnly);
+-                assert_eq!(runtime.driver_mode(), SmithayBackendDriverMode::ProbeOnly);
+-                assert_eq!(
+-                    runtime.client_id_allocator_mode(),
+-                    SmithayClientIdAllocatorMode::ProbeOnly
+-                );
+-                assert_eq!(
+-                    runtime.surface_id_allocator_mode(),
+-                    SmithaySurfaceIdAllocatorMode::ProbeOnly
+-                );
+-                assert_eq!(runtime.mode_description(), "smithay-runtime-probe-only");
+-            }
+-            Err(error) => {
+-                // 当前实现不会返回错误；保留分支是为了兼容 Result 形式的公共 API。
+-                assert!(!error.to_string().is_empty());
+-            }
+-        }
++        let runtime = SmithayRuntimeProbe::new_auto()
++            .expect("runtime 兼容构造器必须完成当前 feature 对应的初始化");
++
++        // 无论是否带 Linux 兼容资源，状态事件仍必须保持纯探针模式。
++        assert!(runtime.is_probe_only());
++        assert_eq!(runtime.mode(), SmithayRuntimeMode::ProbeOnly);
++        assert_eq!(runtime.driver_mode(), SmithayBackendDriverMode::ProbeOnly);
++        assert_eq!(
++            runtime.client_id_allocator_mode(),
++            SmithayClientIdAllocatorMode::ProbeOnly
++        );
++        assert_eq!(
++            runtime.surface_id_allocator_mode(),
++            SmithaySurfaceIdAllocatorMode::ProbeOnly
++        );
++        assert_eq!(runtime.mode_description(), "smithay-runtime-probe-only");
+     }
+ 
+     /// 验证动作请求会通过 driver 和 Runner 修改核心状态。
+diff --git a/src/smithay_backend/runtime_facade.rs b/src/smithay_backend/runtime_facade.rs
+new file mode 100644
+index 0000000..9a21efc
+--- /dev/null
++++ b/src/smithay_backend/runtime_facade.rs
+@@ -0,0 +1,485 @@
++//! 后端运行时只读门面。
++//!
++//! 本模块把 Smithay probe 与 Linux 资源探针转换为后端中立的结构化报告。
++//! 它不持有核心 `State`，不提交 `BackendEvent`，也不会启动 compositor。
++
++use std::{fmt, path::PathBuf};
++
++#[cfg(any(test, all(feature = "smithay-linux", target_os = "linux")))]
++use std::{ffi::OsString, path::Path};
++
++use crate::smithay_backend::runtime::SmithayRuntimeProbe;
++
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++use crate::smithay_backend::{
++    bootstrap::SmithayBootstrapMode, linux_runtime::SmithayLinuxRuntimeProbe,
++};
++
++/// 后端启动模式。
++///
++/// 当前阶段只有纯探针模式；即使 Linux Display 和 socket 已构造，也不会接收
++/// client、注册协议 global 或进入真实 compositor 主循环。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum BackendBootstrapMode {
++    /// 仅验证运行时和资源边界，不启动真实 compositor。
++    ProbeOnly,
++}
++
++/// 后端运行时当前具备的能力。
++///
++/// 字段只描述已经实现并可由当前实例提供的能力，未接入的 surface 生命周期和
++/// GPU 渲染必须保持为 `false`。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct BackendRuntimeCapabilities {
++    /// 是否能够构造 Wayland Display。
++    pub can_create_display: bool,
++
++    /// 是否能够构造 Wayland listening socket。
++    pub can_create_socket: bool,
++
++    /// 是否使用 Linux `XDG_RUNTIME_DIR` 运行时目录。
++    pub supports_linux_runtime_dir: bool,
++
++    /// 是否支持纯数据 runtime probe。
++    pub supports_mock_runtime: bool,
++
++    /// 是否已经接入真实 Wayland surface 生命周期。
++    pub supports_real_wayland_surfaces: bool,
++
++    /// 是否已经接入 GPU 渲染。
++    pub supports_gpu_rendering: bool,
++}
++
++impl BackendRuntimeCapabilities {
++    /// 返回跨平台纯数据 probe 的保守能力集合。
++    pub const fn smithay_probe() -> Self {
++        Self {
++            can_create_display: false,
++            can_create_socket: false,
++            supports_linux_runtime_dir: false,
++            supports_mock_runtime: true,
++            supports_real_wayland_surfaces: false,
++            supports_gpu_rendering: false,
++        }
++    }
++
++    /// 返回 Linux 资源探针的保守能力集合。
++    ///
++    /// Display 和 socket 已可构造，但真实 surface 与 GPU 渲染仍未接入。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub const fn smithay_linux_probe() -> Self {
++        Self {
++            can_create_display: true,
++            can_create_socket: true,
++            supports_linux_runtime_dir: true,
++            supports_mock_runtime: true,
++            supports_real_wayland_surfaces: false,
++            supports_gpu_rendering: false,
++        }
++    }
++}
++
++/// 后端运行时诊断。
++///
++/// 每个变体都保留机器可判断的类别和必要上下文；`Display` 只用于日志展示，
++/// 调用方不需要解析字符串来理解诊断。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum BackendRuntimeDiagnostic {
++    /// Linux runtime 缺少 `XDG_RUNTIME_DIR`。
++    MissingRuntimeDir {
++        /// 缺失的环境变量名称。
++        variable: &'static str,
++    },
++
++    /// Linux runtime dir 存在配置值，但不是有效目录。
++    InvalidRuntimeDir {
++        /// 无效路径。
++        path: PathBuf,
++    },
++
++    /// 后端已经选择或绑定 socket 名称。
++    SocketNameSelected {
++        /// Wayland socket 名称。
++        socket_name: String,
++    },
++
++    /// 当前构建没有启用某个可选 feature。
++    FeatureDisabled {
++        /// 未启用的 Cargo feature。
++        feature: &'static str,
++    },
++
++    /// 某项能力只允许在 Linux 上使用。
++    LinuxOnly {
++        /// Linux 专属 Cargo feature。
++        feature: &'static str,
++    },
++
++    /// 当前实例回退到纯数据 probe。
++    ProbeFallback {
++        /// 回退后的后端名称。
++        backend_name: &'static str,
++    },
++
++    /// 当前主机平台不支持请求的系统后端。
++    UnsupportedPlatform {
++        /// 当前 Rust 目标操作系统名称。
++        platform: &'static str,
++    },
++}
++
++impl fmt::Display for BackendRuntimeDiagnostic {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::MissingRuntimeDir { variable } => {
++                write!(formatter, "缺少运行时目录环境变量 {variable}")
++            }
++            Self::InvalidRuntimeDir { path } => {
++                write!(formatter, "运行时目录无效: {}", path.display())
++            }
++            Self::SocketNameSelected { socket_name } => {
++                write!(formatter, "已选择 Wayland socket: {socket_name}")
++            }
++            Self::FeatureDisabled { feature } => {
++                write!(formatter, "Cargo feature 未启用: {feature}")
++            }
++            Self::LinuxOnly { feature } => {
++                write!(formatter, "Cargo feature 仅支持 Linux: {feature}")
++            }
++            Self::ProbeFallback { backend_name } => {
++                write!(formatter, "使用纯数据运行时探针: {backend_name}")
++            }
++            Self::UnsupportedPlatform { platform } => {
++                write!(formatter, "当前平台不支持 Linux 后端: {platform}")
++            }
++        }
++    }
++}
++
++/// 后端运行时门面报告。
++///
++/// 报告只描述启动资源和能力，不包含 workspace、focus、scene 或渲染帧，也不会
++/// 修改任何核心状态。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BackendRuntimeReport {
++    /// 后端实现名称。
++    pub backend_name: &'static str,
++
++    /// 当前启动模式。
++    pub bootstrap_mode: BackendBootstrapMode,
++
++    /// 已选择的 Wayland socket 名称；纯 probe 为 `None`。
++    pub socket_name: Option<String>,
++
++    /// 有效的 Linux runtime dir；纯 probe 或无效配置为 `None`。
++    pub runtime_dir: Option<PathBuf>,
++
++    /// 当前实例的保守能力集合。
++    pub capabilities: BackendRuntimeCapabilities,
++
++    /// 结构化启动诊断。
++    pub diagnostics: Vec<BackendRuntimeDiagnostic>,
++}
++
++impl BackendRuntimeReport {
++    /// 判断报告是否包含指定类别的诊断。
++    pub fn has_diagnostic(&self, predicate: impl Fn(&BackendRuntimeDiagnostic) -> bool) -> bool {
++        self.diagnostics.iter().any(predicate)
++    }
++}
++
++impl From<&SmithayRuntimeProbe> for BackendRuntimeReport {
++    /// 从兼容 runtime probe 创建后端中立报告。
++    fn from(runtime: &SmithayRuntimeProbe) -> Self {
++        #[cfg(not(all(feature = "smithay-linux", target_os = "linux")))]
++        let _ = runtime;
++
++        #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++        {
++            let socket_name = runtime.socket_name_string();
++
++            if !socket_name.is_empty() {
++                return linux_resource_report(
++                    "smithay-linux-compat",
++                    map_bootstrap_mode(runtime.bootstrap_mode()),
++                    socket_name,
++                );
++            }
++        }
++
++        smithay_probe_report()
++    }
++}
++
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++impl From<&SmithayLinuxRuntimeProbe> for BackendRuntimeReport {
++    /// 从 Linux Display/socket 组合探针创建后端中立报告。
++    fn from(runtime: &SmithayLinuxRuntimeProbe) -> Self {
++        linux_resource_report(
++            "smithay-linux",
++            map_bootstrap_mode(runtime.bootstrap_mode()),
++            runtime.socket_name_string(),
++        )
++    }
++}
++
++/// 创建跨平台纯数据 probe 报告。
++fn smithay_probe_report() -> BackendRuntimeReport {
++    let mut diagnostics = vec![BackendRuntimeDiagnostic::ProbeFallback {
++        backend_name: "smithay-probe",
++    }];
++
++    if !cfg!(feature = "smithay-linux") {
++        diagnostics.push(BackendRuntimeDiagnostic::FeatureDisabled {
++            feature: "smithay-linux",
++        });
++    }
++
++    if !cfg!(target_os = "linux") {
++        diagnostics.push(BackendRuntimeDiagnostic::LinuxOnly {
++            feature: "smithay-linux",
++        });
++        diagnostics.push(BackendRuntimeDiagnostic::UnsupportedPlatform {
++            platform: std::env::consts::OS,
++        });
++    }
++
++    BackendRuntimeReport {
++        backend_name: "smithay-probe",
++        bootstrap_mode: BackendBootstrapMode::ProbeOnly,
++        socket_name: None,
++        runtime_dir: None,
++        capabilities: BackendRuntimeCapabilities::smithay_probe(),
++        diagnostics,
++    }
++}
++
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++/// 创建已持有 Linux Display/socket 资源的报告。
++fn linux_resource_report(
++    backend_name: &'static str,
++    bootstrap_mode: BackendBootstrapMode,
++    socket_name: String,
++) -> BackendRuntimeReport {
++    let (runtime_dir, mut diagnostics) = inspect_runtime_dir(std::env::var_os("XDG_RUNTIME_DIR"));
++
++    diagnostics.push(BackendRuntimeDiagnostic::SocketNameSelected {
++        socket_name: socket_name.clone(),
++    });
++
++    BackendRuntimeReport {
++        backend_name,
++        bootstrap_mode,
++        socket_name: Some(socket_name),
++        runtime_dir,
++        capabilities: BackendRuntimeCapabilities::smithay_linux_probe(),
++        diagnostics,
++    }
++}
++
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++/// 把 Smithay bootstrap 模式映射为后端中立模式。
++fn map_bootstrap_mode(mode: SmithayBootstrapMode) -> BackendBootstrapMode {
++    match mode {
++        SmithayBootstrapMode::ProbeOnly => BackendBootstrapMode::ProbeOnly,
++    }
++}
++
++/// 检查 Linux runtime dir，但不因环境缺失或路径无效而 panic。
++#[cfg(any(test, all(feature = "smithay-linux", target_os = "linux")))]
++fn inspect_runtime_dir(
++    runtime_dir: Option<OsString>,
++) -> (Option<PathBuf>, Vec<BackendRuntimeDiagnostic>) {
++    let Some(runtime_dir) = runtime_dir else {
++        return (
++            None,
++            vec![BackendRuntimeDiagnostic::MissingRuntimeDir {
++                variable: "XDG_RUNTIME_DIR",
++            }],
++        );
++    };
++
++    let runtime_dir = PathBuf::from(runtime_dir);
++
++    if !Path::new(&runtime_dir).is_dir() {
++        return (
++            None,
++            vec![BackendRuntimeDiagnostic::InvalidRuntimeDir { path: runtime_dir }],
++        );
++    }
++
++    (Some(runtime_dir), Vec::new())
++}
++
++#[cfg(test)]
++mod tests {
++    use std::path::PathBuf;
++
++    use super::{
++        BackendBootstrapMode, BackendRuntimeCapabilities, BackendRuntimeDiagnostic,
++        BackendRuntimeReport, inspect_runtime_dir,
++    };
++    use crate::smithay_backend::runtime::SmithayRuntimeProbe;
++
++    /// 验证纯数据 runtime 可以生成后端中立报告。
++    #[test]
++    fn smithay_probe_builds_runtime_facade_report() {
++        let runtime = SmithayRuntimeProbe::new_probe_only();
++        let report = BackendRuntimeReport::from(&runtime);
++
++        assert_eq!(report.backend_name, "smithay-probe");
++        assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
++        assert_eq!(report.socket_name, None);
++        assert_eq!(report.runtime_dir, None);
++        assert_eq!(
++            report.capabilities,
++            BackendRuntimeCapabilities::smithay_probe()
++        );
++        assert!(report.has_diagnostic(|diagnostic| matches!(
++            diagnostic,
++            BackendRuntimeDiagnostic::ProbeFallback { .. }
++        )));
++    }
++
++    /// 验证纯 probe 不会宣称尚未实现的系统能力。
++    #[test]
++    fn smithay_probe_capabilities_are_conservative() {
++        let runtime = SmithayRuntimeProbe::new_probe_only();
++        let capabilities = BackendRuntimeReport::from(&runtime).capabilities;
++
++        assert!(!capabilities.can_create_display);
++        assert!(!capabilities.can_create_socket);
++        assert!(!capabilities.supports_linux_runtime_dir);
++        assert!(capabilities.supports_mock_runtime);
++        assert!(!capabilities.supports_real_wayland_surfaces);
++        assert!(!capabilities.supports_gpu_rendering);
++    }
++
++    /// 验证不可用 Linux 后端会形成结构化诊断，而不是触发 panic。
++    #[test]
++    fn unavailable_linux_runtime_becomes_structured_diagnostics() {
++        let runtime = SmithayRuntimeProbe::new_probe_only();
++        let report = BackendRuntimeReport::from(&runtime);
++
++        #[cfg(not(feature = "smithay-linux"))]
++        {
++            assert!(report.has_diagnostic(|diagnostic| matches!(
++                diagnostic,
++                BackendRuntimeDiagnostic::FeatureDisabled {
++                    feature: "smithay-linux"
++                }
++            )));
++        }
++
++        #[cfg(not(target_os = "linux"))]
++        {
++            assert!(report.has_diagnostic(|diagnostic| matches!(
++                diagnostic,
++                BackendRuntimeDiagnostic::LinuxOnly {
++                    feature: "smithay-linux"
++                }
++            )));
++            assert!(report.has_diagnostic(|diagnostic| matches!(
++                diagnostic,
++                BackendRuntimeDiagnostic::UnsupportedPlatform { .. }
++            )));
++        }
++    }
++
++    /// 验证缺失 runtime dir 会返回明确诊断。
++    #[test]
++    fn missing_runtime_dir_becomes_diagnostic() {
++        let (runtime_dir, diagnostics) = inspect_runtime_dir(None);
++
++        assert_eq!(runtime_dir, None);
++        assert_eq!(
++            diagnostics,
++            vec![BackendRuntimeDiagnostic::MissingRuntimeDir {
++                variable: "XDG_RUNTIME_DIR"
++            }]
++        );
++    }
++
++    /// 验证无效 runtime dir 会返回路径诊断。
++    #[test]
++    fn invalid_runtime_dir_becomes_diagnostic() {
++        let invalid_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
++        let (runtime_dir, diagnostics) =
++            inspect_runtime_dir(Some(invalid_path.clone().into_os_string()));
++
++        assert_eq!(runtime_dir, None);
++        assert_eq!(
++            diagnostics,
++            vec![BackendRuntimeDiagnostic::InvalidRuntimeDir { path: invalid_path }]
++        );
++    }
++
++    /// 验证结构化诊断可以安全转换为日志文本。
++    #[test]
++    fn runtime_diagnostic_display_preserves_context() {
++        let diagnostic = BackendRuntimeDiagnostic::SocketNameSelected {
++            socket_name: "wayland-test".to_string(),
++        };
++
++        assert_eq!(
++            diagnostic.to_string(),
++            "已选择 Wayland socket: wayland-test"
++        );
++    }
++
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    mod linux_tests {
++        use super::{
++            BackendBootstrapMode, BackendRuntimeDiagnostic, BackendRuntimeReport,
++            SmithayRuntimeProbe,
++        };
++        use crate::smithay_backend::{
++            linux_runtime::SmithayLinuxRuntimeProbe,
++            test_support::{assert_runtime_dir, unique_socket_name},
++        };
++
++        /// 验证旧 runtime Linux API 配置的 socket 会进入门面报告。
++        #[test]
++        fn legacy_smithay_runtime_builds_linux_facade_report() {
++            assert_runtime_dir();
++
++            let socket_name = unique_socket_name("facade-legacy");
++            let runtime = SmithayRuntimeProbe::with_socket_name(&socket_name)
++                .expect("旧 runtime API 必须真实构造指定 socket");
++            let report = BackendRuntimeReport::from(&runtime);
++
++            assert_eq!(report.backend_name, "smithay-linux-compat");
++            assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
++            assert_eq!(report.socket_name.as_deref(), Some(socket_name.as_str()));
++            assert!(report.runtime_dir.is_some());
++            assert!(report.capabilities.can_create_display);
++            assert!(report.capabilities.can_create_socket);
++            assert!(!report.capabilities.supports_real_wayland_surfaces);
++            assert!(!report.capabilities.supports_gpu_rendering);
++            assert!(report.has_diagnostic(|diagnostic| matches!(
++                diagnostic,
++                BackendRuntimeDiagnostic::SocketNameSelected {
++                    socket_name: selected
++                } if selected == &socket_name
++            )));
++        }
++
++        /// 验证 Linux 资源组合探针可以生成相同语义的门面报告。
++        #[test]
++        fn linux_runtime_builds_facade_report() {
++            assert_runtime_dir();
++
++            let socket_name = unique_socket_name("facade-linux");
++            let runtime = SmithayLinuxRuntimeProbe::with_socket_name(&socket_name)
++                .expect("Linux runtime 必须真实构造 Display 和 socket");
++            let report = BackendRuntimeReport::from(&runtime);
++
++            assert_eq!(report.backend_name, "smithay-linux");
++            assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
++            assert_eq!(report.socket_name.as_deref(), Some(socket_name.as_str()));
++            assert!(report.runtime_dir.is_some());
++            assert!(report.capabilities.supports_linux_runtime_dir);
++            assert!(report.capabilities.supports_mock_runtime);
++        }
++    }
++}
+diff --git a/src/smithay_backend/wayland_socket.rs b/src/smithay_backend/wayland_socket.rs
+index 424e5df..9bfbf7b 100755
+--- a/src/smithay_backend/wayland_socket.rs
++++ b/src/smithay_backend/wayland_socket.rs
+@@ -100,6 +100,7 @@ impl SmithayWaylandSocketProbe {
+ #[cfg(test)]
+ mod tests {
+     use super::{SmithayWaylandSocketProbe, SmithayWaylandSocketProbeMode};
++    use crate::smithay_backend::test_support::{assert_runtime_dir, unique_socket_name};
+ 
+     /// 验证 socket 探针模式固定为纯探针模式。
+     #[test]
+@@ -110,41 +111,31 @@ mod tests {
+         );
+     }
+ 
+-    /// 验证自动创建 socket 会返回正常结果，而不会因环境缺失 panic。
++    /// 验证自动创建 socket 会真实绑定 Wayland listening socket。
+     #[test]
+     fn wayland_socket_probe_new_auto_returns_result_without_panic() {
+-        let result = SmithayWaylandSocketProbe::new_auto();
+-
+-        match result {
+-            Ok(probe) => {
+-                // 创建成功时必须保持纯探针模式，并提供非空 Wayland socket 名称。
+-                assert!(probe.is_probe_only());
+-                assert_eq!(probe.mode(), SmithayWaylandSocketProbeMode::ProbeOnly);
+-                assert_eq!(probe.mode_description(), "wayland-socket-probe-only");
+-
+-                let name = probe.socket_name_string();
+-
+-                assert!(!name.is_empty());
+-                assert!(name.contains("wayland"));
+-            }
+-            Err(error) => {
+-                // 某些持续集成或非桌面环境可能没有有效运行时目录。
+-                // 环境缺失不是核心业务失败，只要求错误被正常返回。
+-                assert!(!error.to_string().is_empty());
+-            }
+-        }
++        assert_runtime_dir();
++
++        let probe = SmithayWaylandSocketProbe::new_auto()
++            .expect("Wayland socket 测试必须真实绑定 listening socket");
++
++        assert!(probe.is_probe_only());
++        assert_eq!(probe.mode(), SmithayWaylandSocketProbeMode::ProbeOnly);
++        assert_eq!(probe.mode_description(), "wayland-socket-probe-only");
++        assert!(probe.socket_name_string().contains("wayland"));
+     }
+ 
+     /// 验证创建成功时可以取得 socket 名称的操作系统字符串副本。
+     #[test]
+     fn wayland_socket_probe_socket_name_os_string_is_available_when_created() {
+-        let Ok(probe) = SmithayWaylandSocketProbe::new_auto() else {
+-            // 缺少运行时目录时直接结束测试，不修改全局环境变量。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let expected_name = unique_socket_name("socket-os-string");
++        let probe = SmithayWaylandSocketProbe::with_name(&expected_name)
++            .expect("Wayland socket 测试必须真实绑定指定名称的 socket");
+ 
+         let os_name = probe.socket_name_os_string();
+ 
+-        assert!(!os_name.is_empty());
++        assert_eq!(os_name, std::ffi::OsString::from(expected_name));
+     }
+ }

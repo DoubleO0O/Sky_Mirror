@@ -1,0 +1,8 @@
+# Rust 编译产生的本地构建目录。
+/target
+
+# compositor 运行时生成的本地会话文件，不应进入版本库。
+sky_mirror_session.json
+
+# 调试或运行过程中生成的日志文件。
+*.log

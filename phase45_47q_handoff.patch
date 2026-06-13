@@ -1,0 +1,5377 @@
+diff --git a/src/smithay_backend/bootstrap.rs b/src/smithay_backend/bootstrap.rs
+index 5a8b261..12adfaa 100755
+--- a/src/smithay_backend/bootstrap.rs
++++ b/src/smithay_backend/bootstrap.rs
+@@ -118,7 +118,10 @@ impl SmithayBootstrapProbe {
+ #[cfg(test)]
+ mod tests {
+     use super::{SmithayBootstrapMode, SmithayBootstrapProbe};
+-    use crate::smithay_backend::wayland_socket::SmithayWaylandSocketProbeMode;
++    use crate::smithay_backend::{
++        test_support::{assert_runtime_dir, unique_socket_name},
++        wayland_socket::SmithayWaylandSocketProbeMode,
++    };
+ 
+     /// 验证 bootstrap 模式固定为纯探针模式。
+     #[test]
+@@ -129,46 +132,35 @@ mod tests {
+         );
+     }
+ 
+-    /// 验证自动创建组合探针会返回正常结果，而不会因环境缺失 panic。
++    /// 验证自动创建组合探针会真实构造 Display 和 socket。
+     #[test]
+     fn smithay_bootstrap_new_auto_returns_result_without_panic() {
+-        let result = SmithayBootstrapProbe::new_auto();
+-
+-        match result {
+-            Ok(probe) => {
+-                // 创建成功时，Display 和 socket 都必须保持纯探针状态。
+-                assert!(probe.is_probe_only());
+-                assert_eq!(probe.mode(), SmithayBootstrapMode::ProbeOnly);
+-                assert_eq!(
+-                    probe.socket_mode(),
+-                    SmithayWaylandSocketProbeMode::ProbeOnly
+-                );
+-                assert_eq!(probe.mode_description(), "smithay-bootstrap-probe-only");
+-
+-                let socket_name = probe.socket_name_string();
+-
+-                // 自动选择的 Wayland socket 名称必须可读且非空。
+-                assert!(!socket_name.is_empty());
+-                assert!(socket_name.contains("wayland"));
+-
+-                // 这里只取得 handle 以验证组合资源路径，不注册任何协议对象。
+-                let _handle = probe.display_handle();
+-            }
+-            Err(error) => {
+-                // 某些持续集成或非桌面环境可能没有有效运行时目录。
+-                // 环境缺失不是核心业务失败，只要求错误被正常返回。
+-                assert!(!error.to_string().is_empty());
+-            }
+-        }
++        assert_runtime_dir();
++
++        let probe =
++            SmithayBootstrapProbe::new_auto().expect("bootstrap 必须真实构造 Display 和 socket");
++
++        assert!(probe.is_probe_only());
++        assert_eq!(probe.mode(), SmithayBootstrapMode::ProbeOnly);
++        assert_eq!(
++            probe.socket_mode(),
++            SmithayWaylandSocketProbeMode::ProbeOnly
++        );
++        assert_eq!(probe.mode_description(), "smithay-bootstrap-probe-only");
++        assert!(probe.socket_name_string().contains("wayland"));
++
++        // 这里只取得 handle 以验证组合资源路径，不注册任何协议对象。
++        let _handle = probe.display_handle();
+     }
+ 
+     /// 验证组合探针创建成功时可以取得 Display handle。
+     #[test]
+     fn smithay_bootstrap_display_handle_is_available_when_created() {
+-        let Ok(probe) = SmithayBootstrapProbe::new_auto() else {
+-            // 缺少运行时目录时直接结束测试，不修改全局环境变量。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let socket_name = unique_socket_name("bootstrap-display");
++        let probe = SmithayBootstrapProbe::with_socket_name(&socket_name)
++            .expect("bootstrap 必须真实构造指定名称的 socket");
+ 
+         let _handle = probe.display_handle();
+ 
+@@ -178,13 +170,14 @@ mod tests {
+     /// 验证组合探针创建成功时可以读取 socket 名称。
+     #[test]
+     fn smithay_bootstrap_socket_name_is_available_when_created() {
+-        let Ok(probe) = SmithayBootstrapProbe::new_auto() else {
+-            // 缺少运行时目录时直接结束测试，不修改全局环境变量。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let expected_name = unique_socket_name("bootstrap-name");
++        let probe = SmithayBootstrapProbe::with_socket_name(&expected_name)
++            .expect("bootstrap 必须真实构造指定名称的 socket");
+ 
+         let socket_name = probe.socket_name_string();
+ 
+-        assert!(!socket_name.is_empty());
++        assert_eq!(socket_name, expected_name);
+     }
+ }
+diff --git a/src/smithay_backend/linux_runtime.rs b/src/smithay_backend/linux_runtime.rs
+index d57ab73..d9b1c7f 100644
+--- a/src/smithay_backend/linux_runtime.rs
++++ b/src/smithay_backend/linux_runtime.rs
+@@ -97,29 +97,36 @@ mod tests {
+     use super::SmithayLinuxRuntimeProbe;
+     use crate::{
+         core::{backend_event::BackendEvent, state::State},
+-        smithay_backend::bootstrap::SmithayBootstrapMode,
++        smithay_backend::{
++            bootstrap::SmithayBootstrapMode,
++            driver::SmithayBackendDriverProbe,
++            runtime::SmithayRuntimeProbe,
++            test_support::{assert_runtime_dir, unique_socket_name},
++        },
+     };
+ 
+     /// 验证 Linux runtime 创建后仍保持探针模式。
+     #[test]
+     fn smithay_linux_runtime_is_probe_only_when_created() {
+-        let Ok(runtime) = SmithayLinuxRuntimeProbe::new_auto() else {
+-            // 缺少有效运行时目录时结束资源测试，不修改进程环境。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let socket_name = unique_socket_name("linux-runtime-mode");
++        let runtime = SmithayLinuxRuntimeProbe::with_socket_name(&socket_name)
++            .expect("Linux runtime 必须真实构造 Display 和指定名称的 socket");
+ 
+         assert!(runtime.is_probe_only());
+         assert_eq!(runtime.bootstrap_mode(), SmithayBootstrapMode::ProbeOnly);
+-        assert!(!runtime.socket_name_string().is_empty());
++        assert_eq!(runtime.socket_name_string(), socket_name);
+     }
+ 
+     /// 验证 Linux 资源外壳仍通过纯数据 runtime 推进核心事件。
+     #[test]
+     fn smithay_linux_runtime_runs_event_through_probe_runtime() {
+-        let Ok(mut runtime) = SmithayLinuxRuntimeProbe::new_auto() else {
+-            // 缺少有效运行时目录时结束资源测试，不修改进程环境。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let socket_name = unique_socket_name("linux-runtime-event");
++        let mut runtime = SmithayLinuxRuntimeProbe::with_socket_name(&socket_name)
++            .expect("Linux runtime 必须真实构造资源后才能验证事件链");
+         let mut state = State::new();
+ 
+         runtime.push_event(BackendEvent::OutputResized {
+@@ -135,4 +142,28 @@ mod tests {
+         assert_eq!(output.width, 1440);
+         assert_eq!(output.height, 900);
+     }
++
++    /// 验证旧 `SmithayRuntimeProbe` Linux 构造和查询 API 仍可工作。
++    #[test]
++    fn smithay_runtime_legacy_linux_api_remains_available() {
++        assert_runtime_dir();
++
++        let socket_name = unique_socket_name("legacy-runtime");
++        let runtime = SmithayRuntimeProbe::with_socket_name(&socket_name)
++            .expect("旧 runtime API 必须真实构造指定名称的 socket");
++
++        assert!(runtime.is_probe_only());
++        assert_eq!(runtime.bootstrap_mode(), SmithayBootstrapMode::ProbeOnly);
++        assert_eq!(runtime.socket_name_string(), socket_name);
++
++        let bootstrap_name = unique_socket_name("legacy-from-parts");
++        let bootstrap = crate::smithay_backend::bootstrap::SmithayBootstrapProbe::with_socket_name(
++            &bootstrap_name,
++        )
++        .expect("旧 from_parts 测试必须真实构造 bootstrap");
++        let runtime =
++            SmithayRuntimeProbe::from_parts(bootstrap, SmithayBackendDriverProbe::new_probe_only());
++
++        assert_eq!(runtime.socket_name_string(), bootstrap_name);
++    }
+ }
+diff --git a/src/smithay_backend/mod.rs b/src/smithay_backend/mod.rs
+index e608a89..3b71256 100755
+--- a/src/smithay_backend/mod.rs
++++ b/src/smithay_backend/mod.rs
+@@ -10,6 +10,34 @@
+ #[cfg(all(feature = "smithay-linux", not(target_os = "linux")))]
+ compile_error!("smithay-linux 只能在 Linux 上启用；macOS 请使用 smithay-probe。");
+ 
++/// Linux 资源测试共用的环境检查和唯一名称生成器。
++#[cfg(all(test, feature = "smithay-linux", target_os = "linux"))]
++pub(crate) mod test_support {
++    use std::sync::atomic::{AtomicU64, Ordering};
++
++    static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
++
++    /// 确认 Linux 资源测试具备有效的 Wayland 运行时目录。
++    ///
++    /// 缺失该目录时测试必须明确失败，不能通过提前返回掩盖资源路径未执行。
++    pub fn assert_runtime_dir() {
++        let runtime_dir =
++            std::env::var_os("XDG_RUNTIME_DIR").expect("Linux Smithay 测试需要 XDG_RUNTIME_DIR");
++
++        assert!(
++            std::path::Path::new(&runtime_dir).is_dir(),
++            "XDG_RUNTIME_DIR 必须指向已存在的目录"
++        );
++    }
++
++    /// 为并行测试生成当前进程内唯一的 Wayland socket 名称。
++    pub fn unique_socket_name(label: &str) -> String {
++        let id = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
++
++        format!("wayland-sky-mirror-{label}-{}-{id}", std::process::id())
++    }
++}
++
+ /// Smithay 动作请求事件适配探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod action_event;
+@@ -37,15 +65,30 @@ pub mod output_event;
+ /// Smithay 纯数据运行时探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod runtime;
++/// 后端中立的运行时门面与结构化启动报告。
++#[cfg(feature = "smithay-probe")]
++pub mod runtime_facade;
+ /// Smithay runtime 场景回放探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod scenario;
++/// Surface 生命周期到窗口接纳预检的纯数据集成管线。
++#[cfg(feature = "smithay-probe")]
++pub mod surface_admission_pipeline;
+ /// Smithay surface 创建事件适配探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod surface_event;
+ /// Smithay surface ID 分配器探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod surface_id;
++/// Surface 生命周期纯数据预备层。
++#[cfg(feature = "smithay-probe")]
++pub mod surface_lifecycle;
++/// Surface 生命周期事件轨迹与 mock adapter。
++#[cfg(feature = "smithay-probe")]
++pub mod surface_trace;
++/// Surface 到窗口候选意图的纯数据规划层。
++#[cfg(feature = "smithay-probe")]
++pub mod surface_window_intent;
+ /// Smithay toplevel 映射事件适配探针。
+ #[cfg(feature = "smithay-probe")]
+ pub mod toplevel_event;
+@@ -55,6 +98,9 @@ pub mod wayland_display;
+ /// Wayland listening socket 的最小构造探针。
+ #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+ pub mod wayland_socket;
++/// 窗口候选意图到核心接纳动作的纯数据预检层。
++#[cfg(feature = "smithay-probe")]
++pub mod window_admission_preview;
+ 
+ // 这些 re-export 构成 feature 模块的公共门面；二进制入口当前不直接消费全部类型。
+ #[allow(unused_imports)]
+@@ -95,12 +141,24 @@ pub use output_event::{
+ pub use runtime::{SmithayRuntimeMode, SmithayRuntimeProbe};
+ #[allow(unused_imports)]
+ #[cfg(feature = "smithay-probe")]
++pub use runtime_facade::{
++    BackendBootstrapMode, BackendRuntimeCapabilities, BackendRuntimeDiagnostic,
++    BackendRuntimeReport,
++};
++#[allow(unused_imports)]
++#[cfg(feature = "smithay-probe")]
+ pub use scenario::{
+     SmithayRuntimeScenario, SmithayRuntimeScenarioMode, SmithayRuntimeScenarioReport,
+     SmithayRuntimeScenarioStepReport,
+ };
+ #[allow(unused_imports)]
+ #[cfg(feature = "smithay-probe")]
++pub use surface_admission_pipeline::{
++    BackendSurfaceAdmissionPipelineReport, BackendSurfaceAdmissionPipelineStatus,
++    BackendSurfaceAdmissionPipelineSummary, SurfaceAdmissionPipelineRunner,
++};
++#[allow(unused_imports)]
++#[cfg(feature = "smithay-probe")]
+ pub use surface_event::{
+     SmithaySurfaceCreationDescriptor, SmithaySurfaceEventMode, SmithaySurfaceEventProbe,
+ };
+@@ -109,6 +167,24 @@ pub use surface_event::{
+ pub use surface_id::{SmithaySurfaceIdAllocatorMode, SmithaySurfaceIdAllocatorProbe};
+ #[allow(unused_imports)]
+ #[cfg(feature = "smithay-probe")]
++pub use surface_lifecycle::{
++    BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceLifecycleEvent,
++    BackendSurfaceLifecycleState, BackendSurfaceRecord, BackendSurfaceRegistry, BackendSurfaceSize,
++};
++#[allow(unused_imports)]
++#[cfg(feature = "smithay-probe")]
++pub use surface_trace::{
++    BackendSurfaceMockAdapter, BackendSurfaceTrace, BackendSurfaceTraceReport,
++    BackendSurfaceTraceRunner, BackendSurfaceTraceScenario,
++};
++#[allow(unused_imports)]
++#[cfg(feature = "smithay-probe")]
++pub use surface_window_intent::{
++    BackendWindowCandidateId, BackendWindowCandidateIntent, BackendWindowCandidateIntentReport,
++    SurfaceWindowIntentPlanner,
++};
++#[allow(unused_imports)]
++#[cfg(feature = "smithay-probe")]
+ pub use toplevel_event::{
+     SmithayToplevelEventMode, SmithayToplevelEventProbe, SmithayToplevelMapDescriptor,
+ };
+@@ -118,6 +194,12 @@ pub use wayland_display::{SmithayWaylandDisplayProbe, SmithayWaylandState};
+ #[allow(unused_imports)]
+ #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+ pub use wayland_socket::{SmithayWaylandSocketProbe, SmithayWaylandSocketProbeMode};
++#[allow(unused_imports)]
++#[cfg(feature = "smithay-probe")]
++pub use window_admission_preview::{
++    BackendWindowAdmissionPreviewAction, BackendWindowAdmissionPreviewReport,
++    BackendWindowAdmissionPreviewWarning, WindowAdmissionPreviewPlanner,
++};
+ 
+ use crate::core::{
+     backend_driver::BackendDriverRunner, backend_event::BackendEvent,
+diff --git a/src/smithay_backend/runtime.rs b/src/smithay_backend/runtime.rs
+index 3c8af2b..a7f7597 100755
+--- a/src/smithay_backend/runtime.rs
++++ b/src/smithay_backend/runtime.rs
+@@ -29,6 +29,9 @@ use crate::{
+     },
+ };
+ 
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++use crate::smithay_backend::bootstrap::{SmithayBootstrapMode, SmithayBootstrapProbe};
++
+ /// Smithay runtime 当前运行模式。
+ ///
+ /// 当前只允许 `ProbeOnly`，表示 runtime 只组合纯数据 driver 与 ID 分配器，
+@@ -49,6 +52,13 @@ pub enum SmithayRuntimeMode {
+ /// 所有真实 Smithay 回调未来都必须先转换为 `BackendEvent`，再由 driver 产出并
+ /// 通过 `BackendDriverRunner` 进入核心。该结构不会直接修改 `State`。
+ pub struct SmithayRuntimeProbe {
++    /// 旧 Linux runtime API 使用的 bootstrap 兼容资源。
++    ///
++    /// 该字段只在 `smithay-linux` 下存在。纯 `smithay-probe` 构建不会引用
++    /// Smithay crate，也不会保存 Display 或 listening socket。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    compatibility_bootstrap: Option<SmithayBootstrapProbe>,
++
+     /// Smithay 后端驱动接口探针。
+     ///
+     /// 当前只维护 `BackendEvent` 队列，不直接修改 `State`。
+@@ -74,6 +84,8 @@ impl SmithayRuntimeProbe {
+     /// 该构造器不会读取环境变量，也不会构造 Display、socket 或真实 client。
+     pub fn new_probe_only() -> Self {
+         Self {
++            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++            compatibility_bootstrap: None,
+             driver: SmithayBackendDriverProbe::new_probe_only(),
+             client_id_allocator: SmithayClientIdAllocatorProbe::new(),
+             surface_id_allocator: SmithaySurfaceIdAllocatorProbe::new(),
+@@ -83,12 +95,49 @@ impl SmithayRuntimeProbe {
+ 
+     /// 兼容旧调用方式创建纯数据 runtime。
+     ///
+-    /// `new_auto` 在 `smithay-probe` 中不构造真实 socket 或 Display；真实资源构造
+-    /// 已移动到 `smithay-linux` 下的 `SmithayLinuxRuntimeProbe`。
++    /// `new_auto` 在纯 `smithay-probe` 中不构造真实 socket 或 Display。
++    /// Linux feature 下保留旧行为并持有 bootstrap，以保证原有公共 API 可继续使用；
++    /// 新代码仍应优先使用 `SmithayLinuxRuntimeProbe` 组合系统资源。
+     pub fn new_auto() -> Result<Self, Box<dyn std::error::Error>> {
++        #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++        {
++            return Ok(Self::from_parts(
++                SmithayBootstrapProbe::new_auto()?,
++                SmithayBackendDriverProbe::new_probe_only(),
++            ));
++        }
++
++        #[cfg(not(all(feature = "smithay-linux", target_os = "linux")))]
+         Ok(Self::new_probe_only())
+     }
+ 
++    /// 使用指定 socket 名称创建旧式 Linux runtime。
++    ///
++    /// 该兼容入口只在 `smithay-linux` 下提供。它不会启动 compositor、接收 client
++    /// 或绕过 `BackendDriverRunner`；新代码应优先使用 `SmithayLinuxRuntimeProbe`。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub fn with_socket_name(name: &str) -> Result<Self, Box<dyn std::error::Error>> {
++        Ok(Self::from_parts(
++            SmithayBootstrapProbe::with_socket_name(name)?,
++            SmithayBackendDriverProbe::new_probe_only(),
++        ))
++    }
++
++    /// 使用旧式 bootstrap 与 driver 构造 Linux runtime。
++    ///
++    /// 该方法保留原公共签名。bootstrap 只承担资源兼容，所有事件仍由传入的
++    /// driver 产出，并通过 `BackendDriverRunner` 进入核心。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub fn from_parts(bootstrap: SmithayBootstrapProbe, driver: SmithayBackendDriverProbe) -> Self {
++        Self {
++            compatibility_bootstrap: Some(bootstrap),
++            driver,
++            client_id_allocator: SmithayClientIdAllocatorProbe::new(),
++            surface_id_allocator: SmithaySurfaceIdAllocatorProbe::new(),
++            mode: SmithayRuntimeMode::ProbeOnly,
++        }
++    }
++
+     /// 向内部 driver 追加一条后端事件。
+     ///
+     /// 未来真实 Smithay callback 也应先转换为 `BackendEvent`，再进入 driver
+@@ -281,7 +330,43 @@ impl SmithayRuntimeProbe {
+ 
+     /// 当前是否仍然只是纯探针模式。
+     pub fn is_probe_only(&self) -> bool {
+-        self.mode == SmithayRuntimeMode::ProbeOnly && self.driver.is_probe_only()
++        let resources_are_probe_only = {
++            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++            {
++                self.compatibility_bootstrap
++                    .as_ref()
++                    .map_or(true, SmithayBootstrapProbe::is_probe_only)
++            }
++
++            #[cfg(not(all(feature = "smithay-linux", target_os = "linux")))]
++            {
++                true
++            }
++        };
++
++        self.mode == SmithayRuntimeMode::ProbeOnly
++            && self.driver.is_probe_only()
++            && resources_are_probe_only
++    }
++
++    /// 返回旧式 Linux bootstrap 当前模式。
++    ///
++    /// 纯数据构造器没有 bootstrap，但其语义仍然是 `ProbeOnly`。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub fn bootstrap_mode(&self) -> SmithayBootstrapMode {
++        self.compatibility_bootstrap
++            .as_ref()
++            .map_or(SmithayBootstrapMode::ProbeOnly, SmithayBootstrapProbe::mode)
++    }
++
++    /// 返回旧式 Linux runtime 持有的 socket 名称。
++    ///
++    /// 对通过 `new_probe_only` 创建的实例返回空字符串，明确表示没有系统资源。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub fn socket_name_string(&self) -> String {
++        self.compatibility_bootstrap
++            .as_ref()
++            .map_or_else(String::new, SmithayBootstrapProbe::socket_name_string)
+     }
+ 
+     /// 返回 driver 模式。
+@@ -324,32 +409,25 @@ mod tests {
+         assert_eq!(SmithayRuntimeMode::ProbeOnly, SmithayRuntimeMode::ProbeOnly);
+     }
+ 
+-    /// 验证兼容构造器只创建纯数据 runtime。
++    /// 验证兼容构造器能够完成当前 feature 对应的 runtime 构造。
+     #[test]
+     fn smithay_runtime_new_auto_returns_result_without_panic() {
+-        let result = SmithayRuntimeProbe::new_auto();
+-
+-        match result {
+-            Ok(runtime) => {
+-                // 创建成功时，driver、ID 分配器和 runtime 必须都保持纯探针模式。
+-                assert!(runtime.is_probe_only());
+-                assert_eq!(runtime.mode(), SmithayRuntimeMode::ProbeOnly);
+-                assert_eq!(runtime.driver_mode(), SmithayBackendDriverMode::ProbeOnly);
+-                assert_eq!(
+-                    runtime.client_id_allocator_mode(),
+-                    SmithayClientIdAllocatorMode::ProbeOnly
+-                );
+-                assert_eq!(
+-                    runtime.surface_id_allocator_mode(),
+-                    SmithaySurfaceIdAllocatorMode::ProbeOnly
+-                );
+-                assert_eq!(runtime.mode_description(), "smithay-runtime-probe-only");
+-            }
+-            Err(error) => {
+-                // 当前实现不会返回错误；保留分支是为了兼容 Result 形式的公共 API。
+-                assert!(!error.to_string().is_empty());
+-            }
+-        }
++        let runtime = SmithayRuntimeProbe::new_auto()
++            .expect("runtime 兼容构造器必须完成当前 feature 对应的初始化");
++
++        // 无论是否带 Linux 兼容资源，状态事件仍必须保持纯探针模式。
++        assert!(runtime.is_probe_only());
++        assert_eq!(runtime.mode(), SmithayRuntimeMode::ProbeOnly);
++        assert_eq!(runtime.driver_mode(), SmithayBackendDriverMode::ProbeOnly);
++        assert_eq!(
++            runtime.client_id_allocator_mode(),
++            SmithayClientIdAllocatorMode::ProbeOnly
++        );
++        assert_eq!(
++            runtime.surface_id_allocator_mode(),
++            SmithaySurfaceIdAllocatorMode::ProbeOnly
++        );
++        assert_eq!(runtime.mode_description(), "smithay-runtime-probe-only");
+     }
+ 
+     /// 验证动作请求会通过 driver 和 Runner 修改核心状态。
+diff --git a/src/smithay_backend/runtime_facade.rs b/src/smithay_backend/runtime_facade.rs
+new file mode 100644
+index 0000000..7a542f4
+--- /dev/null
++++ b/src/smithay_backend/runtime_facade.rs
+@@ -0,0 +1,536 @@
++//! 后端运行时只读门面。
++//!
++//! 本模块把 Smithay probe 与 Linux 资源探针转换为后端中立的结构化报告。
++//! 它不持有核心 `State`，不提交 `BackendEvent`，也不会启动 compositor。
++
++use std::{fmt, path::PathBuf};
++
++#[cfg(any(test, all(feature = "smithay-linux", target_os = "linux")))]
++use std::{ffi::OsString, path::Path};
++
++use crate::smithay_backend::runtime::SmithayRuntimeProbe;
++
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++use crate::smithay_backend::{
++    bootstrap::SmithayBootstrapMode, linux_runtime::SmithayLinuxRuntimeProbe,
++};
++
++/// 后端启动模式。
++///
++/// 当前阶段只有纯探针模式；即使 Linux Display 和 socket 已构造，也不会接收
++/// client、注册协议 global 或进入真实 compositor 主循环。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum BackendBootstrapMode {
++    /// 仅验证运行时和资源边界，不启动真实 compositor。
++    ProbeOnly,
++}
++
++/// 后端运行时当前具备的能力。
++///
++/// 字段只描述已经实现并可由当前实例提供的能力。纯数据 surface 生命周期边界
++/// 与真实 Wayland surface 接入是两项独立能力，后者和 GPU 渲染必须保持为
++/// `false`。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct BackendRuntimeCapabilities {
++    /// 是否能够构造 Wayland Display。
++    pub can_create_display: bool,
++
++    /// 是否能够构造 Wayland listening socket。
++    pub can_create_socket: bool,
++
++    /// 是否使用 Linux `XDG_RUNTIME_DIR` 运行时目录。
++    pub supports_linux_runtime_dir: bool,
++
++    /// 是否支持纯数据 runtime probe。
++    pub supports_mock_runtime: bool,
++
++    /// 是否支持后端中立的 surface 生命周期纯数据边界。
++    pub supports_surface_lifecycle_boundary: bool,
++
++    /// 是否支持 surface 生命周期纯数据 trace harness。
++    pub supports_surface_trace_harness: bool,
++
++    /// 是否支持 surface 到窗口候选意图的纯数据规划。
++    pub supports_surface_window_intent_planning: bool,
++
++    /// 是否支持窗口候选意图到接纳动作的纯数据预检。
++    pub supports_window_admission_preview: bool,
++
++    /// 是否支持 surface 生命周期到接纳预检的纯数据集成管线。
++    pub supports_surface_admission_pipeline_preview: bool,
++
++    /// 是否已经接入真实 Wayland surface 生命周期。
++    pub supports_real_wayland_surfaces: bool,
++
++    /// 是否已经接入 GPU 渲染。
++    pub supports_gpu_rendering: bool,
++}
++
++impl BackendRuntimeCapabilities {
++    /// 返回跨平台纯数据 probe 的保守能力集合。
++    pub const fn smithay_probe() -> Self {
++        Self {
++            can_create_display: false,
++            can_create_socket: false,
++            supports_linux_runtime_dir: false,
++            supports_mock_runtime: true,
++            supports_surface_lifecycle_boundary: true,
++            supports_surface_trace_harness: true,
++            supports_surface_window_intent_planning: true,
++            supports_window_admission_preview: true,
++            supports_surface_admission_pipeline_preview: true,
++            supports_real_wayland_surfaces: false,
++            supports_gpu_rendering: false,
++        }
++    }
++
++    /// 返回 Linux 资源探针的保守能力集合。
++    ///
++    /// Display 和 socket 已可构造，但真实 surface 与 GPU 渲染仍未接入。
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    pub const fn smithay_linux_probe() -> Self {
++        Self {
++            can_create_display: true,
++            can_create_socket: true,
++            supports_linux_runtime_dir: true,
++            supports_mock_runtime: true,
++            supports_surface_lifecycle_boundary: true,
++            supports_surface_trace_harness: true,
++            supports_surface_window_intent_planning: true,
++            supports_window_admission_preview: true,
++            supports_surface_admission_pipeline_preview: true,
++            supports_real_wayland_surfaces: false,
++            supports_gpu_rendering: false,
++        }
++    }
++}
++
++/// 后端运行时诊断。
++///
++/// 每个变体都保留机器可判断的类别和必要上下文；`Display` 只用于日志展示，
++/// 调用方不需要解析字符串来理解诊断。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum BackendRuntimeDiagnostic {
++    /// Linux runtime 缺少 `XDG_RUNTIME_DIR`。
++    MissingRuntimeDir {
++        /// 缺失的环境变量名称。
++        variable: &'static str,
++    },
++
++    /// Linux runtime dir 存在配置值，但不是有效目录。
++    InvalidRuntimeDir {
++        /// 无效路径。
++        path: PathBuf,
++    },
++
++    /// 后端已经选择或绑定 socket 名称。
++    SocketNameSelected {
++        /// Wayland socket 名称。
++        socket_name: String,
++    },
++
++    /// 当前构建没有启用某个可选 feature。
++    FeatureDisabled {
++        /// 未启用的 Cargo feature。
++        feature: &'static str,
++    },
++
++    /// 某项能力只允许在 Linux 上使用。
++    LinuxOnly {
++        /// Linux 专属 Cargo feature。
++        feature: &'static str,
++    },
++
++    /// 当前实例回退到纯数据 probe。
++    ProbeFallback {
++        /// 回退后的后端名称。
++        backend_name: &'static str,
++    },
++
++    /// 当前主机平台不支持请求的系统后端。
++    UnsupportedPlatform {
++        /// 当前 Rust 目标操作系统名称。
++        platform: &'static str,
++    },
++}
++
++impl fmt::Display for BackendRuntimeDiagnostic {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::MissingRuntimeDir { variable } => {
++                write!(formatter, "缺少运行时目录环境变量 {variable}")
++            }
++            Self::InvalidRuntimeDir { path } => {
++                write!(formatter, "运行时目录无效: {}", path.display())
++            }
++            Self::SocketNameSelected { socket_name } => {
++                write!(formatter, "已选择 Wayland socket: {socket_name}")
++            }
++            Self::FeatureDisabled { feature } => {
++                write!(formatter, "Cargo feature 未启用: {feature}")
++            }
++            Self::LinuxOnly { feature } => {
++                write!(formatter, "Cargo feature 仅支持 Linux: {feature}")
++            }
++            Self::ProbeFallback { backend_name } => {
++                write!(formatter, "使用纯数据运行时探针: {backend_name}")
++            }
++            Self::UnsupportedPlatform { platform } => {
++                write!(formatter, "当前平台不支持 Linux 后端: {platform}")
++            }
++        }
++    }
++}
++
++/// 后端运行时门面报告。
++///
++/// 报告只描述启动资源和能力，不包含 workspace、focus、scene 或渲染帧，也不会
++/// 修改任何核心状态。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BackendRuntimeReport {
++    /// 后端实现名称。
++    pub backend_name: &'static str,
++
++    /// 当前启动模式。
++    pub bootstrap_mode: BackendBootstrapMode,
++
++    /// 已选择的 Wayland socket 名称；纯 probe 为 `None`。
++    pub socket_name: Option<String>,
++
++    /// 有效的 Linux runtime dir；纯 probe 或无效配置为 `None`。
++    pub runtime_dir: Option<PathBuf>,
++
++    /// 当前实例的保守能力集合。
++    pub capabilities: BackendRuntimeCapabilities,
++
++    /// 结构化启动诊断。
++    pub diagnostics: Vec<BackendRuntimeDiagnostic>,
++}
++
++impl BackendRuntimeReport {
++    /// 判断报告是否包含指定类别的诊断。
++    pub fn has_diagnostic(&self, predicate: impl Fn(&BackendRuntimeDiagnostic) -> bool) -> bool {
++        self.diagnostics.iter().any(predicate)
++    }
++}
++
++impl From<&SmithayRuntimeProbe> for BackendRuntimeReport {
++    /// 从兼容 runtime probe 创建后端中立报告。
++    fn from(runtime: &SmithayRuntimeProbe) -> Self {
++        #[cfg(not(all(feature = "smithay-linux", target_os = "linux")))]
++        let _ = runtime;
++
++        #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++        {
++            let socket_name = runtime.socket_name_string();
++
++            if !socket_name.is_empty() {
++                return linux_resource_report(
++                    "smithay-linux-compat",
++                    map_bootstrap_mode(runtime.bootstrap_mode()),
++                    socket_name,
++                );
++            }
++        }
++
++        smithay_probe_report()
++    }
++}
++
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++impl From<&SmithayLinuxRuntimeProbe> for BackendRuntimeReport {
++    /// 从 Linux Display/socket 组合探针创建后端中立报告。
++    fn from(runtime: &SmithayLinuxRuntimeProbe) -> Self {
++        linux_resource_report(
++            "smithay-linux",
++            map_bootstrap_mode(runtime.bootstrap_mode()),
++            runtime.socket_name_string(),
++        )
++    }
++}
++
++/// 创建跨平台纯数据 probe 报告。
++fn smithay_probe_report() -> BackendRuntimeReport {
++    let mut diagnostics = vec![BackendRuntimeDiagnostic::ProbeFallback {
++        backend_name: "smithay-probe",
++    }];
++
++    if !cfg!(feature = "smithay-linux") {
++        diagnostics.push(BackendRuntimeDiagnostic::FeatureDisabled {
++            feature: "smithay-linux",
++        });
++    }
++
++    if !cfg!(target_os = "linux") {
++        diagnostics.push(BackendRuntimeDiagnostic::LinuxOnly {
++            feature: "smithay-linux",
++        });
++        diagnostics.push(BackendRuntimeDiagnostic::UnsupportedPlatform {
++            platform: std::env::consts::OS,
++        });
++    }
++
++    BackendRuntimeReport {
++        backend_name: "smithay-probe",
++        bootstrap_mode: BackendBootstrapMode::ProbeOnly,
++        socket_name: None,
++        runtime_dir: None,
++        capabilities: BackendRuntimeCapabilities::smithay_probe(),
++        diagnostics,
++    }
++}
++
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++/// 创建已持有 Linux Display/socket 资源的报告。
++fn linux_resource_report(
++    backend_name: &'static str,
++    bootstrap_mode: BackendBootstrapMode,
++    socket_name: String,
++) -> BackendRuntimeReport {
++    let (runtime_dir, mut diagnostics) = inspect_runtime_dir(std::env::var_os("XDG_RUNTIME_DIR"));
++
++    diagnostics.push(BackendRuntimeDiagnostic::SocketNameSelected {
++        socket_name: socket_name.clone(),
++    });
++
++    BackendRuntimeReport {
++        backend_name,
++        bootstrap_mode,
++        socket_name: Some(socket_name),
++        runtime_dir,
++        capabilities: BackendRuntimeCapabilities::smithay_linux_probe(),
++        diagnostics,
++    }
++}
++
++#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++/// 把 Smithay bootstrap 模式映射为后端中立模式。
++fn map_bootstrap_mode(mode: SmithayBootstrapMode) -> BackendBootstrapMode {
++    match mode {
++        SmithayBootstrapMode::ProbeOnly => BackendBootstrapMode::ProbeOnly,
++    }
++}
++
++/// 检查 Linux runtime dir，但不因环境缺失或路径无效而 panic。
++#[cfg(any(test, all(feature = "smithay-linux", target_os = "linux")))]
++fn inspect_runtime_dir(
++    runtime_dir: Option<OsString>,
++) -> (Option<PathBuf>, Vec<BackendRuntimeDiagnostic>) {
++    let Some(runtime_dir) = runtime_dir else {
++        return (
++            None,
++            vec![BackendRuntimeDiagnostic::MissingRuntimeDir {
++                variable: "XDG_RUNTIME_DIR",
++            }],
++        );
++    };
++
++    let runtime_dir = PathBuf::from(runtime_dir);
++
++    if !Path::new(&runtime_dir).is_dir() {
++        return (
++            None,
++            vec![BackendRuntimeDiagnostic::InvalidRuntimeDir { path: runtime_dir }],
++        );
++    }
++
++    (Some(runtime_dir), Vec::new())
++}
++
++#[cfg(test)]
++mod tests {
++    use std::path::PathBuf;
++
++    use super::{
++        BackendBootstrapMode, BackendRuntimeCapabilities, BackendRuntimeDiagnostic,
++        BackendRuntimeReport, inspect_runtime_dir,
++    };
++    use crate::smithay_backend::runtime::SmithayRuntimeProbe;
++
++    /// 验证纯数据 runtime 可以生成后端中立报告。
++    #[test]
++    fn smithay_probe_builds_runtime_facade_report() {
++        let runtime = SmithayRuntimeProbe::new_probe_only();
++        let report = BackendRuntimeReport::from(&runtime);
++
++        assert_eq!(report.backend_name, "smithay-probe");
++        assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
++        assert_eq!(report.socket_name, None);
++        assert_eq!(report.runtime_dir, None);
++        assert_eq!(
++            report.capabilities,
++            BackendRuntimeCapabilities::smithay_probe()
++        );
++        assert!(report.has_diagnostic(|diagnostic| matches!(
++            diagnostic,
++            BackendRuntimeDiagnostic::ProbeFallback { .. }
++        )));
++    }
++
++    /// 验证纯 probe 不会宣称尚未实现的系统能力。
++    #[test]
++    fn smithay_probe_capabilities_are_conservative() {
++        let runtime = SmithayRuntimeProbe::new_probe_only();
++        let capabilities = BackendRuntimeReport::from(&runtime).capabilities;
++
++        assert!(!capabilities.can_create_display);
++        assert!(!capabilities.can_create_socket);
++        assert!(!capabilities.supports_linux_runtime_dir);
++        assert!(capabilities.supports_mock_runtime);
++        assert!(capabilities.supports_surface_lifecycle_boundary);
++        assert!(capabilities.supports_surface_trace_harness);
++        assert!(capabilities.supports_surface_window_intent_planning);
++        assert!(capabilities.supports_window_admission_preview);
++        assert!(capabilities.supports_surface_admission_pipeline_preview);
++        assert!(!capabilities.supports_real_wayland_surfaces);
++        assert!(!capabilities.supports_gpu_rendering);
++    }
++
++    /// 验证不可用 Linux 后端会形成结构化诊断，而不是触发 panic。
++    #[test]
++    fn unavailable_linux_runtime_becomes_structured_diagnostics() {
++        let runtime = SmithayRuntimeProbe::new_probe_only();
++        let report = BackendRuntimeReport::from(&runtime);
++
++        #[cfg(not(feature = "smithay-linux"))]
++        {
++            assert!(report.has_diagnostic(|diagnostic| matches!(
++                diagnostic,
++                BackendRuntimeDiagnostic::FeatureDisabled {
++                    feature: "smithay-linux"
++                }
++            )));
++        }
++
++        #[cfg(not(target_os = "linux"))]
++        {
++            assert!(report.has_diagnostic(|diagnostic| matches!(
++                diagnostic,
++                BackendRuntimeDiagnostic::LinuxOnly {
++                    feature: "smithay-linux"
++                }
++            )));
++            assert!(report.has_diagnostic(|diagnostic| matches!(
++                diagnostic,
++                BackendRuntimeDiagnostic::UnsupportedPlatform { .. }
++            )));
++        }
++    }
++
++    /// 验证缺失 runtime dir 会返回明确诊断。
++    #[test]
++    fn missing_runtime_dir_becomes_diagnostic() {
++        let (runtime_dir, diagnostics) = inspect_runtime_dir(None);
++
++        assert_eq!(runtime_dir, None);
++        assert_eq!(
++            diagnostics,
++            vec![BackendRuntimeDiagnostic::MissingRuntimeDir {
++                variable: "XDG_RUNTIME_DIR"
++            }]
++        );
++    }
++
++    /// 验证无效 runtime dir 会返回路径诊断。
++    #[test]
++    fn invalid_runtime_dir_becomes_diagnostic() {
++        let invalid_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
++        let (runtime_dir, diagnostics) =
++            inspect_runtime_dir(Some(invalid_path.clone().into_os_string()));
++
++        assert_eq!(runtime_dir, None);
++        assert_eq!(
++            diagnostics,
++            vec![BackendRuntimeDiagnostic::InvalidRuntimeDir { path: invalid_path }]
++        );
++    }
++
++    /// 验证结构化诊断可以安全转换为日志文本。
++    #[test]
++    fn runtime_diagnostic_display_preserves_context() {
++        let diagnostic = BackendRuntimeDiagnostic::SocketNameSelected {
++            socket_name: "wayland-test".to_string(),
++        };
++
++        assert_eq!(
++            diagnostic.to_string(),
++            "已选择 Wayland socket: wayland-test"
++        );
++    }
++
++    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
++    mod linux_tests {
++        use super::{
++            BackendBootstrapMode, BackendRuntimeDiagnostic, BackendRuntimeReport,
++            SmithayRuntimeProbe,
++        };
++        use crate::smithay_backend::{
++            linux_runtime::SmithayLinuxRuntimeProbe,
++            test_support::{assert_runtime_dir, unique_socket_name},
++        };
++
++        /// 验证旧 runtime Linux API 配置的 socket 会进入门面报告。
++        #[test]
++        fn legacy_smithay_runtime_builds_linux_facade_report() {
++            assert_runtime_dir();
++
++            let socket_name = unique_socket_name("facade-legacy");
++            let runtime = SmithayRuntimeProbe::with_socket_name(&socket_name)
++                .expect("旧 runtime API 必须真实构造指定 socket");
++            let report = BackendRuntimeReport::from(&runtime);
++
++            assert_eq!(report.backend_name, "smithay-linux-compat");
++            assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
++            assert_eq!(report.socket_name.as_deref(), Some(socket_name.as_str()));
++            assert!(report.runtime_dir.is_some());
++            assert!(report.capabilities.can_create_display);
++            assert!(report.capabilities.can_create_socket);
++            assert!(report.capabilities.supports_surface_lifecycle_boundary);
++            assert!(report.capabilities.supports_surface_trace_harness);
++            assert!(report.capabilities.supports_surface_window_intent_planning);
++            assert!(report.capabilities.supports_window_admission_preview);
++            assert!(
++                report
++                    .capabilities
++                    .supports_surface_admission_pipeline_preview
++            );
++            assert!(!report.capabilities.supports_real_wayland_surfaces);
++            assert!(!report.capabilities.supports_gpu_rendering);
++            assert!(report.has_diagnostic(|diagnostic| matches!(
++                diagnostic,
++                BackendRuntimeDiagnostic::SocketNameSelected {
++                    socket_name: selected
++                } if selected == &socket_name
++            )));
++        }
++
++        /// 验证 Linux 资源组合探针可以生成相同语义的门面报告。
++        #[test]
++        fn linux_runtime_builds_facade_report() {
++            assert_runtime_dir();
++
++            let socket_name = unique_socket_name("facade-linux");
++            let runtime = SmithayLinuxRuntimeProbe::with_socket_name(&socket_name)
++                .expect("Linux runtime 必须真实构造 Display 和 socket");
++            let report = BackendRuntimeReport::from(&runtime);
++
++            assert_eq!(report.backend_name, "smithay-linux");
++            assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
++            assert_eq!(report.socket_name.as_deref(), Some(socket_name.as_str()));
++            assert!(report.runtime_dir.is_some());
++            assert!(report.capabilities.supports_linux_runtime_dir);
++            assert!(report.capabilities.supports_mock_runtime);
++            assert!(report.capabilities.supports_surface_lifecycle_boundary);
++            assert!(report.capabilities.supports_surface_trace_harness);
++            assert!(report.capabilities.supports_surface_window_intent_planning);
++            assert!(report.capabilities.supports_window_admission_preview);
++            assert!(
++                report
++                    .capabilities
++                    .supports_surface_admission_pipeline_preview
++            );
++            assert!(!report.capabilities.supports_real_wayland_surfaces);
++            assert!(!report.capabilities.supports_gpu_rendering);
++        }
++    }
++}
+diff --git a/src/smithay_backend/surface_admission_pipeline.rs b/src/smithay_backend/surface_admission_pipeline.rs
+new file mode 100644
+index 0000000..3fe8b8c
+--- /dev/null
++++ b/src/smithay_backend/surface_admission_pipeline.rs
+@@ -0,0 +1,754 @@
++//! Surface 生命周期到窗口接纳预检的纯数据集成管线。
++//!
++//! 本模块只编排已有的生命周期回放、候选意图规划和接纳预检，不重复实现
++//! 任一阶段的规则，也不提交任何状态变化。
++
++use crate::smithay_backend::{
++    surface_lifecycle::{BackendSurfaceLifecycleEvent, BackendSurfaceRegistry},
++    surface_trace::{
++        BackendSurfaceMockAdapter, BackendSurfaceTrace, BackendSurfaceTraceReport,
++        BackendSurfaceTraceScenario,
++    },
++    surface_window_intent::{BackendWindowCandidateIntentReport, SurfaceWindowIntentPlanner},
++    window_admission_preview::{
++        BackendWindowAdmissionPreviewReport, WindowAdmissionPreviewPlanner,
++    },
++};
++
++/// Surface 接纳预检管线的整体状态。
++///
++/// Preview warning 不会改变该状态；只有来源 trace 失败才会形成失败状态。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum BackendSurfaceAdmissionPipelineStatus {
++    /// 来源 trace 完整执行，后续纯数据阶段也已生成报告。
++    Complete,
++
++    /// 来源 trace 失败，但失败前的最终记录仍继续生成意图和预检报告。
++    SourceTraceFailed,
++}
++
++/// Surface 接纳预检管线的完整报告。
++///
++/// 三个阶段报告全部保留，便于调用方检查状态快照、候选意图和预检动作。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BackendSurfaceAdmissionPipelineReport {
++    /// 管线整体状态。
++    pub status: BackendSurfaceAdmissionPipelineStatus,
++
++    /// 生命周期 trace 执行报告。
++    pub trace_report: BackendSurfaceTraceReport,
++
++    /// 从最终 surface 记录规划出的候选意图报告。
++    pub intent_report: BackendWindowCandidateIntentReport,
++
++    /// 从候选意图生成的接纳预检报告。
++    pub preview_report: BackendWindowAdmissionPreviewReport,
++}
++
++impl BackendSurfaceAdmissionPipelineReport {
++    /// 创建用于快速诊断的计数摘要。
++    pub fn summary(&self) -> BackendSurfaceAdmissionPipelineSummary {
++        BackendSurfaceAdmissionPipelineSummary::from(self)
++    }
++
++    /// 判断来源 trace 是否完整成功。
++    pub fn source_succeeded(&self) -> bool {
++        self.status == BackendSurfaceAdmissionPipelineStatus::Complete
++            && self.trace_report.is_success()
++            && self.intent_report.source_succeeded()
++            && self.preview_report.source_succeeded()
++    }
++}
++
++/// Surface 接纳预检管线的轻量摘要。
++///
++/// 摘要只提供计数和失败位置，不替代完整阶段报告。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct BackendSurfaceAdmissionPipelineSummary {
++    /// 管线整体状态。
++    pub status: BackendSurfaceAdmissionPipelineStatus,
++
++    /// Trace 结束时保留的 surface 记录数量。
++    pub surface_count: usize,
++
++    /// 候选意图数量。
++    pub intent_count: usize,
++
++    /// 接纳预检动作数量。
++    pub action_count: usize,
++
++    /// 接纳预检 warning 数量。
++    pub warning_count: usize,
++
++    /// 来源 trace 首个失败事件的下标。
++    pub source_failed_at: Option<usize>,
++}
++
++impl From<&BackendSurfaceAdmissionPipelineReport> for BackendSurfaceAdmissionPipelineSummary {
++    /// 从完整管线报告提取稳定计数。
++    fn from(report: &BackendSurfaceAdmissionPipelineReport) -> Self {
++        Self {
++            status: report.status,
++            surface_count: report.trace_report.final_records.len(),
++            intent_count: report.intent_report.intents.len(),
++            action_count: report.preview_report.actions.len(),
++            warning_count: report.preview_report.warnings.len(),
++            source_failed_at: report.trace_report.failed_at,
++        }
++    }
++}
++
++/// Surface 生命周期到窗口接纳预检的无状态集成 runner。
++///
++/// Runner 只组合既有公开 API。来源 trace 失败时仍会基于失败前的最终记录生成
++/// 候选意图与预检报告，并通过整体状态明确标记失败。
++#[derive(Debug, Clone, Copy, Default)]
++pub struct SurfaceAdmissionPipelineRunner {
++    intent_planner: SurfaceWindowIntentPlanner,
++    preview_planner: WindowAdmissionPreviewPlanner,
++}
++
++impl SurfaceAdmissionPipelineRunner {
++    /// 创建使用默认纯数据规划器的管线 runner。
++    pub const fn new() -> Self {
++        Self {
++            intent_planner: SurfaceWindowIntentPlanner::new(),
++            preview_planner: WindowAdmissionPreviewPlanner::new(),
++        }
++    }
++
++    /// 使用新建生命周期注册表运行一条 trace。
++    pub fn run_trace(&self, trace: &BackendSurfaceTrace) -> BackendSurfaceAdmissionPipelineReport {
++        let mut registry = BackendSurfaceRegistry::new();
++        self.run_trace_with_registry(trace, &mut registry)
++    }
++
++    /// 把生命周期事件集合构造成 trace 后运行完整管线。
++    pub fn run_events(
++        &self,
++        events: impl IntoIterator<Item = BackendSurfaceLifecycleEvent>,
++    ) -> BackendSurfaceAdmissionPipelineReport {
++        let trace = BackendSurfaceTrace::from_events(events);
++        self.run_trace(&trace)
++    }
++
++    /// 使用默认 mock adapter 构造场景并运行完整管线。
++    pub fn run_scenario(
++        &self,
++        scenario: BackendSurfaceTraceScenario,
++    ) -> BackendSurfaceAdmissionPipelineReport {
++        let mut adapter = BackendSurfaceMockAdapter::new();
++        let trace = scenario.build(&mut adapter);
++        self.run_trace(&trace)
++    }
++
++    /// 使用调用方提供的生命周期注册表运行一条 trace。
++    ///
++    /// 该入口允许测试和未来纯数据适配器累积状态。状态转换仍完全由 trace 与
++    /// registry 的既有实现负责。
++    pub fn run_trace_with_registry(
++        &self,
++        trace: &BackendSurfaceTrace,
++        registry: &mut BackendSurfaceRegistry,
++    ) -> BackendSurfaceAdmissionPipelineReport {
++        let trace_report = trace.run(registry);
++        let status = if trace_report.is_success() {
++            BackendSurfaceAdmissionPipelineStatus::Complete
++        } else {
++            BackendSurfaceAdmissionPipelineStatus::SourceTraceFailed
++        };
++        let intent_report = self.intent_planner.intents_for_trace_report(&trace_report);
++        let preview_report = self.preview_planner.preview_intent_report(&intent_report);
++
++        BackendSurfaceAdmissionPipelineReport {
++            status,
++            trace_report,
++            intent_report,
++            preview_report,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use std::{fs, path::Path};
++
++    use super::{
++        BackendSurfaceAdmissionPipelineReport, BackendSurfaceAdmissionPipelineStatus,
++        BackendSurfaceAdmissionPipelineSummary, SurfaceAdmissionPipelineRunner,
++    };
++    use crate::smithay_backend::{
++        surface_lifecycle::{
++            BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceLifecycleEvent,
++            BackendSurfaceRegistry, BackendSurfaceSize,
++        },
++        surface_trace::{
++            BackendSurfaceMockAdapter, BackendSurfaceTrace, BackendSurfaceTraceScenario,
++        },
++        surface_window_intent::BackendWindowCandidateIntent,
++        window_admission_preview::{
++            BackendWindowAdmissionPreviewAction, BackendWindowAdmissionPreviewWarning,
++        },
++    };
++
++    /// 运行指定 mock 场景。
++    fn run_scenario(
++        scenario: BackendSurfaceTraceScenario,
++    ) -> BackendSurfaceAdmissionPipelineReport {
++        SurfaceAdmissionPipelineRunner::new().run_scenario(scenario)
++    }
++
++    /// 返回生产代码部分，避免静态边界测试把自身断言字符串计入结果。
++    fn production_source() -> String {
++        let source = fs::read_to_string(file!()).expect("必须能读取当前模块源码");
++        source
++            .split("#[cfg(test)]")
++            .next()
++            .expect("模块必须包含测试边界")
++            .to_string()
++    }
++
++    /// 递归检查 Rust 源码树是否包含指定文本。
++    fn rust_tree_contains(path: &Path, needle: &str) -> bool {
++        fs::read_dir(path)
++            .expect("必须能读取源码目录")
++            .filter_map(Result::ok)
++            .any(|entry| {
++                let path = entry.path();
++                if path.is_dir() {
++                    rust_tree_contains(&path, needle)
++                } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
++                    fs::read_to_string(path)
++                        .map(|source| source.contains(needle))
++                        .unwrap_or(false)
++                } else {
++                    false
++                }
++            })
++    }
++
++    /// 验证空 trace 可以完整运行。
++    #[test]
++    fn empty_trace_runs_successfully() {
++        let report = SurfaceAdmissionPipelineRunner::new().run_trace(&BackendSurfaceTrace::new());
++
++        assert!(report.source_succeeded());
++        assert!(report.trace_report.is_success());
++        assert!(report.intent_report.intents.is_empty());
++        assert!(report.preview_report.actions.is_empty());
++    }
++
++    /// 验证空 trace 的管线状态为 Complete。
++    #[test]
++    fn empty_trace_status_is_complete() {
++        let report = SurfaceAdmissionPipelineRunner::new().run_trace(&BackendSurfaceTrace::new());
++
++        assert_eq!(
++            report.status,
++            BackendSurfaceAdmissionPipelineStatus::Complete
++        );
++    }
++
++    /// 验证空 trace 的 summary 保持成功状态和全部零计数。
++    #[test]
++    fn empty_trace_summary_has_zero_counts() {
++        let report = SurfaceAdmissionPipelineRunner::new().run_trace(&BackendSurfaceTrace::new());
++
++        assert_eq!(
++            report.summary(),
++            BackendSurfaceAdmissionPipelineSummary {
++                status: BackendSurfaceAdmissionPipelineStatus::Complete,
++                surface_count: 0,
++                intent_count: 0,
++                action_count: 0,
++                warning_count: 0,
++                source_failed_at: None,
++            }
++        );
++    }
++
++    /// 验证 SingleMap 场景生成 Create 候选意图。
++    #[test]
++    fn single_map_builds_create_intent() {
++        let report = run_scenario(BackendSurfaceTraceScenario::SingleMap);
++
++        assert!(matches!(
++            report.intent_report.intents.as_slice(),
++            [BackendWindowCandidateIntent::Create { .. }]
++        ));
++    }
++
++    /// 验证 SingleMap 场景生成创建窗口预检动作。
++    #[test]
++    fn single_map_builds_would_create_action() {
++        let report = run_scenario(BackendSurfaceTraceScenario::SingleMap);
++
++        assert!(matches!(
++            report.preview_report.actions.as_slice(),
++            [BackendWindowAdmissionPreviewAction::WouldCreateWindow { .. }]
++        ));
++    }
++
++    /// 验证 ConfigureThenMap 场景把尺寸保留到意图和预检动作。
++    #[test]
++    fn configure_then_map_preserves_size() {
++        let report = run_scenario(BackendSurfaceTraceScenario::ConfigureThenMap);
++        let expected_size = BackendSurfaceSize {
++            width: 1280,
++            height: 720,
++        };
++
++        assert!(matches!(
++            report.intent_report.intents.as_slice(),
++            [BackendWindowCandidateIntent::Create {
++                size: Some(size),
++                ..
++            }] if *size == expected_size
++        ));
++        assert!(matches!(
++            report.preview_report.actions.as_slice(),
++            [BackendWindowAdmissionPreviewAction::WouldCreateWindow {
++                size: Some(size),
++                ..
++            }] if *size == expected_size
++        ));
++    }
++
++    /// 验证 remap 场景最终仍生成 Create 意图。
++    #[test]
++    fn map_unmap_remap_finishes_with_create_intent() {
++        let report = run_scenario(BackendSurfaceTraceScenario::MapUnmapRemap);
++
++        assert!(matches!(
++            report.intent_report.intents.as_slice(),
++            [BackendWindowCandidateIntent::Create { title, .. }]
++                if title.as_deref() == Some("Remapped Mock Surface")
++        ));
++    }
++
++    /// 验证 remap 场景最终仍生成创建预检动作。
++    #[test]
++    fn map_unmap_remap_finishes_with_create_action() {
++        let report = run_scenario(BackendSurfaceTraceScenario::MapUnmapRemap);
++
++        assert!(matches!(
++            report.preview_report.actions.as_slice(),
++            [BackendWindowAdmissionPreviewAction::WouldCreateWindow { .. }]
++        ));
++    }
++
++    /// 验证 Destroy 场景生成 Close 候选意图。
++    #[test]
++    fn destroy_builds_close_intent() {
++        let report = run_scenario(BackendSurfaceTraceScenario::Destroy);
++
++        assert!(matches!(
++            report.intent_report.intents.as_slice(),
++            [BackendWindowCandidateIntent::Close { .. }]
++        ));
++    }
++
++    /// 验证 Destroy 场景生成关闭窗口预检动作。
++    #[test]
++    fn destroy_builds_would_close_action() {
++        let report = run_scenario(BackendSurfaceTraceScenario::Destroy);
++
++        assert!(matches!(
++            report.preview_report.actions.as_slice(),
++            [BackendWindowAdmissionPreviewAction::WouldCloseWindow { .. }]
++        ));
++    }
++
++    /// 验证销毁后 remap 的管线状态为来源失败。
++    #[test]
++    fn invalid_destroyed_remap_status_is_source_failed() {
++        let report = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert_eq!(
++            report.status,
++            BackendSurfaceAdmissionPipelineStatus::SourceTraceFailed
++        );
++        assert!(!report.source_succeeded());
++    }
++
++    /// 验证失败场景完整保留失败事件下标。
++    #[test]
++    fn invalid_destroyed_remap_preserves_failed_at() {
++        let report = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert_eq!(report.trace_report.failed_at, Some(2));
++        assert_eq!(report.intent_report.source_failed_at, Some(2));
++        assert_eq!(report.preview_report.source_failed_at, Some(2));
++    }
++
++    /// 验证失败场景完整保留结构化来源错误。
++    #[test]
++    fn invalid_destroyed_remap_preserves_source_error() {
++        let report = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++        let expected = Some(BackendSurfaceLifecycleError::AlreadyDestroyed {
++            id: BackendSurfaceId::new(1),
++        });
++
++        assert_eq!(report.trace_report.error, expected);
++        assert_eq!(report.intent_report.source_error, expected);
++        assert_eq!(report.preview_report.source_error, expected);
++    }
++
++    /// 验证失败场景仍根据最终 tombstone 生成 Close 意图。
++    #[test]
++    fn invalid_destroyed_remap_still_builds_close_intent() {
++        let report = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert!(matches!(
++            report.intent_report.intents.as_slice(),
++            [BackendWindowCandidateIntent::Close { .. }]
++        ));
++    }
++
++    /// 验证失败场景仍根据最终 tombstone 生成关闭预检动作。
++    #[test]
++    fn invalid_destroyed_remap_still_builds_would_close_action() {
++        let report = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert!(matches!(
++            report.preview_report.actions.as_slice(),
++            [BackendWindowAdmissionPreviewAction::WouldCloseWindow { .. }]
++        ));
++    }
++
++    /// 验证失败场景生成来源下标和错误 warning。
++    #[test]
++    fn invalid_destroyed_remap_builds_source_warnings() {
++        let report = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert!(
++            report
++                .preview_report
++                .warnings
++                .iter()
++                .any(|warning| matches!(
++                    warning,
++                    BackendWindowAdmissionPreviewWarning::SourceTraceFailed { failed_at: 2 }
++                ))
++        );
++        assert!(
++            report
++                .preview_report
++                .warnings
++                .iter()
++                .any(|warning| matches!(
++                    warning,
++                    BackendWindowAdmissionPreviewWarning::SourceTraceError { .. }
++                ))
++        );
++    }
++
++    /// 验证缺失 metadata 和尺寸只形成 warning，不改变成功状态。
++    #[test]
++    fn missing_create_data_only_builds_warnings() {
++        let id = BackendSurfaceId::new(7);
++        let report = SurfaceAdmissionPipelineRunner::new().run_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: None,
++                app_id: None,
++            },
++        ]);
++
++        assert_eq!(
++            report.status,
++            BackendSurfaceAdmissionPipelineStatus::Complete
++        );
++        assert!(report.source_succeeded());
++        assert_eq!(report.preview_report.actions.len(), 1);
++        assert_eq!(
++            report.preview_report.warnings,
++            vec![
++                BackendWindowAdmissionPreviewWarning::MissingTitle {
++                    candidate_id: report.preview_report.actions[0].candidate_id(),
++                },
++                BackendWindowAdmissionPreviewWarning::MissingAppId {
++                    candidate_id: report.preview_report.actions[0].candidate_id(),
++                },
++                BackendWindowAdmissionPreviewWarning::MissingSize {
++                    candidate_id: report.preview_report.actions[0].candidate_id(),
++                },
++            ]
++        );
++    }
++
++    /// 验证 preview warning 不会把完整 trace 标记为失败。
++    #[test]
++    fn preview_warnings_do_not_change_pipeline_status() {
++        let report = run_scenario(BackendSurfaceTraceScenario::SingleMap);
++
++        assert!(!report.preview_report.warnings.is_empty());
++        assert_eq!(
++            report.status,
++            BackendSurfaceAdmissionPipelineStatus::Complete
++        );
++    }
++
++    /// 验证事件入口和 trace 入口对同一序列生成相同报告。
++    #[test]
++    fn run_events_matches_run_trace() {
++        let mut adapter = BackendSurfaceMockAdapter::new();
++        let trace = adapter.single_surface_configure_then_map_trace();
++        let runner = SurfaceAdmissionPipelineRunner::new();
++
++        let from_trace = runner.run_trace(&trace);
++        let from_events = runner.run_events(trace.events().iter().cloned());
++
++        assert_eq!(from_events, from_trace);
++    }
++
++    /// 验证场景入口和显式场景 trace 生成相同报告。
++    #[test]
++    fn run_scenario_matches_built_trace() {
++        let scenario = BackendSurfaceTraceScenario::MultiSurface;
++        let runner = SurfaceAdmissionPipelineRunner::new();
++        let mut adapter = BackendSurfaceMockAdapter::new();
++        let trace = scenario.build(&mut adapter);
++
++        assert_eq!(runner.run_scenario(scenario), runner.run_trace(&trace));
++    }
++
++    /// 验证外部 registry 会被实际使用并保留执行结果。
++    #[test]
++    fn run_trace_with_registry_updates_external_registry() {
++        let id = BackendSurfaceId::new(40);
++        let trace = BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: Some("External Registry".to_string()),
++                app_id: Some("sky-mirror.external".to_string()),
++            },
++        ]);
++        let mut registry = BackendSurfaceRegistry::new();
++
++        let report =
++            SurfaceAdmissionPipelineRunner::new().run_trace_with_registry(&trace, &mut registry);
++
++        assert!(registry.get_surface(id).is_some());
++        assert_eq!(report.trace_report.final_records[0].id, id);
++    }
++
++    /// 验证外部 registry 的已有状态参与后续 trace。
++    #[test]
++    fn run_trace_with_registry_uses_existing_state() {
++        let id = BackendSurfaceId::new(41);
++        let mut registry = BackendSurfaceRegistry::new();
++        registry
++            .create_surface_with_id(id)
++            .expect("测试 surface 必须创建成功");
++        let trace = BackendSurfaceTrace::from_events([BackendSurfaceLifecycleEvent::Mapped {
++            id,
++            title: Some("Existing Surface".to_string()),
++            app_id: None,
++        }]);
++
++        let report =
++            SurfaceAdmissionPipelineRunner::new().run_trace_with_registry(&trace, &mut registry);
++
++        assert_eq!(
++            report.status,
++            BackendSurfaceAdmissionPipelineStatus::Complete
++        );
++        assert!(matches!(
++            report.intent_report.intents.as_slice(),
++            [BackendWindowCandidateIntent::Create { .. }]
++        ));
++    }
++
++    /// 验证多 surface 场景按稳定 surface ID 顺序生成动作。
++    #[test]
++    fn multi_surface_actions_have_stable_order() {
++        let report = run_scenario(BackendSurfaceTraceScenario::MultiSurface);
++        let ids: Vec<_> = report
++            .preview_report
++            .actions
++            .iter()
++            .map(BackendWindowAdmissionPreviewAction::surface_id)
++            .map(BackendSurfaceId::value)
++            .collect();
++
++        assert_eq!(ids, vec![1, 2, 3]);
++        assert!(matches!(
++            report.preview_report.actions.as_slice(),
++            [
++                BackendWindowAdmissionPreviewAction::WouldCreateWindow { .. },
++                BackendWindowAdmissionPreviewAction::WouldHideWindow { .. },
++                BackendWindowAdmissionPreviewAction::WouldCloseWindow { .. },
++            ]
++        ));
++    }
++
++    /// 验证 summary 的 surface 数量来自最终记录。
++    #[test]
++    fn summary_surface_count_matches_final_records() {
++        let report = run_scenario(BackendSurfaceTraceScenario::MultiSurface);
++        let summary = report.summary();
++
++        assert_eq!(
++            summary.surface_count,
++            report.trace_report.final_records.len()
++        );
++        assert_eq!(summary.surface_count, 3);
++    }
++
++    /// 验证 summary 的意图数量来自意图报告。
++    #[test]
++    fn summary_intent_count_matches_intent_report() {
++        let report = run_scenario(BackendSurfaceTraceScenario::MultiSurface);
++        let summary = report.summary();
++
++        assert_eq!(summary.intent_count, report.intent_report.intents.len());
++        assert_eq!(summary.intent_count, 3);
++    }
++
++    /// 验证 summary 的动作数量来自预检报告。
++    #[test]
++    fn summary_action_count_matches_preview_report() {
++        let report = run_scenario(BackendSurfaceTraceScenario::MultiSurface);
++        let summary = report.summary();
++
++        assert_eq!(summary.action_count, report.preview_report.actions.len());
++        assert_eq!(summary.action_count, 3);
++    }
++
++    /// 验证 summary 的 warning 数量来自预检报告。
++    #[test]
++    fn summary_warning_count_matches_preview_report() {
++        let report = run_scenario(BackendSurfaceTraceScenario::SingleMap);
++        let summary = report.summary();
++
++        assert_eq!(summary.warning_count, report.preview_report.warnings.len());
++        assert_eq!(summary.warning_count, 1);
++    }
++
++    /// 验证失败 summary 保留整体状态和失败下标。
++    #[test]
++    fn failed_summary_preserves_status_and_failed_at() {
++        let report = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert_eq!(
++            report.summary(),
++            BackendSurfaceAdmissionPipelineSummary {
++                status: BackendSurfaceAdmissionPipelineStatus::SourceTraceFailed,
++                surface_count: 1,
++                intent_count: 1,
++                action_count: 1,
++                warning_count: 2,
++                source_failed_at: Some(2),
++            }
++        );
++    }
++
++    /// 验证管线报告保持纯数据可克隆和可比较。
++    #[test]
++    fn pipeline_report_is_cloneable_and_comparable() {
++        let report = run_scenario(BackendSurfaceTraceScenario::ConfigureThenMap);
++
++        assert_eq!(report.clone(), report);
++    }
++
++    /// 验证管线状态可复制并直接比较。
++    #[test]
++    fn pipeline_status_is_copyable_and_comparable() {
++        let status = BackendSurfaceAdmissionPipelineStatus::Complete;
++        let copied = status;
++
++        assert_eq!(copied, status);
++    }
++
++    /// 验证管线 summary 保持纯数据可复制和可比较。
++    #[test]
++    fn pipeline_summary_is_copyable_and_comparable() {
++        let summary = run_scenario(BackendSurfaceTraceScenario::SingleMap).summary();
++        let copied = summary;
++
++        assert_eq!(copied, summary);
++    }
++
++    /// 验证生产代码不依赖核心模块。
++    #[test]
++    fn pipeline_production_code_does_not_depend_on_core() {
++        assert!(!production_source().contains("crate::core"));
++    }
++
++    /// 验证生产代码不依赖通用后端模块。
++    #[test]
++    fn pipeline_production_code_does_not_depend_on_backend() {
++        assert!(!production_source().contains("crate::backend"));
++    }
++
++    /// 验证生产代码不依赖 Smithay crate。
++    #[test]
++    fn pipeline_production_code_does_not_depend_on_smithay() {
++        assert!(!production_source().contains("smithay::"));
++    }
++
++    /// 验证生产代码不依赖 Linux 或 Unix API。
++    #[test]
++    fn pipeline_production_code_does_not_depend_on_linux_api() {
++        let source = production_source();
++
++        for forbidden in ["std::os::unix", "libc::", "UnixStream", "XDG_RUNTIME_DIR"] {
++            assert!(!source.contains(forbidden));
++        }
++    }
++
++    /// 验证生产代码不构造或提交状态事件路径类型。
++    #[test]
++    fn pipeline_production_code_does_not_use_event_submission_path() {
++        let source = production_source();
++
++        for forbidden in [
++            "BackendEvent",
++            "CoreCommand",
++            "BackendDriverRunner",
++            "handle_command",
++            "dispatch_action",
++        ] {
++            assert!(!source.contains(forbidden));
++        }
++    }
++
++    /// 验证生产代码不引用核心放置模型类型。
++    #[test]
++    fn pipeline_production_code_does_not_use_core_placement_types() {
++        let source = production_source();
++
++        for forbidden in ["Workspace", "Slot", "WindowId"] {
++            assert!(!source.contains(forbidden));
++        }
++    }
++
++    /// 验证核心和通用后端源码没有反向依赖管线类型。
++    #[test]
++    fn core_and_backend_do_not_depend_on_pipeline_types() {
++        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
++
++        for directory in ["src/core", "src/backend"] {
++            let path = manifest_dir.join(directory);
++            assert!(!rust_tree_contains(&path, "surface_admission_pipeline"));
++            assert!(!rust_tree_contains(
++                &path,
++                "BackendSurfaceAdmissionPipeline"
++            ));
++            assert!(!rust_tree_contains(&path, "SurfaceAdmissionPipelineRunner"));
++        }
++    }
++
++    /// 验证生产逻辑不使用 panic、unwrap 或 expect。
++    #[test]
++    fn pipeline_production_code_has_no_panic_shortcuts() {
++        let source = production_source();
++
++        for forbidden in ["panic!", ".unwrap(", ".expect("] {
++            assert!(!source.contains(forbidden));
++        }
++    }
++}
+diff --git a/src/smithay_backend/surface_lifecycle.rs b/src/smithay_backend/surface_lifecycle.rs
+new file mode 100644
+index 0000000..522594c
+--- /dev/null
++++ b/src/smithay_backend/surface_lifecycle.rs
+@@ -0,0 +1,1102 @@
++//! Surface 生命周期纯数据预备层。
++//!
++//! 这是可在 macOS 验证的 Mac-safe provisional work，不解除 Linux 验收门槛。
++//!
++//! 本模块只描述后端 surface 从创建到销毁的状态变化，不保存真实
++//! `wl_surface`，不依赖 Smithay，也不向核心 `State` 提交事件。
++//! 未来 Linux 适配器应把真实协议回调转换为这里的纯数据事件，再由后续边界
++//! 决定如何进入既有 `BackendEvent` 驱动路径。
++
++use std::{collections::BTreeMap, fmt};
++
++/// 后端局部使用的稳定 surface 标识。
++///
++/// 该标识不等于核心层的 `SurfaceId`，也不携带真实 Wayland 对象引用。
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct BackendSurfaceId(u64);
++
++impl BackendSurfaceId {
++    /// 从明确数值创建后端 surface 标识。
++    pub const fn new(value: u64) -> Self {
++        Self(value)
++    }
++
++    /// 返回标识的原始数值。
++    pub const fn value(self) -> u64 {
++        self.0
++    }
++}
++
++/// Surface 最近一次已知的逻辑尺寸。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct BackendSurfaceSize {
++    /// 逻辑宽度。
++    pub width: u32,
++
++    /// 逻辑高度。
++    pub height: u32,
++}
++
++impl BackendSurfaceSize {
++    /// 创建非零 surface 尺寸。
++    pub fn new(width: u32, height: u32) -> Result<Self, BackendSurfaceLifecycleError> {
++        let size = Self { width, height };
++        size.validate()?;
++        Ok(size)
++    }
++
++    /// 确认尺寸可以进入生命周期记录。
++    fn validate(self) -> Result<(), BackendSurfaceLifecycleError> {
++        if self.width == 0 || self.height == 0 {
++            return Err(BackendSurfaceLifecycleError::InvalidSize {
++                width: self.width,
++                height: self.height,
++            });
++        }
++
++        Ok(())
++    }
++}
++
++/// 后端 surface 的纯数据生命周期状态。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum BackendSurfaceLifecycleState {
++    /// 后端已经观察到 surface 创建。
++    Created,
++
++    /// Surface 已收到至少一次有效 configure。
++    Configured,
++
++    /// Surface 当前可映射到场景。
++    Mapped,
++
++    /// Surface 曾映射，但当前已撤销映射。
++    Unmapped,
++
++    /// Surface 已销毁，只保留 tombstone 供诊断和去重。
++    Destroyed,
++}
++
++/// 一个 surface 的后端局部生命周期记录。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BackendSurfaceRecord {
++    /// 稳定后端标识。
++    pub id: BackendSurfaceId,
++
++    /// 当前生命周期状态。
++    pub state: BackendSurfaceLifecycleState,
++
++    /// 最近一次映射事件提供的标题。
++    pub title: Option<String>,
++
++    /// 最近一次映射事件提供的应用标识。
++    pub app_id: Option<String>,
++
++    /// 最近一次有效 configure 提供的尺寸。
++    pub last_known_size: Option<BackendSurfaceSize>,
++}
++
++impl BackendSurfaceRecord {
++    /// 创建初始 surface 记录。
++    fn created(id: BackendSurfaceId) -> Self {
++        Self {
++            id,
++            state: BackendSurfaceLifecycleState::Created,
++            title: None,
++            app_id: None,
++            last_known_size: None,
++        }
++    }
++}
++
++/// 可由未来平台适配器产生的 surface 生命周期事件。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum BackendSurfaceLifecycleEvent {
++    /// 创建一个明确 ID 的 surface。
++    Created {
++        /// 后端 surface 标识。
++        id: BackendSurfaceId,
++    },
++
++    /// 记录 configure；缺少尺寸时仍记录状态，但保留旧尺寸。
++    Configured {
++        /// 后端 surface 标识。
++        id: BackendSurfaceId,
++
++        /// 本次 configure 提供的可选尺寸。
++        size: Option<BackendSurfaceSize>,
++    },
++
++    /// 映射 surface，并记录后端可见的窗口元数据。
++    Mapped {
++        /// 后端 surface 标识。
++        id: BackendSurfaceId,
++
++        /// 可选窗口标题。
++        title: Option<String>,
++
++        /// 可选应用标识。
++        app_id: Option<String>,
++    },
++
++    /// 撤销 surface 映射。
++    Unmapped {
++        /// 后端 surface 标识。
++        id: BackendSurfaceId,
++    },
++
++    /// 销毁 surface，并保留 tombstone。
++    Destroyed {
++        /// 后端 surface 标识。
++        id: BackendSurfaceId,
++    },
++}
++
++/// Surface 生命周期操作失败的结构化原因。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum BackendSurfaceLifecycleError {
++    /// 操作引用了尚未创建的 surface。
++    UnknownSurface {
++        /// 未知 surface 标识。
++        id: BackendSurfaceId,
++    },
++
++    /// 显式创建使用了已经存在的 ID。
++    AlreadyExists {
++        /// 重复 surface 标识。
++        id: BackendSurfaceId,
++    },
++
++    /// 当前状态不允许目标状态转换。
++    InvalidTransition {
++        /// 发生错误的 surface。
++        id: BackendSurfaceId,
++
++        /// 当前状态。
++        from: BackendSurfaceLifecycleState,
++
++        /// 请求进入的状态。
++        to: BackendSurfaceLifecycleState,
++    },
++
++    /// Surface 已销毁，后续操作不能复活 tombstone。
++    AlreadyDestroyed {
++        /// 已销毁 surface 标识。
++        id: BackendSurfaceId,
++    },
++
++    /// Surface 尺寸包含零宽或零高。
++    InvalidSize {
++        /// 无效宽度。
++        width: u32,
++
++        /// 无效高度。
++        height: u32,
++    },
++}
++
++impl fmt::Display for BackendSurfaceLifecycleError {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::UnknownSurface { id } => {
++                write!(formatter, "未知后端 surface: {}", id.value())
++            }
++            Self::AlreadyExists { id } => {
++                write!(formatter, "后端 surface 已存在: {}", id.value())
++            }
++            Self::InvalidTransition { id, from, to } => write!(
++                formatter,
++                "后端 surface {} 不能从 {from:?} 转换到 {to:?}",
++                id.value()
++            ),
++            Self::AlreadyDestroyed { id } => {
++                write!(formatter, "后端 surface 已销毁: {}", id.value())
++            }
++            Self::InvalidSize { width, height } => {
++                write!(formatter, "无效 surface 尺寸: {width}x{height}")
++            }
++        }
++    }
++}
++
++impl std::error::Error for BackendSurfaceLifecycleError {}
++
++/// 后端局部的 surface 生命周期注册表。
++///
++/// 注册表使用 `BTreeMap` 保持可审计的稳定顺序。销毁操作只改变记录状态，
++/// 不删除条目，从而能够拒绝 ID 复用并保留生命周期诊断信息。
++#[derive(Debug, Clone)]
++pub struct BackendSurfaceRegistry {
++    next_id: u64,
++    surfaces: BTreeMap<BackendSurfaceId, BackendSurfaceRecord>,
++}
++
++impl BackendSurfaceRegistry {
++    /// 创建空注册表，自动 ID 从 1 开始。
++    pub fn new() -> Self {
++        Self {
++            next_id: 1,
++            surfaces: BTreeMap::new(),
++        }
++    }
++
++    /// 自动分配 ID 并创建 surface。
++    pub fn create_surface(&mut self) -> Result<BackendSurfaceId, BackendSurfaceLifecycleError> {
++        let id = BackendSurfaceId::new(self.next_id);
++        self.create_surface_with_id(id)?;
++        Ok(id)
++    }
++
++    /// 使用明确 ID 创建 surface。
++    ///
++    /// 显式 ID 会推进自动分配计数器，避免后续自动创建与既有记录冲突。
++    pub fn create_surface_with_id(
++        &mut self,
++        id: BackendSurfaceId,
++    ) -> Result<BackendSurfaceId, BackendSurfaceLifecycleError> {
++        if self.surfaces.contains_key(&id) {
++            return Err(BackendSurfaceLifecycleError::AlreadyExists { id });
++        }
++
++        self.surfaces.insert(id, BackendSurfaceRecord::created(id));
++        self.next_id = self.next_id.max(id.value().saturating_add(1));
++        Ok(id)
++    }
++
++    /// 记录一次 configure。
++    ///
++    /// `None` 表示平台回调没有提供尺寸，此时进入 `Configured`，但不会清除
++    /// 已经记录的最近有效尺寸。
++    pub fn configure_surface(
++        &mut self,
++        id: BackendSurfaceId,
++        size: Option<BackendSurfaceSize>,
++    ) -> Result<(), BackendSurfaceLifecycleError> {
++        if let Some(size) = size {
++            size.validate()?;
++        }
++
++        let record = self.record_for_update(id)?;
++        Self::ensure_transition(record, BackendSurfaceLifecycleState::Configured)?;
++
++        record.state = BackendSurfaceLifecycleState::Configured;
++        if let Some(size) = size {
++            record.last_known_size = Some(size);
++        }
++        Ok(())
++    }
++
++    /// 映射 surface 并更新可选标题与应用标识。
++    ///
++    /// 本预备模型明确允许 `Created -> Mapped`，用于表示后端暂时没有单独
++    /// configure 事件的纯数据回放；这不代表真实协议层可以省略 configure。
++    pub fn map_surface(
++        &mut self,
++        id: BackendSurfaceId,
++        title: Option<String>,
++        app_id: Option<String>,
++    ) -> Result<(), BackendSurfaceLifecycleError> {
++        let record = self.record_for_update(id)?;
++        Self::ensure_transition(record, BackendSurfaceLifecycleState::Mapped)?;
++
++        record.state = BackendSurfaceLifecycleState::Mapped;
++        record.title = title;
++        record.app_id = app_id;
++        Ok(())
++    }
++
++    /// 撤销一个已映射 surface。
++    pub fn unmap_surface(
++        &mut self,
++        id: BackendSurfaceId,
++    ) -> Result<(), BackendSurfaceLifecycleError> {
++        let record = self.record_for_update(id)?;
++        Self::ensure_transition(record, BackendSurfaceLifecycleState::Unmapped)?;
++        record.state = BackendSurfaceLifecycleState::Unmapped;
++        Ok(())
++    }
++
++    /// 销毁 surface，并保留记录作为 tombstone。
++    pub fn destroy_surface(
++        &mut self,
++        id: BackendSurfaceId,
++    ) -> Result<(), BackendSurfaceLifecycleError> {
++        let record = self.record_for_update(id)?;
++        Self::ensure_transition(record, BackendSurfaceLifecycleState::Destroyed)?;
++        record.state = BackendSurfaceLifecycleState::Destroyed;
++        Ok(())
++    }
++
++    /// 按 ID 读取 surface 记录。
++    pub fn get_surface(&self, id: BackendSurfaceId) -> Option<&BackendSurfaceRecord> {
++        self.surfaces.get(&id)
++    }
++
++    /// 按 ID 稳定顺序列出全部记录，包括已销毁 tombstone。
++    pub fn list_surfaces(&self) -> Vec<&BackendSurfaceRecord> {
++        self.surfaces.values().collect()
++    }
++
++    /// 按 ID 稳定顺序列出当前已映射记录。
++    pub fn mapped_surfaces(&self) -> Vec<&BackendSurfaceRecord> {
++        self.surfaces
++            .values()
++            .filter(|record| record.state == BackendSurfaceLifecycleState::Mapped)
++            .collect()
++    }
++
++    /// 应用一条纯数据生命周期事件。
++    pub fn apply_event(
++        &mut self,
++        event: BackendSurfaceLifecycleEvent,
++    ) -> Result<(), BackendSurfaceLifecycleError> {
++        match event {
++            BackendSurfaceLifecycleEvent::Created { id } => {
++                self.create_surface_with_id(id)?;
++                Ok(())
++            }
++            BackendSurfaceLifecycleEvent::Configured { id, size } => {
++                self.configure_surface(id, size)
++            }
++            BackendSurfaceLifecycleEvent::Mapped { id, title, app_id } => {
++                self.map_surface(id, title, app_id)
++            }
++            BackendSurfaceLifecycleEvent::Unmapped { id } => self.unmap_surface(id),
++            BackendSurfaceLifecycleEvent::Destroyed { id } => self.destroy_surface(id),
++        }
++    }
++
++    /// 获取可变记录，并统一处理未知 ID。
++    fn record_for_update(
++        &mut self,
++        id: BackendSurfaceId,
++    ) -> Result<&mut BackendSurfaceRecord, BackendSurfaceLifecycleError> {
++        self.surfaces
++            .get_mut(&id)
++            .ok_or(BackendSurfaceLifecycleError::UnknownSurface { id })
++    }
++
++    /// 验证状态转换，销毁后的操作使用更明确的错误类别。
++    fn ensure_transition(
++        record: &BackendSurfaceRecord,
++        to: BackendSurfaceLifecycleState,
++    ) -> Result<(), BackendSurfaceLifecycleError> {
++        if record.state == BackendSurfaceLifecycleState::Destroyed {
++            return Err(BackendSurfaceLifecycleError::AlreadyDestroyed { id: record.id });
++        }
++
++        let valid = matches!(
++            (record.state, to),
++            (
++                BackendSurfaceLifecycleState::Created,
++                BackendSurfaceLifecycleState::Configured
++            ) | (
++                BackendSurfaceLifecycleState::Created,
++                BackendSurfaceLifecycleState::Mapped
++            ) | (
++                BackendSurfaceLifecycleState::Configured,
++                BackendSurfaceLifecycleState::Configured
++            ) | (
++                BackendSurfaceLifecycleState::Configured,
++                BackendSurfaceLifecycleState::Mapped
++            ) | (
++                BackendSurfaceLifecycleState::Mapped,
++                BackendSurfaceLifecycleState::Unmapped
++            ) | (
++                BackendSurfaceLifecycleState::Unmapped,
++                BackendSurfaceLifecycleState::Mapped
++            ) | (_, BackendSurfaceLifecycleState::Destroyed)
++        );
++
++        if !valid {
++            return Err(BackendSurfaceLifecycleError::InvalidTransition {
++                id: record.id,
++                from: record.state,
++                to,
++            });
++        }
++
++        Ok(())
++    }
++}
++
++impl Default for BackendSurfaceRegistry {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use std::{fs, path::Path};
++
++    use super::{
++        BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceLifecycleEvent,
++        BackendSurfaceLifecycleState, BackendSurfaceRegistry, BackendSurfaceSize,
++    };
++
++    /// 创建测试使用的有效尺寸。
++    fn size(width: u32, height: u32) -> BackendSurfaceSize {
++        BackendSurfaceSize::new(width, height).expect("测试尺寸必须有效")
++    }
++
++    /// 验证 ID 支持稳定比较和原始值读取。
++    #[test]
++    fn surface_id_is_stable_and_ordered() {
++        let first = BackendSurfaceId::new(1);
++        let second = BackendSurfaceId::new(2);
++
++        assert!(first < second);
++        assert_eq!(first.value(), 1);
++    }
++
++    /// 验证默认注册表从 1 开始分配递增 ID。
++    #[test]
++    fn registry_allocates_incrementing_ids() {
++        let mut registry = BackendSurfaceRegistry::new();
++
++        assert_eq!(registry.create_surface(), Ok(BackendSurfaceId::new(1)));
++        assert_eq!(registry.create_surface(), Ok(BackendSurfaceId::new(2)));
++    }
++
++    /// 验证显式大 ID 会推进自动分配计数器。
++    #[test]
++    fn explicit_id_advances_allocator() {
++        let mut registry = BackendSurfaceRegistry::new();
++
++        registry
++            .create_surface_with_id(BackendSurfaceId::new(41))
++            .expect("显式创建应成功");
++
++        assert_eq!(registry.create_surface(), Ok(BackendSurfaceId::new(42)));
++    }
++
++    /// 验证新记录处于 Created 且没有元数据。
++    #[test]
++    fn created_surface_has_empty_metadata() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        let record = registry.get_surface(id).expect("记录应存在");
++
++        assert_eq!(record.state, BackendSurfaceLifecycleState::Created);
++        assert_eq!(record.title, None);
++        assert_eq!(record.app_id, None);
++        assert_eq!(record.last_known_size, None);
++    }
++
++    /// 验证重复显式 ID 返回 AlreadyExists。
++    #[test]
++    fn duplicate_explicit_id_is_rejected() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(7);
++        registry.create_surface_with_id(id).expect("首次创建应成功");
++
++        assert_eq!(
++            registry.create_surface_with_id(id),
++            Err(BackendSurfaceLifecycleError::AlreadyExists { id })
++        );
++    }
++
++    /// 验证零宽尺寸被拒绝。
++    #[test]
++    fn zero_width_is_invalid() {
++        assert_eq!(
++            BackendSurfaceSize::new(0, 480),
++            Err(BackendSurfaceLifecycleError::InvalidSize {
++                width: 0,
++                height: 480
++            })
++        );
++    }
++
++    /// 验证零高尺寸被拒绝。
++    #[test]
++    fn zero_height_is_invalid() {
++        assert_eq!(
++            BackendSurfaceSize::new(640, 0),
++            Err(BackendSurfaceLifecycleError::InvalidSize {
++                width: 640,
++                height: 0
++            })
++        );
++    }
++
++    /// 验证公开字段绕过构造器时，configure 仍会拒绝无效尺寸。
++    #[test]
++    fn configure_revalidates_public_size_fields() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++
++        assert_eq!(
++            registry.configure_surface(
++                id,
++                Some(BackendSurfaceSize {
++                    width: 0,
++                    height: 1,
++                }),
++            ),
++            Err(BackendSurfaceLifecycleError::InvalidSize {
++                width: 0,
++                height: 1
++            })
++        );
++    }
++
++    /// 验证 Created 可以进入 Configured 并记录尺寸。
++    #[test]
++    fn created_surface_can_be_configured() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        let configured_size = size(800, 600);
++
++        registry
++            .configure_surface(id, Some(configured_size))
++            .expect("configure 应成功");
++
++        let record = registry.get_surface(id).expect("记录应存在");
++        assert_eq!(record.state, BackendSurfaceLifecycleState::Configured);
++        assert_eq!(record.last_known_size, Some(configured_size));
++    }
++
++    /// 验证无尺寸 configure 不会清除最近有效尺寸。
++    #[test]
++    fn configure_without_size_preserves_last_known_size() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        let configured_size = size(1024, 768);
++        registry
++            .configure_surface(id, Some(configured_size))
++            .expect("首次 configure 应成功");
++
++        registry
++            .configure_surface(id, None)
++            .expect("无尺寸 configure 应成功");
++
++        assert_eq!(
++            registry
++                .get_surface(id)
++                .expect("记录应存在")
++                .last_known_size,
++            Some(configured_size)
++        );
++    }
++
++    /// 验证 Configured 可以映射并记录标题和应用标识。
++    #[test]
++    fn configured_surface_can_be_mapped() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry
++            .configure_surface(id, Some(size(1280, 720)))
++            .expect("configure 应成功");
++
++        registry
++            .map_surface(
++                id,
++                Some("终端".to_string()),
++                Some("org.example.Terminal".to_string()),
++            )
++            .expect("map 应成功");
++
++        let record = registry.get_surface(id).expect("记录应存在");
++        assert_eq!(record.state, BackendSurfaceLifecycleState::Mapped);
++        assert_eq!(record.title.as_deref(), Some("终端"));
++        assert_eq!(record.app_id.as_deref(), Some("org.example.Terminal"));
++    }
++
++    /// 验证预备模型明确允许 Created 直接进入 Mapped。
++    #[test]
++    fn created_surface_can_map_without_configure() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++
++        registry
++            .map_surface(id, None, None)
++            .expect("直接 map 应成功");
++
++        assert_eq!(
++            registry.get_surface(id).expect("记录应存在").state,
++            BackendSurfaceLifecycleState::Mapped
++        );
++    }
++
++    /// 验证 Mapped 可以进入 Unmapped。
++    #[test]
++    fn mapped_surface_can_be_unmapped() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry.map_surface(id, None, None).expect("map 应成功");
++
++        registry.unmap_surface(id).expect("unmap 应成功");
++
++        assert_eq!(
++            registry.get_surface(id).expect("记录应存在").state,
++            BackendSurfaceLifecycleState::Unmapped
++        );
++    }
++
++    /// 验证 Unmapped 可以重新进入 Mapped 并更新元数据。
++    #[test]
++    fn unmapped_surface_can_be_remapped() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry
++            .map_surface(id, Some("旧标题".to_string()), None)
++            .expect("首次 map 应成功");
++        registry.unmap_surface(id).expect("unmap 应成功");
++
++        registry
++            .map_surface(id, Some("新标题".to_string()), None)
++            .expect("重新 map 应成功");
++
++        let record = registry.get_surface(id).expect("记录应存在");
++        assert_eq!(record.state, BackendSurfaceLifecycleState::Mapped);
++        assert_eq!(record.title.as_deref(), Some("新标题"));
++    }
++
++    /// 验证重复 map 会返回明确的无效转换。
++    #[test]
++    fn repeated_map_is_invalid() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry
++            .map_surface(id, None, None)
++            .expect("首次 map 应成功");
++
++        assert_eq!(
++            registry.map_surface(id, None, None),
++            Err(BackendSurfaceLifecycleError::InvalidTransition {
++                id,
++                from: BackendSurfaceLifecycleState::Mapped,
++                to: BackendSurfaceLifecycleState::Mapped,
++            })
++        );
++    }
++
++    /// 验证未映射记录不能直接 unmap。
++    #[test]
++    fn unmap_requires_mapped_state() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++
++        assert_eq!(
++            registry.unmap_surface(id),
++            Err(BackendSurfaceLifecycleError::InvalidTransition {
++                id,
++                from: BackendSurfaceLifecycleState::Created,
++                to: BackendSurfaceLifecycleState::Unmapped,
++            })
++        );
++    }
++
++    /// 验证任意未销毁状态都可以进入 Destroyed。
++    #[test]
++    fn any_live_state_can_be_destroyed() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let created = registry.create_surface().expect("创建应成功");
++        let configured = registry.create_surface().expect("创建应成功");
++        let mapped = registry.create_surface().expect("创建应成功");
++        let unmapped = registry.create_surface().expect("创建应成功");
++
++        registry
++            .configure_surface(configured, None)
++            .expect("configure 应成功");
++        registry
++            .map_surface(mapped, None, None)
++            .expect("map 应成功");
++        registry
++            .map_surface(unmapped, None, None)
++            .expect("map 应成功");
++        registry.unmap_surface(unmapped).expect("unmap 应成功");
++
++        for id in [created, configured, mapped, unmapped] {
++            registry.destroy_surface(id).expect("destroy 应成功");
++            assert_eq!(
++                registry.get_surface(id).expect("记录应存在").state,
++                BackendSurfaceLifecycleState::Destroyed
++            );
++        }
++    }
++
++    /// 验证销毁记录保留为 tombstone。
++    #[test]
++    fn destroyed_surface_remains_as_tombstone() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry.destroy_surface(id).expect("destroy 应成功");
++
++        assert_eq!(registry.list_surfaces().len(), 1);
++        assert_eq!(
++            registry.get_surface(id).expect("tombstone 应保留").state,
++            BackendSurfaceLifecycleState::Destroyed
++        );
++    }
++
++    /// 验证销毁后的 map 不会复活记录。
++    #[test]
++    fn destroyed_surface_cannot_be_mapped() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry.destroy_surface(id).expect("destroy 应成功");
++
++        assert_eq!(
++            registry.map_surface(id, None, None),
++            Err(BackendSurfaceLifecycleError::AlreadyDestroyed { id })
++        );
++    }
++
++    /// 验证销毁后的 configure 不会改变 tombstone。
++    #[test]
++    fn destroyed_surface_cannot_be_configured() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry.destroy_surface(id).expect("destroy 应成功");
++
++        assert_eq!(
++            registry.configure_surface(id, Some(size(800, 600))),
++            Err(BackendSurfaceLifecycleError::AlreadyDestroyed { id })
++        );
++        assert_eq!(
++            registry.get_surface(id).expect("tombstone 应保留").state,
++            BackendSurfaceLifecycleState::Destroyed
++        );
++    }
++
++    /// 验证销毁后的 unmap 不会改变 tombstone。
++    #[test]
++    fn destroyed_surface_cannot_be_unmapped() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry.destroy_surface(id).expect("destroy 应成功");
++
++        assert_eq!(
++            registry.unmap_surface(id),
++            Err(BackendSurfaceLifecycleError::AlreadyDestroyed { id })
++        );
++        assert_eq!(
++            registry.get_surface(id).expect("tombstone 应保留").state,
++            BackendSurfaceLifecycleState::Destroyed
++        );
++    }
++
++    /// 验证重复 destroy 返回 AlreadyDestroyed。
++    #[test]
++    fn repeated_destroy_is_rejected() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = registry.create_surface().expect("创建应成功");
++        registry.destroy_surface(id).expect("首次 destroy 应成功");
++
++        assert_eq!(
++            registry.destroy_surface(id),
++            Err(BackendSurfaceLifecycleError::AlreadyDestroyed { id })
++        );
++    }
++
++    /// 验证未知 ID configure 返回 UnknownSurface。
++    #[test]
++    fn unknown_surface_configure_is_rejected() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(99);
++
++        assert_eq!(
++            registry.configure_surface(id, Some(size(800, 600))),
++            Err(BackendSurfaceLifecycleError::UnknownSurface { id })
++        );
++    }
++
++    /// 验证未知 ID map 返回 UnknownSurface。
++    #[test]
++    fn unknown_surface_map_is_rejected() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(99);
++
++        assert_eq!(
++            registry.map_surface(id, None, None),
++            Err(BackendSurfaceLifecycleError::UnknownSurface { id })
++        );
++    }
++
++    /// 验证未知 ID unmap 返回 UnknownSurface。
++    #[test]
++    fn unknown_surface_unmap_is_rejected() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(99);
++
++        assert_eq!(
++            registry.unmap_surface(id),
++            Err(BackendSurfaceLifecycleError::UnknownSurface { id })
++        );
++    }
++
++    /// 验证未知 ID destroy 返回 UnknownSurface。
++    #[test]
++    fn unknown_surface_destroy_is_rejected() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(99);
++
++        assert_eq!(
++            registry.destroy_surface(id),
++            Err(BackendSurfaceLifecycleError::UnknownSurface { id })
++        );
++    }
++
++    /// 验证全部记录按 ID 稳定排序。
++    #[test]
++    fn surface_listing_is_stably_ordered() {
++        let mut registry = BackendSurfaceRegistry::new();
++        for value in [30, 10, 20] {
++            registry
++                .create_surface_with_id(BackendSurfaceId::new(value))
++                .expect("显式创建应成功");
++        }
++
++        let ids: Vec<_> = registry
++            .list_surfaces()
++            .into_iter()
++            .map(|record| record.id.value())
++            .collect();
++
++        assert_eq!(ids, vec![10, 20, 30]);
++    }
++
++    /// 验证 mapped 查询只返回当前已映射记录。
++    #[test]
++    fn mapped_listing_filters_other_states() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let mapped = registry.create_surface().expect("创建应成功");
++        let unmapped = registry.create_surface().expect("创建应成功");
++        let destroyed = registry.create_surface().expect("创建应成功");
++        registry
++            .map_surface(mapped, None, None)
++            .expect("map 应成功");
++        registry
++            .map_surface(unmapped, None, None)
++            .expect("map 应成功");
++        registry.unmap_surface(unmapped).expect("unmap 应成功");
++        registry.destroy_surface(destroyed).expect("destroy 应成功");
++
++        let ids: Vec<_> = registry
++            .mapped_surfaces()
++            .into_iter()
++            .map(|record| record.id)
++            .collect();
++
++        assert_eq!(ids, vec![mapped]);
++    }
++
++    /// 验证 apply_event 可以驱动完整生命周期。
++    #[test]
++    fn apply_event_drives_full_lifecycle() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(8);
++        let events = [
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Configured {
++                id,
++                size: Some(size(1920, 1080)),
++            },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: Some("编辑器".to_string()),
++                app_id: Some("dev.editor".to_string()),
++            },
++            BackendSurfaceLifecycleEvent::Unmapped { id },
++            BackendSurfaceLifecycleEvent::Destroyed { id },
++        ];
++
++        for event in events {
++            registry.apply_event(event).expect("事件应用应成功");
++        }
++
++        let record = registry.get_surface(id).expect("记录应存在");
++        assert_eq!(record.state, BackendSurfaceLifecycleState::Destroyed);
++        assert_eq!(record.last_known_size, Some(size(1920, 1080)));
++        assert_eq!(record.title.as_deref(), Some("编辑器"));
++    }
++
++    /// 验证事件路径同样保留结构化错误。
++    #[test]
++    fn apply_event_preserves_structured_errors() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(5);
++
++        assert_eq!(
++            registry.apply_event(BackendSurfaceLifecycleEvent::Destroyed { id }),
++            Err(BackendSurfaceLifecycleError::UnknownSurface { id })
++        );
++    }
++
++    /// 验证 Created 事件可以单独创建记录。
++    #[test]
++    fn apply_created_event_creates_surface() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(12);
++
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Created { id })
++            .expect("Created 事件应成功");
++
++        assert_eq!(
++            registry.get_surface(id).expect("记录应存在").state,
++            BackendSurfaceLifecycleState::Created
++        );
++    }
++
++    /// 验证 Configured 事件可以单独推进状态。
++    #[test]
++    fn apply_configured_event_records_size() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(12);
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Created { id })
++            .expect("Created 事件应成功");
++
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Configured {
++                id,
++                size: Some(size(640, 480)),
++            })
++            .expect("Configured 事件应成功");
++
++        assert_eq!(
++            registry.get_surface(id).expect("记录应存在").state,
++            BackendSurfaceLifecycleState::Configured
++        );
++    }
++
++    /// 验证 Mapped 事件可以单独记录元数据。
++    #[test]
++    fn apply_mapped_event_records_metadata() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(12);
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Created { id })
++            .expect("Created 事件应成功");
++
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: Some("浏览器".to_string()),
++                app_id: Some("org.example.Browser".to_string()),
++            })
++            .expect("Mapped 事件应成功");
++
++        let record = registry.get_surface(id).expect("记录应存在");
++        assert_eq!(record.state, BackendSurfaceLifecycleState::Mapped);
++        assert_eq!(record.title.as_deref(), Some("浏览器"));
++    }
++
++    /// 验证 Unmapped 事件可以单独推进状态。
++    #[test]
++    fn apply_unmapped_event_updates_state() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(12);
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Created { id })
++            .expect("Created 事件应成功");
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: None,
++                app_id: None,
++            })
++            .expect("Mapped 事件应成功");
++
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Unmapped { id })
++            .expect("Unmapped 事件应成功");
++
++        assert_eq!(
++            registry.get_surface(id).expect("记录应存在").state,
++            BackendSurfaceLifecycleState::Unmapped
++        );
++    }
++
++    /// 验证 Destroyed 事件可以单独生成 tombstone。
++    #[test]
++    fn apply_destroyed_event_keeps_tombstone() {
++        let mut registry = BackendSurfaceRegistry::new();
++        let id = BackendSurfaceId::new(12);
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Created { id })
++            .expect("Created 事件应成功");
++
++        registry
++            .apply_event(BackendSurfaceLifecycleEvent::Destroyed { id })
++            .expect("Destroyed 事件应成功");
++
++        assert_eq!(
++            registry.get_surface(id).expect("tombstone 应保留").state,
++            BackendSurfaceLifecycleState::Destroyed
++        );
++    }
++
++    /// 验证错误文本包含 surface 或尺寸上下文。
++    #[test]
++    fn lifecycle_error_display_preserves_context() {
++        let error = BackendSurfaceLifecycleError::InvalidSize {
++            width: 0,
++            height: 720,
++        };
++
++        assert_eq!(error.to_string(), "无效 surface 尺寸: 0x720");
++    }
++
++    /// 验证本模块没有直接引用 Smithay crate。
++    #[test]
++    fn lifecycle_model_has_no_smithay_crate_reference() {
++        let source = include_str!("surface_lifecycle.rs");
++        let production_source = source
++            .split("#[cfg(test)]")
++            .next()
++            .expect("生产代码片段应存在");
++
++        assert!(!production_source.contains("smithay::"));
++        assert!(!production_source.contains("use smithay"));
++    }
++
++    /// 验证 core 和 backend 源码没有反向依赖本模块类型。
++    #[test]
++    fn core_and_backend_do_not_depend_on_surface_lifecycle_model() {
++        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
++
++        for relative_dir in ["src/core", "src/backend"] {
++            assert_directory_has_no_lifecycle_dependency(&manifest_dir.join(relative_dir));
++        }
++    }
++
++    /// 递归检查 Rust 源文件中的生命周期模型反向依赖。
++    fn assert_directory_has_no_lifecycle_dependency(directory: &Path) {
++        for entry in fs::read_dir(directory).expect("源码目录应可读取") {
++            let path = entry.expect("源码目录项应可读取").path();
++
++            if path.is_dir() {
++                assert_directory_has_no_lifecycle_dependency(&path);
++                continue;
++            }
++
++            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
++                continue;
++            }
++
++            let source = fs::read_to_string(&path).expect("Rust 源文件应可读取");
++            let forbidden_references = [
++                "smithay_backend::surface_lifecycle",
++                "BackendSurfaceId",
++                "BackendSurfaceSize",
++                "BackendSurfaceLifecycleState",
++                "BackendSurfaceLifecycleEvent",
++                "BackendSurfaceLifecycleError",
++                "BackendSurfaceRecord",
++                "BackendSurfaceRegistry",
++            ];
++            assert!(
++                forbidden_references
++                    .iter()
++                    .all(|reference| !source.contains(reference)),
++                "{} 不应依赖 smithay_backend surface 生命周期模型",
++                path.display()
++            );
++        }
++    }
++}
+diff --git a/src/smithay_backend/surface_trace.rs b/src/smithay_backend/surface_trace.rs
+new file mode 100644
+index 0000000..cb0fbf4
+--- /dev/null
++++ b/src/smithay_backend/surface_trace.rs
+@@ -0,0 +1,751 @@
++//! Surface 生命周期事件轨迹与 mock adapter。
++//!
++//! 这是可在 macOS 验证的纯 Rust 测试辅助层。它只生成并回放
++//! `BackendSurfaceLifecycleEvent`，不保存真实 surface，不依赖系统后端，也不会
++//! 把事件提交到核心状态。未来平台 adapter 应复用同一事件形状，而不是复制
++//! `BackendSurfaceRegistry` 的状态转换规则。
++
++use crate::smithay_backend::surface_lifecycle::{
++    BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceLifecycleEvent,
++    BackendSurfaceRecord, BackendSurfaceRegistry, BackendSurfaceSize,
++};
++
++/// 一组按顺序应用的 surface 生命周期纯数据事件。
++#[derive(Debug, Clone, PartialEq, Eq, Default)]
++pub struct BackendSurfaceTrace {
++    events: Vec<BackendSurfaceLifecycleEvent>,
++}
++
++impl BackendSurfaceTrace {
++    /// 创建空事件轨迹。
++    pub fn new() -> Self {
++        Self::default()
++    }
++
++    /// 从事件迭代器创建轨迹。
++    pub fn from_events(events: impl IntoIterator<Item = BackendSurfaceLifecycleEvent>) -> Self {
++        Self {
++            events: events.into_iter().collect(),
++        }
++    }
++
++    /// 追加一条生命周期事件。
++    pub fn push(&mut self, event: BackendSurfaceLifecycleEvent) {
++        self.events.push(event);
++    }
++
++    /// 追加多条生命周期事件。
++    pub fn extend(&mut self, events: impl IntoIterator<Item = BackendSurfaceLifecycleEvent>) {
++        self.events.extend(events);
++    }
++
++    /// 只读访问轨迹中的事件。
++    pub fn events(&self) -> &[BackendSurfaceLifecycleEvent] {
++        &self.events
++    }
++
++    /// 返回事件数量。
++    pub fn len(&self) -> usize {
++        self.events.len()
++    }
++
++    /// 判断轨迹是否为空。
++    pub fn is_empty(&self) -> bool {
++        self.events.is_empty()
++    }
++
++    /// 消耗轨迹并返回内部事件。
++    pub fn into_events(self) -> Vec<BackendSurfaceLifecycleEvent> {
++        self.events
++    }
++
++    /// 通过统一 runner 将轨迹应用到生命周期注册表。
++    pub fn run(&self, registry: &mut BackendSurfaceRegistry) -> BackendSurfaceTraceReport {
++        BackendSurfaceTraceRunner::run(self, registry)
++    }
++}
++
++/// Surface 事件轨迹执行报告。
++///
++/// `applied` 只统计成功事件。出现错误时，`failed_at` 是从零开始的事件下标，
++/// runner 会立即停止，并保留失败前已经产生的注册表状态。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BackendSurfaceTraceReport {
++    /// 成功应用的事件数量。
++    pub applied: usize,
++
++    /// 首个失败事件的下标。
++    pub failed_at: Option<usize>,
++
++    /// 首个失败事件产生的结构化错误。
++    pub error: Option<BackendSurfaceLifecycleError>,
++
++    /// 执行结束时按 surface ID 稳定排序的记录快照。
++    pub final_records: Vec<BackendSurfaceRecord>,
++}
++
++impl BackendSurfaceTraceReport {
++    /// 判断轨迹是否完整执行成功。
++    pub fn is_success(&self) -> bool {
++        self.failed_at.is_none() && self.error.is_none()
++    }
++}
++
++/// Surface 生命周期事件轨迹 runner。
++///
++/// Runner 不实现任何状态转换，只按顺序调用
++/// `BackendSurfaceRegistry::apply_event`，确保 mock 场景和未来 adapter 共用同一套规则。
++pub struct BackendSurfaceTraceRunner;
++
++impl BackendSurfaceTraceRunner {
++    /// 执行轨迹，遇到首个错误后停止。
++    pub fn run(
++        trace: &BackendSurfaceTrace,
++        registry: &mut BackendSurfaceRegistry,
++    ) -> BackendSurfaceTraceReport {
++        let mut applied = 0;
++
++        for (index, event) in trace.events().iter().cloned().enumerate() {
++            if let Err(error) = registry.apply_event(event) {
++                return BackendSurfaceTraceReport {
++                    applied,
++                    failed_at: Some(index),
++                    error: Some(error),
++                    final_records: snapshot_records(registry),
++                };
++            }
++
++            applied += 1;
++        }
++
++        BackendSurfaceTraceReport {
++            applied,
++            failed_at: None,
++            error: None,
++            final_records: snapshot_records(registry),
++        }
++    }
++}
++
++/// 可重复构造的 surface mock 场景。
++///
++/// 每个变体只描述纯数据事件序列，不代表真实协议时序已经验证。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum BackendSurfaceTraceScenario {
++    /// 创建后直接映射一个 surface。
++    SingleMap,
++
++    /// 创建、配置尺寸后映射一个 surface。
++    ConfigureThenMap,
++
++    /// 映射、撤销映射后再次映射。
++    MapUnmapRemap,
++
++    /// 创建后销毁并保留 tombstone。
++    Destroy,
++
++    /// 销毁后尝试再次映射，用于验证失败报告。
++    InvalidDestroyedRemap,
++
++    /// 构造多个 surface 和不同最终状态。
++    MultiSurface,
++}
++
++impl BackendSurfaceTraceScenario {
++    /// 使用 mock adapter 为当前场景生成稳定事件轨迹。
++    pub fn build(self, adapter: &mut BackendSurfaceMockAdapter) -> BackendSurfaceTrace {
++        adapter.trace_for(self)
++    }
++}
++
++/// 只生成生命周期事件的纯数据 mock adapter。
++///
++/// Adapter 不持有注册表，也不直接改变状态。ID 从 1 开始稳定递增，便于测试比较。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BackendSurfaceMockAdapter {
++    next_id: u64,
++}
++
++impl BackendSurfaceMockAdapter {
++    /// 创建从 surface ID 1 开始的 mock adapter。
++    pub fn new() -> Self {
++        Self { next_id: 1 }
++    }
++
++    /// 使用指定起始 ID 创建 mock adapter。
++    pub fn with_next_id(next_id: BackendSurfaceId) -> Self {
++        Self {
++            next_id: next_id.value(),
++        }
++    }
++
++    /// 返回下一次场景分配的 surface ID。
++    pub const fn peek_next_id(&self) -> BackendSurfaceId {
++        BackendSurfaceId::new(self.next_id)
++    }
++
++    /// 生成创建后直接映射的单 surface 轨迹。
++    pub fn single_surface_map_trace(&mut self) -> BackendSurfaceTrace {
++        let id = self.allocate_id();
++
++        BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: Some("Mock Surface".to_string()),
++                app_id: Some("sky-mirror.mock".to_string()),
++            },
++        ])
++    }
++
++    /// 生成创建、配置、映射的单 surface 轨迹。
++    pub fn single_surface_configure_then_map_trace(&mut self) -> BackendSurfaceTrace {
++        let id = self.allocate_id();
++
++        BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Configured {
++                id,
++                size: Some(BackendSurfaceSize {
++                    width: 1280,
++                    height: 720,
++                }),
++            },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: Some("Configured Mock Surface".to_string()),
++                app_id: Some("sky-mirror.mock.configured".to_string()),
++            },
++        ])
++    }
++
++    /// 生成 map、unmap、remap 轨迹。
++    pub fn map_unmap_remap_trace(&mut self) -> BackendSurfaceTrace {
++        let id = self.allocate_id();
++
++        BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: Some("Initial Mock Surface".to_string()),
++                app_id: None,
++            },
++            BackendSurfaceLifecycleEvent::Unmapped { id },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: Some("Remapped Mock Surface".to_string()),
++                app_id: None,
++            },
++        ])
++    }
++
++    /// 生成创建后销毁的轨迹。
++    pub fn destroy_trace(&mut self) -> BackendSurfaceTrace {
++        let id = self.allocate_id();
++
++        BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Destroyed { id },
++        ])
++    }
++
++    /// 生成销毁后再次映射的预期失败轨迹。
++    pub fn invalid_destroyed_remap_trace(&mut self) -> BackendSurfaceTrace {
++        let id = self.allocate_id();
++
++        BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Destroyed { id },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id,
++                title: Some("Invalid Remap".to_string()),
++                app_id: None,
++            },
++        ])
++    }
++
++    /// 生成包含 mapped、unmapped 和 destroyed 记录的多 surface 轨迹。
++    pub fn multi_surface_trace(&mut self) -> BackendSurfaceTrace {
++        let first = self.allocate_id();
++        let second = self.allocate_id();
++        let third = self.allocate_id();
++
++        BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id: third },
++            BackendSurfaceLifecycleEvent::Destroyed { id: third },
++            BackendSurfaceLifecycleEvent::Created { id: first },
++            BackendSurfaceLifecycleEvent::Configured {
++                id: first,
++                size: Some(BackendSurfaceSize {
++                    width: 1920,
++                    height: 1080,
++                }),
++            },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id: first,
++                title: Some("Primary Mock Surface".to_string()),
++                app_id: Some("sky-mirror.mock.primary".to_string()),
++            },
++            BackendSurfaceLifecycleEvent::Created { id: second },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id: second,
++                title: Some("Secondary Mock Surface".to_string()),
++                app_id: Some("sky-mirror.mock.secondary".to_string()),
++            },
++            BackendSurfaceLifecycleEvent::Unmapped { id: second },
++        ])
++    }
++
++    /// 根据场景枚举生成对应轨迹。
++    pub fn trace_for(&mut self, scenario: BackendSurfaceTraceScenario) -> BackendSurfaceTrace {
++        match scenario {
++            BackendSurfaceTraceScenario::SingleMap => self.single_surface_map_trace(),
++            BackendSurfaceTraceScenario::ConfigureThenMap => {
++                self.single_surface_configure_then_map_trace()
++            }
++            BackendSurfaceTraceScenario::MapUnmapRemap => self.map_unmap_remap_trace(),
++            BackendSurfaceTraceScenario::Destroy => self.destroy_trace(),
++            BackendSurfaceTraceScenario::InvalidDestroyedRemap => {
++                self.invalid_destroyed_remap_trace()
++            }
++            BackendSurfaceTraceScenario::MultiSurface => self.multi_surface_trace(),
++        }
++    }
++
++    /// 分配稳定递增的后端 surface ID。
++    fn allocate_id(&mut self) -> BackendSurfaceId {
++        let id = BackendSurfaceId::new(self.next_id);
++        self.next_id = self.next_id.saturating_add(1);
++        id
++    }
++}
++
++impl Default for BackendSurfaceMockAdapter {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++/// 克隆注册表的稳定顺序快照。
++fn snapshot_records(registry: &BackendSurfaceRegistry) -> Vec<BackendSurfaceRecord> {
++    registry.list_surfaces().into_iter().cloned().collect()
++}
++
++#[cfg(test)]
++mod tests {
++    use std::{fs, path::Path};
++
++    use super::{
++        BackendSurfaceMockAdapter, BackendSurfaceTrace, BackendSurfaceTraceRunner,
++        BackendSurfaceTraceScenario,
++    };
++    use crate::smithay_backend::surface_lifecycle::{
++        BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceLifecycleEvent,
++        BackendSurfaceLifecycleState, BackendSurfaceRegistry,
++    };
++
++    /// 运行测试场景并返回报告与注册表。
++    fn run_scenario(
++        scenario: BackendSurfaceTraceScenario,
++    ) -> (super::BackendSurfaceTraceReport, BackendSurfaceRegistry) {
++        let mut adapter = BackendSurfaceMockAdapter::new();
++        let trace = scenario.build(&mut adapter);
++        let mut registry = BackendSurfaceRegistry::new();
++        let report = trace.run(&mut registry);
++
++        (report, registry)
++    }
++
++    /// 验证空轨迹成功运行且不产生记录。
++    #[test]
++    fn empty_trace_runs_without_events() {
++        let trace = BackendSurfaceTrace::new();
++        let mut registry = BackendSurfaceRegistry::new();
++        let report = BackendSurfaceTraceRunner::run(&trace, &mut registry);
++
++        assert!(trace.is_empty());
++        assert_eq!(trace.len(), 0);
++        assert!(report.is_success());
++        assert_eq!(report.applied, 0);
++        assert_eq!(report.failed_at, None);
++        assert_eq!(report.error, None);
++        assert!(report.final_records.is_empty());
++    }
++
++    /// 验证 trace 的 push、extend 和只读事件访问保持顺序。
++    #[test]
++    fn trace_builders_preserve_event_order() {
++        let first = BackendSurfaceId::new(1);
++        let second = BackendSurfaceId::new(2);
++        let mut trace = BackendSurfaceTrace::new();
++        trace.push(BackendSurfaceLifecycleEvent::Created { id: first });
++        trace.extend([
++            BackendSurfaceLifecycleEvent::Destroyed { id: first },
++            BackendSurfaceLifecycleEvent::Created { id: second },
++        ]);
++
++        assert_eq!(trace.len(), 3);
++        assert_eq!(
++            trace.events(),
++            &[
++                BackendSurfaceLifecycleEvent::Created { id: first },
++                BackendSurfaceLifecycleEvent::Destroyed { id: first },
++                BackendSurfaceLifecycleEvent::Created { id: second },
++            ]
++        );
++    }
++
++    /// 验证 into_events 返回可稳定比较的原始事件。
++    #[test]
++    fn trace_into_events_returns_owned_events() {
++        let id = BackendSurfaceId::new(8);
++        let trace = BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Destroyed { id },
++        ]);
++
++        assert_eq!(
++            trace.into_events(),
++            vec![
++                BackendSurfaceLifecycleEvent::Created { id },
++                BackendSurfaceLifecycleEvent::Destroyed { id },
++            ]
++        );
++    }
++
++    /// 验证单 surface Created -> Mapped 轨迹成功。
++    #[test]
++    fn single_surface_map_trace_succeeds() {
++        let (report, registry) = run_scenario(BackendSurfaceTraceScenario::SingleMap);
++
++        assert!(report.is_success());
++        assert_eq!(report.applied, 2);
++        assert_eq!(
++            registry
++                .get_surface(BackendSurfaceId::new(1))
++                .expect("surface 应存在")
++                .state,
++            BackendSurfaceLifecycleState::Mapped
++        );
++    }
++
++    /// 验证 Created -> Configured -> Mapped 轨迹记录尺寸。
++    #[test]
++    fn configure_then_map_trace_succeeds() {
++        let (report, registry) = run_scenario(BackendSurfaceTraceScenario::ConfigureThenMap);
++        let record = registry
++            .get_surface(BackendSurfaceId::new(1))
++            .expect("surface 应存在");
++
++        assert!(report.is_success());
++        assert_eq!(report.applied, 3);
++        assert_eq!(record.state, BackendSurfaceLifecycleState::Mapped);
++        assert_eq!(record.last_known_size.expect("尺寸应存在").width, 1280);
++    }
++
++    /// 验证 map、unmap、remap 轨迹最终重新映射。
++    #[test]
++    fn map_unmap_remap_trace_succeeds() {
++        let (report, registry) = run_scenario(BackendSurfaceTraceScenario::MapUnmapRemap);
++        let record = registry
++            .get_surface(BackendSurfaceId::new(1))
++            .expect("surface 应存在");
++
++        assert!(report.is_success());
++        assert_eq!(report.applied, 4);
++        assert_eq!(record.state, BackendSurfaceLifecycleState::Mapped);
++        assert_eq!(record.title.as_deref(), Some("Remapped Mock Surface"));
++    }
++
++    /// 验证 destroy 轨迹保留 tombstone。
++    #[test]
++    fn destroy_trace_keeps_tombstone() {
++        let (report, registry) = run_scenario(BackendSurfaceTraceScenario::Destroy);
++
++        assert!(report.is_success());
++        assert_eq!(report.applied, 2);
++        assert_eq!(
++            registry
++                .get_surface(BackendSurfaceId::new(1))
++                .expect("tombstone 应存在")
++                .state,
++            BackendSurfaceLifecycleState::Destroyed
++        );
++    }
++
++    /// 验证销毁后 remap 返回结构化失败。
++    #[test]
++    fn invalid_destroyed_remap_trace_fails() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert!(!report.is_success());
++        assert_eq!(
++            report.error,
++            Some(BackendSurfaceLifecycleError::AlreadyDestroyed {
++                id: BackendSurfaceId::new(1)
++            })
++        );
++    }
++
++    /// 验证失败下标指向从零开始的第三个事件。
++    #[test]
++    fn failed_trace_reports_correct_index() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert_eq!(report.failed_at, Some(2));
++    }
++
++    /// 验证失败报告只统计前两个成功事件。
++    #[test]
++    fn failed_trace_reports_applied_count() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert_eq!(report.applied, 2);
++    }
++
++    /// 验证失败后不会应用后续事件。
++    #[test]
++    fn failed_trace_stops_before_following_events() {
++        let first = BackendSurfaceId::new(1);
++        let trailing = BackendSurfaceId::new(2);
++        let trace = BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id: first },
++            BackendSurfaceLifecycleEvent::Destroyed { id: first },
++            BackendSurfaceLifecycleEvent::Mapped {
++                id: first,
++                title: None,
++                app_id: None,
++            },
++            BackendSurfaceLifecycleEvent::Created { id: trailing },
++        ]);
++        let mut registry = BackendSurfaceRegistry::new();
++
++        let report = trace.run(&mut registry);
++
++        assert_eq!(report.failed_at, Some(2));
++        assert_eq!(report.applied, 2);
++        assert!(registry.get_surface(trailing).is_none());
++        assert_eq!(report.final_records.len(), 1);
++        assert_eq!(report.final_records[0].id, first);
++        assert_eq!(
++            report.final_records[0].state,
++            BackendSurfaceLifecycleState::Destroyed
++        );
++    }
++
++    /// 验证多 surface 报告按 ID 稳定排序。
++    #[test]
++    fn multi_surface_trace_has_stable_record_order() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::MultiSurface);
++        let ids: Vec<_> = report
++            .final_records
++            .iter()
++            .map(|record| record.id.value())
++            .collect();
++
++        assert!(report.is_success());
++        assert_eq!(ids, vec![1, 2, 3]);
++    }
++
++    /// 验证多 surface 场景最终只把一个记录保留为 Mapped。
++    #[test]
++    fn multi_surface_trace_filters_mapped_surfaces() {
++        let (_, registry) = run_scenario(BackendSurfaceTraceScenario::MultiSurface);
++        let mapped_ids: Vec<_> = registry
++            .mapped_surfaces()
++            .into_iter()
++            .map(|record| record.id.value())
++            .collect();
++
++        assert_eq!(mapped_ids, vec![1]);
++    }
++
++    /// 验证 mock adapter 生成稳定递增的 ID。
++    #[test]
++    fn mock_adapter_generates_stable_ids() {
++        let mut adapter = BackendSurfaceMockAdapter::new();
++        let first = adapter.single_surface_map_trace();
++        let second = adapter.destroy_trace();
++
++        assert!(matches!(
++            first.events().first(),
++            Some(BackendSurfaceLifecycleEvent::Created { id })
++                if *id == BackendSurfaceId::new(1)
++        ));
++        assert!(matches!(
++            second.events().first(),
++            Some(BackendSurfaceLifecycleEvent::Created { id })
++                if *id == BackendSurfaceId::new(2)
++        ));
++        assert_eq!(adapter.peek_next_id(), BackendSurfaceId::new(3));
++    }
++
++    /// 验证 mock adapter 可以从指定 ID 开始。
++    #[test]
++    fn mock_adapter_supports_custom_start_id() {
++        let mut adapter = BackendSurfaceMockAdapter::with_next_id(BackendSurfaceId::new(40));
++        let trace = adapter.single_surface_map_trace();
++
++        assert!(matches!(
++            trace.events().first(),
++            Some(BackendSurfaceLifecycleEvent::Created { id })
++                if *id == BackendSurfaceId::new(40)
++        ));
++        assert_eq!(adapter.peek_next_id(), BackendSurfaceId::new(41));
++    }
++
++    /// 验证 SingleMap 场景可生成并运行。
++    #[test]
++    fn single_map_scenario_builds_and_runs() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::SingleMap);
++
++        assert!(report.is_success());
++    }
++
++    /// 验证 ConfigureThenMap 场景可生成并运行。
++    #[test]
++    fn configure_then_map_scenario_builds_and_runs() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::ConfigureThenMap);
++
++        assert!(report.is_success());
++    }
++
++    /// 验证 MapUnmapRemap 场景可生成并运行。
++    #[test]
++    fn map_unmap_remap_scenario_builds_and_runs() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::MapUnmapRemap);
++
++        assert!(report.is_success());
++    }
++
++    /// 验证 Destroy 场景可生成并运行。
++    #[test]
++    fn destroy_scenario_builds_and_runs() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::Destroy);
++
++        assert!(report.is_success());
++    }
++
++    /// 验证 InvalidDestroyedRemap 场景产生预期失败。
++    #[test]
++    fn invalid_destroyed_remap_scenario_builds_expected_failure() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        assert_eq!(report.failed_at, Some(2));
++        assert!(matches!(
++            report.error,
++            Some(BackendSurfaceLifecycleError::AlreadyDestroyed { .. })
++        ));
++    }
++
++    /// 验证 MultiSurface 场景可生成并运行。
++    #[test]
++    fn multi_surface_scenario_builds_and_runs() {
++        let (report, _) = run_scenario(BackendSurfaceTraceScenario::MultiSurface);
++
++        assert!(report.is_success());
++        assert_eq!(report.applied, 8);
++        assert_eq!(report.final_records.len(), 3);
++    }
++
++    /// 验证 runner 确实遵守 registry 的重复 ID 错误。
++    #[test]
++    fn trace_runner_reuses_registry_error_rules() {
++        let id = BackendSurfaceId::new(5);
++        let trace = BackendSurfaceTrace::from_events([
++            BackendSurfaceLifecycleEvent::Created { id },
++            BackendSurfaceLifecycleEvent::Created { id },
++        ]);
++        let mut registry = BackendSurfaceRegistry::new();
++
++        let report = trace.run(&mut registry);
++
++        assert_eq!(report.applied, 1);
++        assert_eq!(report.failed_at, Some(1));
++        assert_eq!(
++            report.error,
++            Some(BackendSurfaceLifecycleError::AlreadyExists { id })
++        );
++    }
++
++    /// 验证本模块生产代码没有直接引用 Smithay crate。
++    #[test]
++    fn surface_trace_has_no_smithay_crate_reference() {
++        let production_source = production_source();
++
++        assert!(!production_source.contains("smithay::"));
++        assert!(!production_source.contains("use smithay"));
++    }
++
++    /// 验证本模块生产代码没有 Linux 专属 API。
++    #[test]
++    fn surface_trace_has_no_linux_api_reference() {
++        let production_source = production_source();
++
++        for forbidden in [
++            "target_os",
++            "std::os",
++            "UnixStream",
++            "libc::",
++            "nix::",
++            "wl_surface",
++            "xdg_toplevel",
++        ] {
++            assert!(
++                !production_source.contains(forbidden),
++                "生产代码不应包含 Linux 或 Wayland API: {forbidden}"
++            );
++        }
++    }
++
++    /// 验证 core 和 backend 不反向依赖 surface trace 类型。
++    #[test]
++    fn core_and_backend_do_not_depend_on_surface_trace() {
++        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
++
++        for relative_dir in ["src/core", "src/backend"] {
++            assert_directory_has_no_trace_dependency(&manifest_dir.join(relative_dir));
++        }
++    }
++
++    /// 读取测试模块之前的生产代码。
++    fn production_source() -> &'static str {
++        include_str!("surface_trace.rs")
++            .split("#[cfg(test)]")
++            .next()
++            .expect("生产代码片段应存在")
++    }
++
++    /// 递归检查 Rust 源文件中的 trace 反向依赖。
++    fn assert_directory_has_no_trace_dependency(directory: &Path) {
++        for entry in fs::read_dir(directory).expect("源码目录应可读取") {
++            let path = entry.expect("源码目录项应可读取").path();
++
++            if path.is_dir() {
++                assert_directory_has_no_trace_dependency(&path);
++                continue;
++            }
++
++            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
++                continue;
++            }
++
++            let source = fs::read_to_string(&path).expect("Rust 源文件应可读取");
++            let forbidden_references = [
++                "smithay_backend::surface_trace",
++                "BackendSurfaceTrace",
++                "BackendSurfaceTraceReport",
++                "BackendSurfaceTraceRunner",
++                "BackendSurfaceMockAdapter",
++                "BackendSurfaceTraceScenario",
++            ];
++            assert!(
++                forbidden_references
++                    .iter()
++                    .all(|reference| !source.contains(reference)),
++                "{} 不应依赖 smithay_backend surface trace",
++                path.display()
++            );
++        }
++    }
++}
+diff --git a/src/smithay_backend/surface_window_intent.rs b/src/smithay_backend/surface_window_intent.rs
+new file mode 100644
+index 0000000..37259d5
+--- /dev/null
++++ b/src/smithay_backend/surface_window_intent.rs
+@@ -0,0 +1,732 @@
++//! Surface 到窗口候选意图的纯数据规划层。
++//!
++//! 本模块只把 surface 最终记录规划为后端中立的窗口候选意图。它不会构造
++//! `BackendEvent` 或核心命令，不会调用 driver，也不会修改任何核心状态。
++//! 这些意图只是未来接入边界的候选数据，不表示窗口已经进入 compositor。
++
++use crate::smithay_backend::{
++    surface_lifecycle::{
++        BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceLifecycleState,
++        BackendSurfaceRecord, BackendSurfaceSize,
++    },
++    surface_trace::BackendSurfaceTraceReport,
++};
++
++/// 从 surface 稳定派生的后端窗口候选标识。
++///
++/// 当前使用相同数值建立一对一映射，但类型保持独立，避免把 surface ID
++/// 错当成真实核心窗口 ID。
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct BackendWindowCandidateId(u64);
++
++impl BackendWindowCandidateId {
++    /// 从 surface ID 稳定派生候选窗口 ID。
++    pub const fn from_surface(surface_id: BackendSurfaceId) -> Self {
++        Self(surface_id.value())
++    }
++
++    /// 返回候选标识的原始数值。
++    pub const fn value(self) -> u64 {
++        self.0
++    }
++}
++
++/// Surface 最终状态对应的窗口候选意图。
++///
++/// 所有变体都是纯数据，不包含核心窗口类型、真实 surface 或系统资源。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum BackendWindowCandidateIntent {
++    /// 为已映射 surface 创建候选窗口。
++    Create {
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++
++        /// 可选窗口标题。
++        title: Option<String>,
++
++        /// 可选应用标识。
++        app_id: Option<String>,
++
++        /// 最近一次已知尺寸。
++        size: Option<BackendSurfaceSize>,
++    },
++
++    /// 更新候选窗口的标题和应用标识。
++    ///
++    /// 当前最终状态规划不会单独生成该变体；它为未来增量规划保留明确的数据形状。
++    UpdateMetadata {
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++
++        /// 可选窗口标题。
++        title: Option<String>,
++
++        /// 可选应用标识。
++        app_id: Option<String>,
++    },
++
++    /// 更新已配置 surface 对应候选窗口的尺寸。
++    UpdateSize {
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++
++        /// 已验证的 surface 尺寸。
++        size: BackendSurfaceSize,
++    },
++
++    /// 隐藏已取消映射的候选窗口。
++    Hide {
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++    },
++
++    /// 关闭已销毁 surface 对应的候选窗口。
++    Close {
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++    },
++}
++
++impl BackendWindowCandidateIntent {
++    /// 返回意图对应的 surface ID。
++    pub const fn surface_id(&self) -> BackendSurfaceId {
++        match self {
++            Self::Create { surface_id, .. }
++            | Self::UpdateMetadata { surface_id, .. }
++            | Self::UpdateSize { surface_id, .. }
++            | Self::Hide { surface_id, .. }
++            | Self::Close { surface_id, .. } => *surface_id,
++        }
++    }
++
++    /// 返回意图对应的候选窗口 ID。
++    pub const fn candidate_id(&self) -> BackendWindowCandidateId {
++        match self {
++            Self::Create { candidate_id, .. }
++            | Self::UpdateMetadata { candidate_id, .. }
++            | Self::UpdateSize { candidate_id, .. }
++            | Self::Hide { candidate_id, .. }
++            | Self::Close { candidate_id, .. } => *candidate_id,
++        }
++    }
++}
++
++/// 从 surface trace 最终状态生成的窗口候选意图报告。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BackendWindowCandidateIntentReport {
++    /// 按 surface ID 稳定排序的候选意图。
++    pub intents: Vec<BackendWindowCandidateIntent>,
++
++    /// 来源 trace 首个失败事件的下标。
++    pub source_failed_at: Option<usize>,
++
++    /// 来源 trace 的结构化失败原因。
++    pub source_error: Option<BackendSurfaceLifecycleError>,
++}
++
++impl BackendWindowCandidateIntentReport {
++    /// 判断来源 trace 是否完整成功。
++    pub fn source_succeeded(&self) -> bool {
++        self.source_failed_at.is_none() && self.source_error.is_none()
++    }
++}
++
++/// Surface 最终记录到窗口候选意图的无状态规划器。
++///
++/// Planner 只读取纯数据快照，不重放 trace，不调用核心模块，也不提交任何状态变化。
++#[derive(Debug, Clone, Copy, Default)]
++pub struct SurfaceWindowIntentPlanner;
++
++impl SurfaceWindowIntentPlanner {
++    /// 创建无状态候选意图规划器。
++    pub const fn new() -> Self {
++        Self
++    }
++
++    /// 为 surface 稳定派生候选窗口 ID。
++    pub const fn candidate_id_for_surface(
++        &self,
++        surface_id: BackendSurfaceId,
++    ) -> BackendWindowCandidateId {
++        BackendWindowCandidateId::from_surface(surface_id)
++    }
++
++    /// 根据单个 surface 最终记录规划当前状态意图。
++    ///
++    /// `Created` 和没有尺寸的 `Configured` 不产生意图，其余状态最多产生一个意图。
++    pub fn intents_for_record(
++        &self,
++        record: &BackendSurfaceRecord,
++    ) -> Vec<BackendWindowCandidateIntent> {
++        let surface_id = record.id;
++        let candidate_id = self.candidate_id_for_surface(surface_id);
++
++        let intent = match record.state {
++            BackendSurfaceLifecycleState::Created => None,
++            BackendSurfaceLifecycleState::Configured => {
++                record
++                    .last_known_size
++                    .map(|size| BackendWindowCandidateIntent::UpdateSize {
++                        surface_id,
++                        candidate_id,
++                        size,
++                    })
++            }
++            BackendSurfaceLifecycleState::Mapped => Some(BackendWindowCandidateIntent::Create {
++                surface_id,
++                candidate_id,
++                title: record.title.clone(),
++                app_id: record.app_id.clone(),
++                size: record.last_known_size,
++            }),
++            BackendSurfaceLifecycleState::Unmapped => Some(BackendWindowCandidateIntent::Hide {
++                surface_id,
++                candidate_id,
++            }),
++            BackendSurfaceLifecycleState::Destroyed => Some(BackendWindowCandidateIntent::Close {
++                surface_id,
++                candidate_id,
++            }),
++        };
++
++        intent.into_iter().collect()
++    }
++
++    /// 根据多个 surface 最终记录生成稳定顺序的意图。
++    ///
++    /// 输入记录不会被修改；规划器只排序借用并克隆意图所需的 metadata。
++    pub fn intents_for_records(
++        &self,
++        records: &[BackendSurfaceRecord],
++    ) -> Vec<BackendWindowCandidateIntent> {
++        let mut ordered_records: Vec<_> = records.iter().collect();
++        ordered_records.sort_by_key(|record| record.id);
++
++        ordered_records
++            .into_iter()
++            .flat_map(|record| self.intents_for_record(record))
++            .collect()
++    }
++
++    /// 根据 trace 最终快照生成候选意图报告。
++    ///
++    /// 本方法不会重放事件。即使来源 trace 失败，也会规划失败点之前
++    /// `final_records` 的当前意图，并原样保留失败下标与错误。
++    pub fn intents_for_trace_report(
++        &self,
++        report: &BackendSurfaceTraceReport,
++    ) -> BackendWindowCandidateIntentReport {
++        BackendWindowCandidateIntentReport {
++            intents: self.intents_for_records(&report.final_records),
++            source_failed_at: report.failed_at,
++            source_error: report.error.clone(),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use std::{fs, path::Path};
++
++    use super::{
++        BackendWindowCandidateId, BackendWindowCandidateIntent, BackendWindowCandidateIntentReport,
++        SurfaceWindowIntentPlanner,
++    };
++    use crate::smithay_backend::{
++        surface_lifecycle::{
++            BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceLifecycleState,
++            BackendSurfaceRecord, BackendSurfaceRegistry, BackendSurfaceSize,
++        },
++        surface_trace::{BackendSurfaceMockAdapter, BackendSurfaceTraceScenario},
++    };
++
++    /// 创建指定状态的测试记录。
++    fn record(id: u64, state: BackendSurfaceLifecycleState) -> BackendSurfaceRecord {
++        BackendSurfaceRecord {
++            id: BackendSurfaceId::new(id),
++            state,
++            title: None,
++            app_id: None,
++            last_known_size: None,
++        }
++    }
++
++    /// 创建有效测试尺寸。
++    fn size(width: u32, height: u32) -> BackendSurfaceSize {
++        BackendSurfaceSize::new(width, height).expect("测试尺寸必须有效")
++    }
++
++    /// 运行 mock trace 并返回 trace report。
++    fn trace_report(
++        scenario: BackendSurfaceTraceScenario,
++    ) -> crate::smithay_backend::surface_trace::BackendSurfaceTraceReport {
++        let mut adapter = BackendSurfaceMockAdapter::new();
++        let trace = scenario.build(&mut adapter);
++        let mut registry = BackendSurfaceRegistry::new();
++
++        trace.run(&mut registry)
++    }
++
++    /// 验证候选 ID 可以从 surface ID 稳定派生。
++    #[test]
++    fn candidate_id_is_stably_derived_from_surface() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let surface_id = BackendSurfaceId::new(42);
++
++        assert_eq!(
++            planner.candidate_id_for_surface(surface_id),
++            BackendWindowCandidateId::from_surface(surface_id)
++        );
++        assert_eq!(
++            planner.candidate_id_for_surface(surface_id).value(),
++            surface_id.value()
++        );
++    }
++
++    /// 验证同一 surface 多次规划得到相同候选 ID。
++    #[test]
++    fn same_surface_always_has_same_candidate_id() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let surface_id = BackendSurfaceId::new(7);
++
++        assert_eq!(
++            planner.candidate_id_for_surface(surface_id),
++            planner.candidate_id_for_surface(surface_id)
++        );
++    }
++
++    /// 验证不同 surface 产生不同候选 ID。
++    #[test]
++    fn different_surfaces_have_different_candidate_ids() {
++        let planner = SurfaceWindowIntentPlanner::new();
++
++        assert_ne!(
++            planner.candidate_id_for_surface(BackendSurfaceId::new(1)),
++            planner.candidate_id_for_surface(BackendSurfaceId::new(2))
++        );
++    }
++
++    /// 验证候选 ID 可以按派生 surface ID 稳定排序。
++    #[test]
++    fn candidate_ids_are_stably_ordered() {
++        let mut ids = [
++            BackendWindowCandidateId::from_surface(BackendSurfaceId::new(30)),
++            BackendWindowCandidateId::from_surface(BackendSurfaceId::new(10)),
++            BackendWindowCandidateId::from_surface(BackendSurfaceId::new(20)),
++        ];
++
++        ids.sort();
++
++        assert_eq!(ids.map(BackendWindowCandidateId::value), [10, 20, 30]);
++    }
++
++    /// 验证 Created 最终状态不生成窗口候选意图。
++    #[test]
++    fn created_record_produces_no_intent() {
++        let planner = SurfaceWindowIntentPlanner::new();
++
++        assert!(
++            planner
++                .intents_for_record(&record(1, BackendSurfaceLifecycleState::Created))
++                .is_empty()
++        );
++    }
++
++    /// 验证 Configured 有尺寸时生成 UpdateSize。
++    #[test]
++    fn configured_record_with_size_produces_update_size() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let mut configured = record(1, BackendSurfaceLifecycleState::Configured);
++        configured.last_known_size = Some(size(800, 600));
++
++        assert_eq!(
++            planner.intents_for_record(&configured),
++            vec![BackendWindowCandidateIntent::UpdateSize {
++                surface_id: BackendSurfaceId::new(1),
++                candidate_id: BackendWindowCandidateId::from_surface(BackendSurfaceId::new(1)),
++                size: size(800, 600),
++            }]
++        );
++    }
++
++    /// 验证 Configured 没有尺寸时不生成意图。
++    #[test]
++    fn configured_record_without_size_produces_no_intent() {
++        let planner = SurfaceWindowIntentPlanner::new();
++
++        assert!(
++            planner
++                .intents_for_record(&record(1, BackendSurfaceLifecycleState::Configured))
++                .is_empty()
++        );
++    }
++
++    /// 验证 Mapped 最终状态生成 Create。
++    #[test]
++    fn mapped_record_produces_create_intent() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let intents = planner.intents_for_record(&record(1, BackendSurfaceLifecycleState::Mapped));
++
++        assert!(matches!(
++            intents.as_slice(),
++            [BackendWindowCandidateIntent::Create {
++                surface_id,
++                candidate_id,
++                ..
++            }] if *surface_id == BackendSurfaceId::new(1)
++                && *candidate_id
++                    == BackendWindowCandidateId::from_surface(BackendSurfaceId::new(1))
++        ));
++    }
++
++    /// 验证 Mapped Create 携带标题。
++    #[test]
++    fn mapped_record_preserves_title() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let mut mapped = record(1, BackendSurfaceLifecycleState::Mapped);
++        mapped.title = Some("候选窗口".to_string());
++
++        assert!(matches!(
++            planner.intents_for_record(&mapped).as_slice(),
++            [BackendWindowCandidateIntent::Create {
++                title: Some(title),
++                ..
++            }] if title == "候选窗口"
++        ));
++    }
++
++    /// 验证 Mapped Create 携带应用标识。
++    #[test]
++    fn mapped_record_preserves_app_id() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let mut mapped = record(1, BackendSurfaceLifecycleState::Mapped);
++        mapped.app_id = Some("sky-mirror.intent".to_string());
++
++        assert!(matches!(
++            planner.intents_for_record(&mapped).as_slice(),
++            [BackendWindowCandidateIntent::Create {
++                app_id: Some(app_id),
++                ..
++            }] if app_id == "sky-mirror.intent"
++        ));
++    }
++
++    /// 验证 Mapped Create 携带最近尺寸。
++    #[test]
++    fn mapped_record_preserves_size() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let mut mapped = record(1, BackendSurfaceLifecycleState::Mapped);
++        mapped.last_known_size = Some(size(1280, 720));
++
++        assert!(matches!(
++            planner.intents_for_record(&mapped).as_slice(),
++            [BackendWindowCandidateIntent::Create {
++                size: Some(intent_size),
++                ..
++            }] if *intent_size == size(1280, 720)
++        ));
++    }
++
++    /// 验证 Mapped 缺少标题和应用标识仍可生成 Create。
++    #[test]
++    fn mapped_record_allows_missing_metadata() {
++        let planner = SurfaceWindowIntentPlanner::new();
++
++        assert!(matches!(
++            planner
++                .intents_for_record(&record(1, BackendSurfaceLifecycleState::Mapped))
++                .as_slice(),
++            [BackendWindowCandidateIntent::Create {
++                title: None,
++                app_id: None,
++                ..
++            }]
++        ));
++    }
++
++    /// 验证 Mapped 缺少尺寸仍可生成 Create。
++    #[test]
++    fn mapped_record_allows_missing_size() {
++        let planner = SurfaceWindowIntentPlanner::new();
++
++        assert!(matches!(
++            planner
++                .intents_for_record(&record(1, BackendSurfaceLifecycleState::Mapped))
++                .as_slice(),
++            [BackendWindowCandidateIntent::Create { size: None, .. }]
++        ));
++    }
++
++    /// 验证 Unmapped 最终状态生成 Hide。
++    #[test]
++    fn unmapped_record_produces_hide_intent() {
++        let planner = SurfaceWindowIntentPlanner::new();
++
++        assert!(matches!(
++            planner
++                .intents_for_record(&record(1, BackendSurfaceLifecycleState::Unmapped))
++                .as_slice(),
++            [BackendWindowCandidateIntent::Hide { .. }]
++        ));
++    }
++
++    /// 验证 Destroyed 最终状态生成 Close。
++    #[test]
++    fn destroyed_record_produces_close_intent() {
++        let planner = SurfaceWindowIntentPlanner::new();
++
++        assert!(matches!(
++            planner
++                .intents_for_record(&record(1, BackendSurfaceLifecycleState::Destroyed))
++                .as_slice(),
++            [BackendWindowCandidateIntent::Close { .. }]
++        ));
++    }
++
++    /// 验证多记录意图按 surface ID 稳定排序。
++    #[test]
++    fn multiple_records_produce_stably_ordered_intents() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let records = vec![
++            record(30, BackendSurfaceLifecycleState::Destroyed),
++            record(10, BackendSurfaceLifecycleState::Mapped),
++            record(20, BackendSurfaceLifecycleState::Unmapped),
++        ];
++        let ids: Vec<_> = planner
++            .intents_for_records(&records)
++            .iter()
++            .map(BackendWindowCandidateIntent::surface_id)
++            .collect();
++
++        assert_eq!(
++            ids,
++            vec![
++                BackendSurfaceId::new(10),
++                BackendSurfaceId::new(20),
++                BackendSurfaceId::new(30),
++            ]
++        );
++    }
++
++    /// 验证多记录规划不会修改原始记录及其顺序。
++    #[test]
++    fn planning_records_does_not_modify_source_records() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let records = vec![
++            record(2, BackendSurfaceLifecycleState::Destroyed),
++            record(1, BackendSurfaceLifecycleState::Mapped),
++        ];
++        let original = records.clone();
++
++        let _intents = planner.intents_for_records(&records);
++
++        assert_eq!(records, original);
++    }
++
++    /// 验证成功 trace report 可生成最终状态意图。
++    #[test]
++    fn successful_trace_report_produces_intents() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let trace_report = trace_report(BackendSurfaceTraceScenario::SingleMap);
++
++        let intent_report = planner.intents_for_trace_report(&trace_report);
++
++        assert!(intent_report.source_succeeded());
++        assert_eq!(intent_report.source_failed_at, None);
++        assert_eq!(intent_report.source_error, None);
++        assert!(matches!(
++            intent_report.intents.as_slice(),
++            [BackendWindowCandidateIntent::Create { .. }]
++        ));
++    }
++
++    /// 验证失败 trace report 保留失败事件下标。
++    #[test]
++    fn failed_trace_report_preserves_failed_at() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let trace_report = trace_report(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        let intent_report = planner.intents_for_trace_report(&trace_report);
++
++        assert_eq!(intent_report.source_failed_at, Some(2));
++    }
++
++    /// 验证失败 trace report 保留结构化错误。
++    #[test]
++    fn failed_trace_report_preserves_source_error() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let trace_report = trace_report(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        let intent_report = planner.intents_for_trace_report(&trace_report);
++
++        assert_eq!(
++            intent_report.source_error,
++            Some(BackendSurfaceLifecycleError::AlreadyDestroyed {
++                id: BackendSurfaceId::new(1)
++            })
++        );
++    }
++
++    /// 验证失败 trace 仍根据 final_records 生成 Close。
++    #[test]
++    fn failed_trace_report_still_plans_final_records() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let trace_report = trace_report(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        let intent_report = planner.intents_for_trace_report(&trace_report);
++
++        assert!(matches!(
++            intent_report.intents.as_slice(),
++            [BackendWindowCandidateIntent::Close { surface_id, .. }]
++                if *surface_id == BackendSurfaceId::new(1)
++        ));
++    }
++
++    /// 验证失败 trace 的意图报告不会假装来源成功。
++    #[test]
++    fn invalid_destroyed_remap_intent_report_is_not_successful() {
++        let planner = SurfaceWindowIntentPlanner::new();
++        let trace_report = trace_report(BackendSurfaceTraceScenario::InvalidDestroyedRemap);
++
++        let intent_report = planner.intents_for_trace_report(&trace_report);
++
++        assert!(!intent_report.source_succeeded());
++        assert!(intent_report.source_failed_at.is_some());
++        assert!(intent_report.source_error.is_some());
++    }
++
++    /// 验证意图辅助方法返回稳定的 surface 和候选 ID。
++    #[test]
++    fn intent_accessors_preserve_ids() {
++        let surface_id = BackendSurfaceId::new(9);
++        let candidate_id = BackendWindowCandidateId::from_surface(surface_id);
++        let intent = BackendWindowCandidateIntent::UpdateMetadata {
++            surface_id,
++            candidate_id,
++            title: None,
++            app_id: None,
++        };
++
++        assert_eq!(intent.surface_id(), surface_id);
++        assert_eq!(intent.candidate_id(), candidate_id);
++    }
++
++    /// 验证报告可以直接构造和比较。
++    #[test]
++    fn intent_report_is_pure_comparable_data() {
++        let report = BackendWindowCandidateIntentReport {
++            intents: Vec::new(),
++            source_failed_at: None,
++            source_error: None,
++        };
++
++        assert_eq!(report.clone(), report);
++    }
++
++    /// 验证 planner 生产代码不依赖核心模块。
++    #[test]
++    fn planner_has_no_core_dependency() {
++        assert!(!production_source().contains("crate::core"));
++    }
++
++    /// 验证 planner 生产代码不依赖 backend 抽象层。
++    #[test]
++    fn planner_has_no_backend_dependency() {
++        assert!(!production_source().contains("crate::backend"));
++    }
++
++    /// 验证 planner 生产代码不依赖 Smithay crate。
++    #[test]
++    fn planner_has_no_smithay_dependency() {
++        let source = production_source();
++
++        assert!(!source.contains("smithay::"));
++        assert!(!source.contains("use smithay"));
++    }
++
++    /// 验证 planner 生产代码不依赖 Linux 或真实 Wayland API。
++    #[test]
++    fn planner_has_no_linux_or_wayland_dependency() {
++        let source = production_source();
++
++        for forbidden in [
++            "target_os",
++            "std::os",
++            "UnixStream",
++            "libc::",
++            "nix::",
++            "wl_surface",
++            "xdg_toplevel",
++        ] {
++            assert!(
++                !source.contains(forbidden),
++                "生产代码不应包含 Linux 或 Wayland API: {forbidden}"
++            );
++        }
++    }
++
++    /// 验证 core 和 backend 不反向依赖窗口候选意图类型。
++    #[test]
++    fn core_and_backend_do_not_depend_on_window_intents() {
++        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
++
++        for relative_dir in ["src/core", "src/backend"] {
++            assert_directory_has_no_intent_dependency(&manifest_dir.join(relative_dir));
++        }
++    }
++
++    /// 返回测试模块之前的生产代码。
++    fn production_source() -> &'static str {
++        include_str!("surface_window_intent.rs")
++            .split("#[cfg(test)]")
++            .next()
++            .expect("生产代码片段应存在")
++    }
++
++    /// 递归检查 Rust 源文件中的候选意图反向依赖。
++    fn assert_directory_has_no_intent_dependency(directory: &Path) {
++        for entry in fs::read_dir(directory).expect("源码目录应可读取") {
++            let path = entry.expect("源码目录项应可读取").path();
++
++            if path.is_dir() {
++                assert_directory_has_no_intent_dependency(&path);
++                continue;
++            }
++
++            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
++                continue;
++            }
++
++            let source = fs::read_to_string(&path).expect("Rust 源文件应可读取");
++            let forbidden_references = [
++                "smithay_backend::surface_window_intent",
++                "BackendWindowCandidateId",
++                "BackendWindowCandidateIntent",
++                "BackendWindowCandidateIntentReport",
++                "SurfaceWindowIntentPlanner",
++            ];
++            assert!(
++                forbidden_references
++                    .iter()
++                    .all(|reference| !source.contains(reference)),
++                "{} 不应依赖 smithay_backend surface window intent",
++                path.display()
++            );
++        }
++    }
++}
+diff --git a/src/smithay_backend/wayland_socket.rs b/src/smithay_backend/wayland_socket.rs
+index 424e5df..9bfbf7b 100755
+--- a/src/smithay_backend/wayland_socket.rs
++++ b/src/smithay_backend/wayland_socket.rs
+@@ -100,6 +100,7 @@ impl SmithayWaylandSocketProbe {
+ #[cfg(test)]
+ mod tests {
+     use super::{SmithayWaylandSocketProbe, SmithayWaylandSocketProbeMode};
++    use crate::smithay_backend::test_support::{assert_runtime_dir, unique_socket_name};
+ 
+     /// 验证 socket 探针模式固定为纯探针模式。
+     #[test]
+@@ -110,41 +111,31 @@ mod tests {
+         );
+     }
+ 
+-    /// 验证自动创建 socket 会返回正常结果，而不会因环境缺失 panic。
++    /// 验证自动创建 socket 会真实绑定 Wayland listening socket。
+     #[test]
+     fn wayland_socket_probe_new_auto_returns_result_without_panic() {
+-        let result = SmithayWaylandSocketProbe::new_auto();
+-
+-        match result {
+-            Ok(probe) => {
+-                // 创建成功时必须保持纯探针模式，并提供非空 Wayland socket 名称。
+-                assert!(probe.is_probe_only());
+-                assert_eq!(probe.mode(), SmithayWaylandSocketProbeMode::ProbeOnly);
+-                assert_eq!(probe.mode_description(), "wayland-socket-probe-only");
+-
+-                let name = probe.socket_name_string();
+-
+-                assert!(!name.is_empty());
+-                assert!(name.contains("wayland"));
+-            }
+-            Err(error) => {
+-                // 某些持续集成或非桌面环境可能没有有效运行时目录。
+-                // 环境缺失不是核心业务失败，只要求错误被正常返回。
+-                assert!(!error.to_string().is_empty());
+-            }
+-        }
++        assert_runtime_dir();
++
++        let probe = SmithayWaylandSocketProbe::new_auto()
++            .expect("Wayland socket 测试必须真实绑定 listening socket");
++
++        assert!(probe.is_probe_only());
++        assert_eq!(probe.mode(), SmithayWaylandSocketProbeMode::ProbeOnly);
++        assert_eq!(probe.mode_description(), "wayland-socket-probe-only");
++        assert!(probe.socket_name_string().contains("wayland"));
+     }
+ 
+     /// 验证创建成功时可以取得 socket 名称的操作系统字符串副本。
+     #[test]
+     fn wayland_socket_probe_socket_name_os_string_is_available_when_created() {
+-        let Ok(probe) = SmithayWaylandSocketProbe::new_auto() else {
+-            // 缺少运行时目录时直接结束测试，不修改全局环境变量。
+-            return;
+-        };
++        assert_runtime_dir();
++
++        let expected_name = unique_socket_name("socket-os-string");
++        let probe = SmithayWaylandSocketProbe::with_name(&expected_name)
++            .expect("Wayland socket 测试必须真实绑定指定名称的 socket");
+ 
+         let os_name = probe.socket_name_os_string();
+ 
+-        assert!(!os_name.is_empty());
++        assert_eq!(os_name, std::ffi::OsString::from(expected_name));
+     }
+ }
+diff --git a/src/smithay_backend/window_admission_preview.rs b/src/smithay_backend/window_admission_preview.rs
+new file mode 100644
+index 0000000..1f08a63
+--- /dev/null
++++ b/src/smithay_backend/window_admission_preview.rs
+@@ -0,0 +1,884 @@
++//! 窗口候选意图到核心接纳动作的纯数据预检层。
++//!
++//! 本模块只描述未来接纳候选窗口时可能发生的动作，并为缺失信息生成结构化
++//! warning。它不会提交事件、分配核心资源或修改任何核心状态。
++
++use std::fmt;
++
++use crate::smithay_backend::{
++    surface_lifecycle::{BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceSize},
++    surface_window_intent::{
++        BackendWindowCandidateId, BackendWindowCandidateIntent, BackendWindowCandidateIntentReport,
++    },
++};
++
++/// 候选窗口通过预检后可能触发的接纳动作。
++///
++/// 所有变体都只是未来行为的纯数据描述，不表示动作已经执行。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum BackendWindowAdmissionPreviewAction {
++    /// 未来可能创建候选窗口。
++    WouldCreateWindow {
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++
++        /// 可选窗口标题。
++        title: Option<String>,
++
++        /// 可选应用标识。
++        app_id: Option<String>,
++
++        /// 最近一次已知尺寸。
++        size: Option<BackendSurfaceSize>,
++    },
++
++    /// 未来可能更新候选窗口尺寸。
++    WouldUpdateSize {
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++
++        /// 新的逻辑尺寸。
++        size: BackendSurfaceSize,
++    },
++
++    /// 未来可能隐藏候选窗口。
++    WouldHideWindow {
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++    },
++
++    /// 未来可能关闭候选窗口。
++    WouldCloseWindow {
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++    },
++
++    /// 当前接纳预检不会单独应用 metadata-only 更新。
++    WouldIgnoreMetadataOnly {
++        /// 稳定候选窗口标识。
++        candidate_id: BackendWindowCandidateId,
++
++        /// 来源 surface。
++        surface_id: BackendSurfaceId,
++
++        /// 可选窗口标题。
++        title: Option<String>,
++
++        /// 可选应用标识。
++        app_id: Option<String>,
++    },
++}
++
++impl BackendWindowAdmissionPreviewAction {
++    /// 返回动作对应的候选窗口标识。
++    pub const fn candidate_id(&self) -> BackendWindowCandidateId {
++        match self {
++            Self::WouldCreateWindow { candidate_id, .. }
++            | Self::WouldUpdateSize { candidate_id, .. }
++            | Self::WouldHideWindow { candidate_id, .. }
++            | Self::WouldCloseWindow { candidate_id, .. }
++            | Self::WouldIgnoreMetadataOnly { candidate_id, .. } => *candidate_id,
++        }
++    }
++
++    /// 返回动作对应的 surface 标识。
++    pub const fn surface_id(&self) -> BackendSurfaceId {
++        match self {
++            Self::WouldCreateWindow { surface_id, .. }
++            | Self::WouldUpdateSize { surface_id, .. }
++            | Self::WouldHideWindow { surface_id, .. }
++            | Self::WouldCloseWindow { surface_id, .. }
++            | Self::WouldIgnoreMetadataOnly { surface_id, .. } => *surface_id,
++        }
++    }
++}
++
++/// 窗口接纳预检产生的结构化 warning。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum BackendWindowAdmissionPreviewWarning {
++    /// 创建候选窗口时缺少标题。
++    MissingTitle {
++        /// 缺少标题的候选窗口。
++        candidate_id: BackendWindowCandidateId,
++    },
++
++    /// 创建候选窗口时缺少应用标识。
++    MissingAppId {
++        /// 缺少应用标识的候选窗口。
++        candidate_id: BackendWindowCandidateId,
++    },
++
++    /// 创建候选窗口时缺少最近尺寸。
++    MissingSize {
++        /// 缺少尺寸的候选窗口。
++        candidate_id: BackendWindowCandidateId,
++    },
++
++    /// 来源 trace 在指定事件下标失败。
++    SourceTraceFailed {
++        /// 首个失败事件下标。
++        failed_at: usize,
++    },
++
++    /// 来源 trace 保留的结构化错误。
++    SourceTraceError {
++        /// 生命周期错误。
++        error: BackendSurfaceLifecycleError,
++    },
++
++    /// Metadata-only 更新当前不会进入接纳动作。
++    MetadataOnlyIgnored {
++        /// 被忽略更新的候选窗口。
++        candidate_id: BackendWindowCandidateId,
++    },
++}
++
++impl fmt::Display for BackendWindowAdmissionPreviewWarning {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::MissingTitle { candidate_id } => {
++                write!(formatter, "候选窗口 {} 缺少标题", candidate_id.value())
++            }
++            Self::MissingAppId { candidate_id } => {
++                write!(formatter, "候选窗口 {} 缺少应用标识", candidate_id.value())
++            }
++            Self::MissingSize { candidate_id } => {
++                write!(formatter, "候选窗口 {} 缺少尺寸", candidate_id.value())
++            }
++            Self::SourceTraceFailed { failed_at } => {
++                write!(formatter, "来源 surface trace 在事件 {failed_at} 失败")
++            }
++            Self::SourceTraceError { error } => {
++                write!(formatter, "来源 surface trace 错误: {error}")
++            }
++            Self::MetadataOnlyIgnored { candidate_id } => write!(
++                formatter,
++                "候选窗口 {} 的 metadata-only 更新当前被忽略",
++                candidate_id.value()
++            ),
++        }
++    }
++}
++
++/// 窗口候选意图的接纳预检报告。
++///
++/// 报告保留来源失败信息，并按输入顺序记录动作和 warning。来源失败不会阻止
++/// 对失败点之前已经生成的候选意图进行预检。
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BackendWindowAdmissionPreviewReport {
++    /// 按候选意图输入顺序生成的预检动作。
++    pub actions: Vec<BackendWindowAdmissionPreviewAction>,
++
++    /// 按候选意图输入顺序生成的 warning，来源失败 warning 最后追加。
++    pub warnings: Vec<BackendWindowAdmissionPreviewWarning>,
++
++    /// 来源 trace 首个失败事件的下标。
++    pub source_failed_at: Option<usize>,
++
++    /// 来源 trace 的结构化失败原因。
++    pub source_error: Option<BackendSurfaceLifecycleError>,
++}
++
++impl BackendWindowAdmissionPreviewReport {
++    /// 判断来源 trace 是否完整成功。
++    pub fn source_succeeded(&self) -> bool {
++        self.source_failed_at.is_none() && self.source_error.is_none()
++    }
++}
++
++/// 候选窗口接纳预检的无状态规划器。
++///
++/// 规划器只翻译纯数据意图，不提交任何状态变化。
++#[derive(Debug, Clone, Copy, Default)]
++pub struct WindowAdmissionPreviewPlanner;
++
++impl WindowAdmissionPreviewPlanner {
++    /// 创建无状态预检规划器。
++    pub const fn new() -> Self {
++        Self
++    }
++
++    /// 预检单个窗口候选意图。
++    pub fn preview_intent(
++        &self,
++        intent: &BackendWindowCandidateIntent,
++    ) -> BackendWindowAdmissionPreviewReport {
++        self.preview_intents(std::slice::from_ref(intent))
++    }
++
++    /// 按输入顺序预检多个窗口候选意图。
++    pub fn preview_intents(
++        &self,
++        intents: &[BackendWindowCandidateIntent],
++    ) -> BackendWindowAdmissionPreviewReport {
++        let mut actions = Vec::with_capacity(intents.len());
++        let mut warnings = Vec::new();
++
++        for intent in intents {
++            match intent {
++                BackendWindowCandidateIntent::Create {
++                    surface_id,
++                    candidate_id,
++                    title,
++                    app_id,
++                    size,
++                } => {
++                    actions.push(BackendWindowAdmissionPreviewAction::WouldCreateWindow {
++                        candidate_id: *candidate_id,
++                        surface_id: *surface_id,
++                        title: title.clone(),
++                        app_id: app_id.clone(),
++                        size: *size,
++                    });
++
++                    if title.is_none() {
++                        warnings.push(BackendWindowAdmissionPreviewWarning::MissingTitle {
++                            candidate_id: *candidate_id,
++                        });
++                    }
++                    if app_id.is_none() {
++                        warnings.push(BackendWindowAdmissionPreviewWarning::MissingAppId {
++                            candidate_id: *candidate_id,
++                        });
++                    }
++                    if size.is_none() {
++                        warnings.push(BackendWindowAdmissionPreviewWarning::MissingSize {
++                            candidate_id: *candidate_id,
++                        });
++                    }
++                }
++                BackendWindowCandidateIntent::UpdateMetadata {
++                    surface_id,
++                    candidate_id,
++                    title,
++                    app_id,
++                } => {
++                    actions.push(
++                        BackendWindowAdmissionPreviewAction::WouldIgnoreMetadataOnly {
++                            candidate_id: *candidate_id,
++                            surface_id: *surface_id,
++                            title: title.clone(),
++                            app_id: app_id.clone(),
++                        },
++                    );
++                    warnings.push(BackendWindowAdmissionPreviewWarning::MetadataOnlyIgnored {
++                        candidate_id: *candidate_id,
++                    });
++                }
++                BackendWindowCandidateIntent::UpdateSize {
++                    surface_id,
++                    candidate_id,
++                    size,
++                } => {
++                    actions.push(BackendWindowAdmissionPreviewAction::WouldUpdateSize {
++                        candidate_id: *candidate_id,
++                        surface_id: *surface_id,
++                        size: *size,
++                    });
++                }
++                BackendWindowCandidateIntent::Hide {
++                    surface_id,
++                    candidate_id,
++                } => {
++                    actions.push(BackendWindowAdmissionPreviewAction::WouldHideWindow {
++                        candidate_id: *candidate_id,
++                        surface_id: *surface_id,
++                    });
++                }
++                BackendWindowCandidateIntent::Close {
++                    surface_id,
++                    candidate_id,
++                } => {
++                    actions.push(BackendWindowAdmissionPreviewAction::WouldCloseWindow {
++                        candidate_id: *candidate_id,
++                        surface_id: *surface_id,
++                    });
++                }
++            }
++        }
++
++        BackendWindowAdmissionPreviewReport {
++            actions,
++            warnings,
++            source_failed_at: None,
++            source_error: None,
++        }
++    }
++
++    /// 预检候选意图报告，并原样保留来源失败信息。
++    ///
++    /// 来源失败 warning 固定追加在各意图 warning 之后，使顺序可预测且不会
++    /// 打乱逐意图诊断。
++    pub fn preview_intent_report(
++        &self,
++        report: &BackendWindowCandidateIntentReport,
++    ) -> BackendWindowAdmissionPreviewReport {
++        let mut preview = self.preview_intents(&report.intents);
++
++        if let Some(failed_at) = report.source_failed_at {
++            preview
++                .warnings
++                .push(BackendWindowAdmissionPreviewWarning::SourceTraceFailed { failed_at });
++        }
++        if let Some(error) = &report.source_error {
++            preview
++                .warnings
++                .push(BackendWindowAdmissionPreviewWarning::SourceTraceError {
++                    error: error.clone(),
++                });
++        }
++
++        preview.source_failed_at = report.source_failed_at;
++        preview.source_error = report.source_error.clone();
++        preview
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use std::{fs, path::Path};
++
++    use super::{
++        BackendWindowAdmissionPreviewAction, BackendWindowAdmissionPreviewReport,
++        BackendWindowAdmissionPreviewWarning, WindowAdmissionPreviewPlanner,
++    };
++    use crate::smithay_backend::{
++        surface_lifecycle::{BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceSize},
++        surface_window_intent::{
++            BackendWindowCandidateId, BackendWindowCandidateIntent,
++            BackendWindowCandidateIntentReport,
++        },
++    };
++
++    /// 创建测试用 surface 标识。
++    fn surface_id(value: u64) -> BackendSurfaceId {
++        BackendSurfaceId::new(value)
++    }
++
++    /// 创建与 surface 稳定对应的候选标识。
++    fn candidate_id(value: u64) -> BackendWindowCandidateId {
++        BackendWindowCandidateId::from_surface(surface_id(value))
++    }
++
++    /// 创建测试用非零尺寸。
++    fn size(width: u32, height: u32) -> BackendSurfaceSize {
++        BackendSurfaceSize::new(width, height).expect("测试尺寸必须有效")
++    }
++
++    /// 创建 metadata 和尺寸完整的 Create 意图。
++    fn complete_create(value: u64) -> BackendWindowCandidateIntent {
++        BackendWindowCandidateIntent::Create {
++            surface_id: surface_id(value),
++            candidate_id: candidate_id(value),
++            title: Some(format!("窗口 {value}")),
++            app_id: Some(format!("app.{value}")),
++            size: Some(size(1280, 720)),
++        }
++    }
++
++    /// 创建保留来源错误的候选意图报告。
++    fn failed_intent_report() -> BackendWindowCandidateIntentReport {
++        BackendWindowCandidateIntentReport {
++            intents: vec![complete_create(7)],
++            source_failed_at: Some(3),
++            source_error: Some(BackendSurfaceLifecycleError::AlreadyDestroyed {
++                id: surface_id(8),
++            }),
++        }
++    }
++
++    /// 返回生产代码部分，避免静态边界测试把自身断言字符串计入结果。
++    fn production_source() -> String {
++        let source = fs::read_to_string(file!()).expect("必须能读取当前模块源码");
++        source
++            .split("#[cfg(test)]")
++            .next()
++            .expect("模块必须包含测试边界")
++            .to_string()
++    }
++
++    /// 递归检查目录中的 Rust 文件是否包含指定文本。
++    fn rust_tree_contains(path: &Path, needle: &str) -> bool {
++        fs::read_dir(path)
++            .expect("必须能读取源码目录")
++            .filter_map(Result::ok)
++            .any(|entry| {
++                let path = entry.path();
++                if path.is_dir() {
++                    rust_tree_contains(&path, needle)
++                } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
++                    fs::read_to_string(path)
++                        .map(|source| source.contains(needle))
++                        .unwrap_or(false)
++                } else {
++                    false
++                }
++            })
++    }
++
++    /// 验证 Create 意图生成创建预检动作。
++    #[test]
++    fn create_intent_builds_would_create_action() {
++        let intent = complete_create(1);
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.actions,
++            vec![BackendWindowAdmissionPreviewAction::WouldCreateWindow {
++                candidate_id: candidate_id(1),
++                surface_id: surface_id(1),
++                title: Some("窗口 1".to_string()),
++                app_id: Some("app.1".to_string()),
++                size: Some(size(1280, 720)),
++            }]
++        );
++    }
++
++    /// 验证 Create 缺少标题时生成明确 warning。
++    #[test]
++    fn create_without_title_builds_missing_title_warning() {
++        let mut intent = complete_create(1);
++        if let BackendWindowCandidateIntent::Create { title, .. } = &mut intent {
++            *title = None;
++        }
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.warnings,
++            vec![BackendWindowAdmissionPreviewWarning::MissingTitle {
++                candidate_id: candidate_id(1)
++            }]
++        );
++    }
++
++    /// 验证 Create 缺少应用标识时生成明确 warning。
++    #[test]
++    fn create_without_app_id_builds_missing_app_id_warning() {
++        let mut intent = complete_create(1);
++        if let BackendWindowCandidateIntent::Create { app_id, .. } = &mut intent {
++            *app_id = None;
++        }
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.warnings,
++            vec![BackendWindowAdmissionPreviewWarning::MissingAppId {
++                candidate_id: candidate_id(1)
++            }]
++        );
++    }
++
++    /// 验证 Create 缺少尺寸时生成明确 warning。
++    #[test]
++    fn create_without_size_builds_missing_size_warning() {
++        let mut intent = complete_create(1);
++        if let BackendWindowCandidateIntent::Create { size, .. } = &mut intent {
++            *size = None;
++        }
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.warnings,
++            vec![BackendWindowAdmissionPreviewWarning::MissingSize {
++                candidate_id: candidate_id(1)
++            }]
++        );
++    }
++
++    /// 验证完整 Create 不产生缺失信息 warning。
++    #[test]
++    fn complete_create_has_no_missing_warning() {
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&complete_create(1));
++
++        assert!(report.warnings.is_empty());
++    }
++
++    /// 验证 UpdateSize 意图生成尺寸更新预检动作。
++    #[test]
++    fn update_size_intent_builds_would_update_size_action() {
++        let intent = BackendWindowCandidateIntent::UpdateSize {
++            surface_id: surface_id(2),
++            candidate_id: candidate_id(2),
++            size: size(900, 600),
++        };
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.actions,
++            vec![BackendWindowAdmissionPreviewAction::WouldUpdateSize {
++                candidate_id: candidate_id(2),
++                surface_id: surface_id(2),
++                size: size(900, 600),
++            }]
++        );
++    }
++
++    /// 验证 Hide 意图生成隐藏预检动作。
++    #[test]
++    fn hide_intent_builds_would_hide_action() {
++        let intent = BackendWindowCandidateIntent::Hide {
++            surface_id: surface_id(3),
++            candidate_id: candidate_id(3),
++        };
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.actions,
++            vec![BackendWindowAdmissionPreviewAction::WouldHideWindow {
++                candidate_id: candidate_id(3),
++                surface_id: surface_id(3),
++            }]
++        );
++    }
++
++    /// 验证 Close 意图生成关闭预检动作。
++    #[test]
++    fn close_intent_builds_would_close_action() {
++        let intent = BackendWindowCandidateIntent::Close {
++            surface_id: surface_id(4),
++            candidate_id: candidate_id(4),
++        };
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.actions,
++            vec![BackendWindowAdmissionPreviewAction::WouldCloseWindow {
++                candidate_id: candidate_id(4),
++                surface_id: surface_id(4),
++            }]
++        );
++    }
++
++    /// 验证 UpdateMetadata 生成 metadata-only 忽略动作。
++    #[test]
++    fn metadata_intent_builds_ignore_action() {
++        let intent = BackendWindowCandidateIntent::UpdateMetadata {
++            surface_id: surface_id(5),
++            candidate_id: candidate_id(5),
++            title: Some("新标题".to_string()),
++            app_id: Some("app.new".to_string()),
++        };
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.actions,
++            vec![
++                BackendWindowAdmissionPreviewAction::WouldIgnoreMetadataOnly {
++                    candidate_id: candidate_id(5),
++                    surface_id: surface_id(5),
++                    title: Some("新标题".to_string()),
++                    app_id: Some("app.new".to_string()),
++                }
++            ]
++        );
++    }
++
++    /// 验证 UpdateMetadata 同时生成结构化忽略 warning。
++    #[test]
++    fn metadata_intent_builds_ignored_warning() {
++        let intent = BackendWindowCandidateIntent::UpdateMetadata {
++            surface_id: surface_id(5),
++            candidate_id: candidate_id(5),
++            title: None,
++            app_id: None,
++        };
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&intent);
++
++        assert_eq!(
++            report.warnings,
++            vec![BackendWindowAdmissionPreviewWarning::MetadataOnlyIgnored {
++                candidate_id: candidate_id(5)
++            }]
++        );
++    }
++
++    /// 验证多个意图的动作顺序保持输入顺序。
++    #[test]
++    fn multiple_intents_preserve_action_order() {
++        let intents = vec![
++            BackendWindowCandidateIntent::Hide {
++                surface_id: surface_id(3),
++                candidate_id: candidate_id(3),
++            },
++            complete_create(1),
++            BackendWindowCandidateIntent::Close {
++                surface_id: surface_id(4),
++                candidate_id: candidate_id(4),
++            },
++        ];
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intents(&intents);
++        let ids: Vec<_> = report
++            .actions
++            .iter()
++            .map(BackendWindowAdmissionPreviewAction::candidate_id)
++            .collect();
++
++        assert_eq!(ids, vec![candidate_id(3), candidate_id(1), candidate_id(4)]);
++    }
++
++    /// 验证 warning 按意图顺序和固定字段顺序生成。
++    #[test]
++    fn warnings_have_stable_intent_and_field_order() {
++        let intents = vec![
++            BackendWindowCandidateIntent::Create {
++                surface_id: surface_id(1),
++                candidate_id: candidate_id(1),
++                title: None,
++                app_id: Some("app.1".to_string()),
++                size: None,
++            },
++            BackendWindowCandidateIntent::Create {
++                surface_id: surface_id(2),
++                candidate_id: candidate_id(2),
++                title: Some("窗口 2".to_string()),
++                app_id: None,
++                size: Some(size(640, 480)),
++            },
++        ];
++
++        let report = WindowAdmissionPreviewPlanner::new().preview_intents(&intents);
++
++        assert_eq!(
++            report.warnings,
++            vec![
++                BackendWindowAdmissionPreviewWarning::MissingTitle {
++                    candidate_id: candidate_id(1)
++                },
++                BackendWindowAdmissionPreviewWarning::MissingSize {
++                    candidate_id: candidate_id(1)
++                },
++                BackendWindowAdmissionPreviewWarning::MissingAppId {
++                    candidate_id: candidate_id(2)
++                },
++            ]
++        );
++    }
++
++    /// 验证失败来源下标原样进入预检报告。
++    #[test]
++    fn failed_report_preserves_source_failed_at() {
++        let report =
++            WindowAdmissionPreviewPlanner::new().preview_intent_report(&failed_intent_report());
++
++        assert_eq!(report.source_failed_at, Some(3));
++    }
++
++    /// 验证失败来源错误原样进入预检报告。
++    #[test]
++    fn failed_report_preserves_source_error() {
++        let report =
++            WindowAdmissionPreviewPlanner::new().preview_intent_report(&failed_intent_report());
++
++        assert_eq!(
++            report.source_error,
++            Some(BackendSurfaceLifecycleError::AlreadyDestroyed { id: surface_id(8) })
++        );
++    }
++
++    /// 验证失败来源下标生成结构化 warning。
++    #[test]
++    fn failed_report_builds_source_failed_warning() {
++        let report =
++            WindowAdmissionPreviewPlanner::new().preview_intent_report(&failed_intent_report());
++
++        assert!(
++            report
++                .warnings
++                .contains(&BackendWindowAdmissionPreviewWarning::SourceTraceFailed {
++                    failed_at: 3
++                })
++        );
++    }
++
++    /// 验证失败来源错误生成结构化 warning。
++    #[test]
++    fn failed_report_builds_source_error_warning() {
++        let error = BackendSurfaceLifecycleError::AlreadyDestroyed { id: surface_id(8) };
++        let report =
++            WindowAdmissionPreviewPlanner::new().preview_intent_report(&failed_intent_report());
++
++        assert!(
++            report
++                .warnings
++                .contains(&BackendWindowAdmissionPreviewWarning::SourceTraceError { error })
++        );
++    }
++
++    /// 验证来源失败时仍预检失败点之前已有的候选意图。
++    #[test]
++    fn failed_report_still_builds_actions() {
++        let report =
++            WindowAdmissionPreviewPlanner::new().preview_intent_report(&failed_intent_report());
++
++        assert_eq!(report.actions.len(), 1);
++        assert!(matches!(
++            report.actions[0],
++            BackendWindowAdmissionPreviewAction::WouldCreateWindow { .. }
++        ));
++    }
++
++    /// 验证空意图输入生成空预检报告。
++    #[test]
++    fn empty_intents_build_empty_report() {
++        let report = WindowAdmissionPreviewPlanner::new().preview_intents(&[]);
++
++        assert_eq!(
++            report,
++            BackendWindowAdmissionPreviewReport {
++                actions: Vec::new(),
++                warnings: Vec::new(),
++                source_failed_at: None,
++                source_error: None,
++            }
++        );
++    }
++
++    /// 验证无失败信息的预检报告明确标记来源成功。
++    #[test]
++    fn successful_preview_reports_source_success() {
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&complete_create(1));
++
++        assert!(report.source_succeeded());
++    }
++
++    /// 验证任一来源失败信息都会阻止来源成功标记。
++    #[test]
++    fn partial_source_failure_is_not_reported_as_success() {
++        let intent_report = BackendWindowCandidateIntentReport {
++            intents: Vec::new(),
++            source_failed_at: Some(0),
++            source_error: None,
++        };
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent_report(&intent_report);
++
++        assert!(!report.source_succeeded());
++    }
++
++    /// 验证 warning 文本保留候选标识上下文。
++    #[test]
++    fn warning_display_preserves_context() {
++        let warning = BackendWindowAdmissionPreviewWarning::MissingTitle {
++            candidate_id: candidate_id(12),
++        };
++
++        assert_eq!(warning.to_string(), "候选窗口 12 缺少标题");
++    }
++
++    /// 验证动作访问器返回对应候选和 surface 标识。
++    #[test]
++    fn action_accessors_preserve_ids() {
++        let action = BackendWindowAdmissionPreviewAction::WouldHideWindow {
++            candidate_id: candidate_id(9),
++            surface_id: surface_id(9),
++        };
++
++        assert_eq!(action.candidate_id(), candidate_id(9));
++        assert_eq!(action.surface_id(), surface_id(9));
++    }
++
++    /// 验证生产代码不依赖核心模块。
++    #[test]
++    fn preview_production_code_does_not_depend_on_core() {
++        assert!(!production_source().contains("crate::core"));
++    }
++
++    /// 验证生产代码不依赖通用后端模块。
++    #[test]
++    fn preview_production_code_does_not_depend_on_backend() {
++        assert!(!production_source().contains("crate::backend"));
++    }
++
++    /// 验证生产代码不依赖 Smithay crate。
++    #[test]
++    fn preview_production_code_does_not_depend_on_smithay() {
++        assert!(!production_source().contains("smithay::"));
++    }
++
++    /// 验证生产代码不依赖 Linux 或 Unix API。
++    #[test]
++    fn preview_production_code_does_not_depend_on_linux_api() {
++        let source = production_source();
++
++        for forbidden in ["std::os::unix", "libc::", "UnixStream", "XDG_RUNTIME_DIR"] {
++            assert!(!source.contains(forbidden));
++        }
++    }
++
++    /// 验证生产代码不构造或提交核心事件路径类型。
++    #[test]
++    fn preview_production_code_does_not_use_event_submission_path() {
++        let source = production_source();
++
++        for forbidden in [
++            "BackendEvent",
++            "CoreCommand",
++            "BackendDriverRunner",
++            "handle_command",
++            "dispatch_action",
++        ] {
++            assert!(!source.contains(forbidden));
++        }
++    }
++
++    /// 验证生产代码不引用核心放置模型类型。
++    #[test]
++    fn preview_production_code_does_not_use_core_placement_types() {
++        let source = production_source();
++
++        for forbidden in ["Workspace", "Slot", "WindowId"] {
++            assert!(!source.contains(forbidden));
++        }
++    }
++
++    /// 验证核心和通用后端源码没有反向依赖预检类型。
++    #[test]
++    fn core_and_backend_do_not_depend_on_preview_types() {
++        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
++
++        for directory in ["src/core", "src/backend"] {
++            let path = manifest_dir.join(directory);
++            assert!(!rust_tree_contains(&path, "window_admission_preview"));
++            assert!(!rust_tree_contains(&path, "BackendWindowAdmissionPreview"));
++            assert!(!rust_tree_contains(&path, "WindowAdmissionPreviewPlanner"));
++        }
++    }
++
++    /// 验证生产逻辑不使用 panic、unwrap 或 expect。
++    #[test]
++    fn preview_production_code_has_no_panic_shortcuts() {
++        let source = production_source();
++
++        for forbidden in ["panic!", ".unwrap(", ".expect("] {
++            assert!(!source.contains(forbidden));
++        }
++    }
++
++    /// 验证报告和诊断保持可克隆、可直接比较。
++    #[test]
++    fn preview_report_is_cloneable_and_comparable() {
++        let report = WindowAdmissionPreviewPlanner::new().preview_intent(&complete_create(1));
++
++        assert_eq!(report.clone(), report);
++    }
++}
