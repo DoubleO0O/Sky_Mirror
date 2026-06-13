@@ -6,6 +6,8 @@
 
 mod backend;
 mod core;
+// Feature boundary: 默认构建不编译 Smithay 集成层；probe 与 Linux 资源路径由各自
+// feature 选择，程序入口本身不启动或调用这些探针。
 #[cfg(any(feature = "smithay-probe", feature = "smithay-linux"))]
 mod smithay_backend;
 

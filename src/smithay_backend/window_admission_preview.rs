@@ -2,6 +2,9 @@
 //!
 //! 本模块只描述未来接纳候选窗口时可能发生的动作，并为缺失信息生成结构化
 //! warning。它不会提交事件、分配核心资源或修改任何核心状态。
+//!
+//! Diagnostic-only: preview 中出现 `WouldCreateWindow` 不表示窗口已创建，也不表示
+//! surface 已通过核心接纳。
 
 use std::fmt;
 
@@ -175,7 +178,7 @@ impl fmt::Display for BackendWindowAdmissionPreviewWarning {
 /// 窗口候选意图的接纳预检报告。
 ///
 /// 报告保留来源失败信息，并按输入顺序记录动作和 warning。来源失败不会阻止
-/// 对失败点之前已经生成的候选意图进行预检。
+/// 对失败点之前已经生成的候选意图进行预检；报告本身不会执行这些动作。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendWindowAdmissionPreviewReport {
     /// 按候选意图输入顺序生成的预检动作。

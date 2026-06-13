@@ -1,11 +1,12 @@
 //! Surface 生命周期纯数据预备层。
 //!
-//! 这是可在 macOS 验证的 Mac-safe provisional work，不解除 Linux 验收门槛。
-//!
 //! 本模块只描述后端 surface 从创建到销毁的状态变化，不保存真实
 //! `wl_surface`，不依赖 Smithay，也不向核心 `State` 提交事件。
 //! 未来 Linux 适配器应把真实协议回调转换为这里的纯数据事件，再由后续边界
 //! 决定如何进入既有 `BackendEvent` 驱动路径。
+//!
+//! Platform boundary: 该模型是跨平台纯 Rust 契约；在任意主机上的测试通过都不
+//! 替代 Linux 系统资源验收，也不证明真实 Wayland 协议时序成立。
 
 use std::{collections::BTreeMap, fmt};
 
@@ -346,6 +347,9 @@ impl BackendSurfaceRegistry {
     }
 
     /// 应用一条纯数据生命周期事件。
+    ///
+    /// Transition invariant: 每个事件只经由对应的 registry 操作推进状态；非法
+    /// 转换返回结构化错误，失败事件不会被伪装成已应用。
     pub fn apply_event(
         &mut self,
         event: BackendSurfaceLifecycleEvent,

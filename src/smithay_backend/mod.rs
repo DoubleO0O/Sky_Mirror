@@ -4,8 +4,10 @@
 //! Smithay crate。`smithay-linux` 在 Linux 上额外编译 Display、socket 和
 //! bootstrap 等真实系统资源探针；旧 `smithay-backend` 名称是它的兼容别名。
 //!
-//! 当前阶段不会启动真实 compositor，也不接收 Wayland client。未来真实 Smithay
-//! 回调必须先转换为 `BackendEvent`，再通过 `BackendDriverRunner` 进入核心状态。
+//! Feature invariant: `smithay-probe` 不得因本模块的声明或 re-export 引入 Smithay
+//! 或平台图形栈。Linux 资源能被构造也不代表 compositor 已启动、client 已接收或
+//! protocol global 已注册。任何真实回调都必须先转换为 `BackendEvent`，再通过
+//! `BackendDriverRunner` 进入核心状态。
 
 #[cfg(all(feature = "smithay-linux", not(target_os = "linux")))]
 compile_error!("smithay-linux 只能在 Linux 上启用；macOS 请使用 smithay-probe。");
@@ -56,10 +58,10 @@ pub mod diagnostic_event;
 /// Smithay 后端驱动接口探针。
 #[cfg(feature = "smithay-probe")]
 pub mod driver;
-/// 真实 Smithay adapter 的 Linux 专属结构骨架。
+/// Linux 专属 Smithay adapter 结构骨架；不代表真实 compositor 支持。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_adapter;
-/// Smithay handler trait 边界的隔离类型形状探针。
+/// Smithay handler trait 边界的隔离类型形状与 blocker evidence 探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_handler_probe;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。

@@ -5,6 +5,10 @@
 //! 本模块只定义资源所有权、能力边界和生命周期转换。它不启动调度循环、不接受
 //! 客户端，也不注册协议对象。底层 Display 与 listening socket 继续由
 //! `SmithayBootstrapProbe` 封装，本模块不暴露其内部系统类型。
+//!
+//! Safety invariant: plan、ledger、snapshot 和 diagnostic 都是纯数据观察边界。
+//! 它们不能被解释为 client accept、protocol dispatch、global registration、
+//! surface lifecycle、core admission 或 GPU rendering 已经发生。
 
 use std::{error::Error, fmt};
 
@@ -123,7 +127,7 @@ pub enum SmithayLinuxAdapterGlobalRegistrationState {
     /// registration skeleton ledger 已记录该 global。
     RegistrationSkeleton,
 
-    /// 为未来阶段保留的已注册状态；Phase 48E 不会产生该状态。
+    /// 为受控真实实现保留的已注册状态；当前 skeleton 不会产生该状态。
     Registered,
 }
 
@@ -139,7 +143,7 @@ pub struct SmithayLinuxAdapterGlobalPlan {
     /// 计划提供的固定协议版本。
     pub version: u32,
 
-    /// 当前 ledger 状态；初始为计划，Phase 48E 可进入 registration skeleton。
+    /// 当前 ledger 状态；初始为计划，且最多进入 registration skeleton。
     pub state: SmithayLinuxAdapterGlobalRegistrationState,
 
     /// 当前计划是否仍然只属于 skeleton。
@@ -178,7 +182,7 @@ pub struct SmithayLinuxAdapterGlobalRegistrationReport {
     /// 进入 registration skeleton 状态的 global 数量。
     pub skeleton_registered_count: usize,
 
-    /// 真实注册的 global 数量；Phase 48E 恒为零。
+    /// 真实注册的 global 数量；skeleton 边界恒为零。
     pub real_registered_count: usize,
 
     /// global 计划总数。
@@ -200,17 +204,17 @@ pub enum SmithayLinuxAdapterRealGlobalRegistrationMode {
     /// activation gate 或必要 handler 边界阻止了真实注册。
     FeasibilityBlocked,
 
-    /// 为未来受控 inert 注册保留；Phase 49A fallback 不会产生该状态。
+    /// 为受控 inert 注册实现保留；当前 feasibility fallback 不会产生该状态。
     InertRegistrationAttempted,
 
-    /// 为未来受控 inert 注册保留；Phase 49A fallback 不会产生该状态。
+    /// 为受控 inert 注册实现保留；当前 feasibility fallback 不会产生该状态。
     InertRegistrationSucceeded,
 }
 
 /// 阻止真实 protocol global 注册可行性切片的结构化原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SmithayLinuxAdapterRealGlobalRegistrationBlocker {
-    /// Phase 48 activation gate 阻止了真实 global registration target。
+    /// Adapter activation gate 阻止了真实 global registration target。
     ActivationGateBlocked,
 
     /// 尚未建立 client bind 所需的 global handler。
@@ -247,7 +251,7 @@ pub struct SmithayLinuxAdapterRealGlobalRegistrationReport {
     /// 被可行性边界阻止的 global，按计划顺序排列。
     pub blocked_kinds: Vec<SmithayLinuxAdapterGlobalKind>,
 
-    /// 来自 Phase 48 activation gate 的原始 blocker。
+    /// 来自 adapter activation gate 的原始 blocker。
     pub activation_blockers: Vec<SmithayLinuxAdapterActivationBlocker>,
 
     /// 更具体的真实 registration 可行性 blocker。
@@ -282,10 +286,10 @@ pub enum SmithayLinuxAdapterGlobalHandlerReadiness {
     /// trait 与安全边界审计表明当前不能建立 inert handler。
     FeasibilityBlocked,
 
-    /// 为未来纯编译边界规划保留；Phase 49B fallback 不会产生该状态。
+    /// 为受控纯编译边界保留；当前 feasibility fallback 不会产生该状态。
     InertBoundaryPlanned,
 
-    /// 为未来安全编译边界保留；Phase 49B fallback 不会产生该状态。
+    /// 为受控安全编译边界保留；当前 feasibility fallback 不会产生该状态。
     InertBoundaryCompiled,
 }
 
@@ -322,7 +326,7 @@ pub enum SmithayLinuxAdapterGlobalHandlerBlocker {
     /// 当前 adapter 不支持进入核心集成边界。
     CoreIntegrationUnsupported,
 
-    /// Phase 48 activation gate 仍阻止真实 global registration。
+    /// Adapter activation gate 仍阻止真实 global registration。
     ActivationGateBlocked,
 }
 
@@ -403,6 +407,9 @@ pub enum SmithayLinuxAdapterUnsupportedRequestReason {
 }
 
 /// Smithay Linux adapter 对协议请求的保守结果。
+///
+/// 该结果只记录 adapter 对一个纯数据 request kind 的策略判断，不是 Smithay
+/// request callback，也不会向 client 发送协议错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmithayLinuxAdapterProtocolRequestOutcome {
     /// 请求被明确拒绝，不会被静默忽略或伪装为成功。
@@ -421,7 +428,7 @@ pub struct SmithayLinuxAdapterProtocolRequestObservation {
     /// 被观察到的纯数据请求类别。
     pub kind: SmithayLinuxAdapterProtocolRequestKind,
 
-    /// 当前阶段恒为明确拒绝的结果。
+    /// Skeleton 边界恒为明确拒绝的结果。
     pub outcome: SmithayLinuxAdapterProtocolRequestOutcome,
 
     /// 当前 observation 是否严格属于 skeleton。
@@ -461,7 +468,7 @@ pub enum SmithayLinuxAdapterClientSessionState {
     /// client session 只在 skeleton 可见性边界中被观察到。
     ObservedSkeleton,
 
-    /// client session 已被明确记录为当前阶段不支持。
+    /// client session 已被明确记录为 skeleton 不支持。
     RejectedUnsupported,
 }
 
@@ -482,6 +489,9 @@ pub enum SmithayLinuxAdapterClientUnsupportedReason {
 }
 
 /// Smithay Linux adapter 对 client session observation 的保守结果。
+///
+/// Observation 不来自 socket accept，也不持有真实 client。它只证明拒绝策略和
+/// ledger 顺序可以被诊断。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmithayLinuxAdapterClientSessionOutcome {
     /// client session 被明确拒绝，不会被静默忽略或伪装为成功。
@@ -500,10 +510,10 @@ pub struct SmithayLinuxAdapterClientSessionObservation {
     /// 从 1 开始分配的纯数据 session 标识。
     pub session_id: SmithayLinuxAdapterClientSessionId,
 
-    /// 当前阶段恒为明确拒绝的 ledger 状态。
+    /// Skeleton 边界恒为明确拒绝的 ledger 状态。
     pub state: SmithayLinuxAdapterClientSessionState,
 
-    /// 当前阶段恒为明确拒绝的结果。
+    /// Skeleton 边界恒为明确拒绝的结果。
     pub outcome: SmithayLinuxAdapterClientSessionOutcome,
 
     /// 当前 observation 是否严格属于 skeleton。
@@ -610,7 +620,7 @@ pub struct SmithayLinuxAdapterActivationReport {
     /// 被评估的真实能力目标。
     pub target: SmithayLinuxAdapterActivationTarget,
 
-    /// 当前阶段恒为 blocked 的激活决策。
+    /// Skeleton policy 下恒为 blocked 的激活决策。
     pub decision: SmithayLinuxAdapterActivationDecision,
 
     /// 按固定顺序排列且非空的阻止原因。
@@ -629,7 +639,7 @@ pub struct SmithayLinuxAdapterActivationGateReport {
     /// 被阻止激活的 target 数量。
     pub blocked_count: usize,
 
-    /// 允许激活的 target 数量；当前阶段恒为零。
+    /// 允许激活的 target 数量；skeleton policy 下恒为零。
     pub allowed_count: usize,
 
     /// 当前 gate 是否严格属于 skeleton。
@@ -655,10 +665,10 @@ pub struct SmithayLinuxAdapterActivationAttemptObservation {
     /// 被尝试激活的真实能力目标。
     pub target: SmithayLinuxAdapterActivationTarget,
 
-    /// activation gate 返回的决策；当前阶段恒为 blocked。
+    /// activation gate 返回的决策；skeleton policy 下恒为 blocked。
     pub decision: SmithayLinuxAdapterActivationDecision,
 
-    /// 当前阶段恒为带结构化 blocker 的 blocked 结果。
+    /// Skeleton policy 下恒为带结构化 blocker 的 blocked 结果。
     pub outcome: SmithayLinuxAdapterActivationAttemptOutcome,
 
     /// 当前 observation 是否严格属于 skeleton。
@@ -674,7 +684,7 @@ pub struct SmithayLinuxAdapterActivationAttemptLedgerReport {
     /// 被 activation gate 阻止的 attempt 数量。
     pub blocked_count: usize,
 
-    /// 允许激活的 attempt 数量；当前阶段恒为零。
+    /// 允许激活的 attempt 数量；skeleton policy 下恒为零。
     pub allowed_count: usize,
 
     /// 按 observation 顺序保存的纯数据 ledger。
@@ -824,7 +834,7 @@ pub enum SmithayLinuxAdapterDiagnostic {
     /// registration skeleton 已经执行过一次。
     ProtocolGlobalsRegistrationAttempted,
 
-    /// 真实 protocol global 注册在当前阶段不受支持。
+    /// 真实 protocol global 注册在 skeleton policy 下不受支持。
     ProtocolGlobalsRealRegistrationUnsupported,
 
     /// adapter 未注册协议 global。
@@ -908,7 +918,10 @@ pub struct SmithayLinuxAdapterCapabilities {
 }
 
 impl SmithayLinuxAdapterCapabilities {
-    /// 返回 Phase 48A adapter skeleton 的固定保守能力集合。
+    /// 返回 adapter skeleton 的固定保守能力集合。
+    ///
+    /// `holds_*` 和 `has_*_boundary` 可以为 `true`，因为它们只描述资源所有权或
+    /// 纯数据边界；所有真实执行能力必须继续为 `false`。
     pub const fn skeleton_only() -> Self {
         Self {
             holds_wayland_display: true,
@@ -936,6 +949,9 @@ impl SmithayLinuxAdapterCapabilities {
 }
 
 /// Smithay Linux adapter skeleton 的稳定只读状态快照。
+///
+/// Diagnostic-only: 快照复制 adapter 已记录的状态，但不会推进 lifecycle、执行
+/// pump、注册 global、接受 client 或分发 request。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SmithayLinuxAdapterSnapshot {
     /// adapter 当前生命周期。
@@ -998,6 +1014,9 @@ pub enum SmithayLinuxAdapterOperation {
 }
 
 /// Smithay Linux adapter skeleton 的结构化错误。
+///
+/// 非法转换返回对应状态和操作，不通过 panic 隐藏调用顺序错误；错误路径不得
+/// 部分推进 lifecycle、pump 或 registration ledger。
 #[derive(Debug)]
 pub enum SmithayLinuxAdapterError {
     /// Display 或 listening socket 初始化失败。
@@ -1071,10 +1090,11 @@ impl Error for SmithayLinuxAdapterError {
     }
 }
 
-/// 真实 Smithay adapter 的 Phase 48A 结构骨架。
+/// 真实 Smithay adapter 的受控结构骨架。
 ///
 /// 该结构只持有已经封装的 Linux bootstrap 资源和显式生命周期状态。它不提供
 /// bootstrap 可变访问，不暴露系统 handle，也没有启动真实 compositor 的入口。
+/// 持有 Display/socket 是资源所有权，不是 compositor readiness。
 pub struct SmithayLinuxAdapterSkeleton {
     /// 已封装的 Display 与 listening socket 资源。
     bootstrap: SmithayBootstrapProbe,
@@ -1184,6 +1204,9 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 返回按稳定顺序生成的 adapter 结构化诊断。
+    ///
+    /// Diagnostic-only: positive boundary diagnostics 只说明报告或 ledger 存在；
+    /// 配套的 negative diagnostics 才描述真实能力仍被禁用。
     pub fn diagnostics(&self) -> Vec<SmithayLinuxAdapterDiagnostic> {
         let capabilities = self.capabilities();
         let mut diagnostics = Vec::with_capacity(40);
@@ -1316,6 +1339,9 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 记录全部计划 global 的一次性 registration skeleton ledger。
+    ///
+    /// 该操作只把纯数据状态从 `PlannedOnly` 改为 `RegistrationSkeleton`。它不取得
+    /// Display handle，不创建 global，也不安装 bind/request handler。
     pub fn register_planned_globals_skeleton(
         &mut self,
     ) -> Result<SmithayLinuxAdapterGlobalRegistrationReport, SmithayLinuxAdapterError> {
@@ -1384,6 +1410,9 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 把协议请求记录为明确拒绝的 inert ledger observation。
+    ///
+    /// 这是测试和诊断入口，不是 protocol dispatch callback；记录 observation
+    /// 不表示 adapter 收到过真实 Wayland request。
     pub fn observe_unsupported_protocol_request(
         &mut self,
         kind: SmithayLinuxAdapterProtocolRequestKind,
@@ -1414,6 +1443,8 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 把 client session 记录为明确拒绝的纯数据 ledger observation。
+    ///
+    /// 这是测试和诊断入口，不执行 socket accept，也不创建 Smithay client。
     pub fn observe_unsupported_client_session(
         &mut self,
     ) -> SmithayLinuxAdapterClientSessionObservation {
@@ -1458,6 +1489,8 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 返回全部真实能力目标的固定激活 gate 报告。
+    ///
+    /// Gate 的 `blocked` 表示安全策略按设计生效，不表示 skeleton 自身运行失败。
     pub fn activation_gate_report(&self) -> SmithayLinuxAdapterActivationGateReport {
         let reports = ACTIVATION_TARGETS
             .into_iter()
@@ -1472,7 +1505,7 @@ impl SmithayLinuxAdapterSkeleton {
         }
     }
 
-    /// 判断指定真实能力目标是否允许激活；当前阶段恒为 `false`。
+    /// 判断指定真实能力目标是否允许激活；skeleton policy 下恒为 `false`。
     pub fn can_activate(&self, target: SmithayLinuxAdapterActivationTarget) -> bool {
         !matches!(
             self.activation_report_for(target).decision,
@@ -1481,6 +1514,8 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 通过 activation gate 记录一次被阻止的真实能力激活 attempt。
+    ///
+    /// Attempt 只追加审计记录；被阻止的目标不会被部分执行。
     pub fn attempt_activate(
         &mut self,
         target: SmithayLinuxAdapterActivationTarget,
@@ -1519,8 +1554,8 @@ impl SmithayLinuxAdapterSkeleton {
 
     /// 通过 activation gate 执行一次真实 global registration 可行性检查。
     ///
-    /// Phase 49A fallback 只记录 blocked attempt 和纯数据报告，不访问 Display
-    /// handle，也不执行任何真实 protocol global 注册。
+    /// 当前 fallback 只记录 blocked attempt 和纯数据报告，不访问 Display handle，
+    /// 也不执行任何真实 protocol global 注册。
     pub fn attempt_real_global_registration_feasibility(
         &mut self,
     ) -> SmithayLinuxAdapterRealGlobalRegistrationReport {
@@ -1577,6 +1612,9 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 从 `Prepared` 转换到 `ShutdownRequested`。
+    ///
+    /// Lifecycle invariant: 其他来源状态返回结构化错误。若 pump 已处于 `Ready`，
+    /// shutdown request 只把它标记为 `StopRequested`，不会执行真实资源收尾。
     pub fn request_shutdown(&mut self) -> Result<(), SmithayLinuxAdapterError> {
         self.transition(
             SmithayLinuxAdapterLifecycle::Prepared,
@@ -1592,6 +1630,9 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 从 `ShutdownRequested` 转换到 `Stopped`。
+    ///
+    /// Lifecycle invariant: 未先请求 shutdown 时不得跳过中间状态；完成后 pump
+    /// 同步进入 `Stopped`，但没有真实事件循环需要 join。
     pub fn finish_shutdown(&mut self) -> Result<(), SmithayLinuxAdapterError> {
         self.transition(
             SmithayLinuxAdapterLifecycle::ShutdownRequested,
@@ -1604,6 +1645,9 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 从 `NotStarted` 转换到 `Ready`，不启动真实事件循环。
+    ///
+    /// Pump state 与 adapter lifecycle 相互独立校验；只有 lifecycle 仍为
+    /// `Prepared` 时才允许建立 skeleton tick 边界。
     pub fn start_pump(&mut self) -> Result<(), SmithayLinuxAdapterError> {
         if self.lifecycle != SmithayLinuxAdapterLifecycle::Prepared
             || self.pump_state != SmithayLinuxAdapterPumpState::NotStarted
@@ -1617,6 +1661,9 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 在 `Ready` 状态执行一次纯计数 skeleton tick。
+    ///
+    /// Tick 只增加计数并生成结果；processed client、protocol event 和 registered
+    /// global 计数保持为零。
     pub fn pump_once(&mut self) -> Result<SmithayLinuxAdapterPumpResult, SmithayLinuxAdapterError> {
         if self.lifecycle != SmithayLinuxAdapterLifecycle::Prepared
             || self.pump_state != SmithayLinuxAdapterPumpState::Ready
@@ -1640,6 +1687,8 @@ impl SmithayLinuxAdapterSkeleton {
     }
 
     /// 停止 event pump skeleton；不执行真实资源或协议收尾。
+    ///
+    /// 重复停止或 adapter 已停止时返回结构化错误，不 panic。
     pub fn stop_pump(&mut self) -> Result<(), SmithayLinuxAdapterError> {
         if self.lifecycle == SmithayLinuxAdapterLifecycle::Stopped
             || self.pump_state == SmithayLinuxAdapterPumpState::Stopped

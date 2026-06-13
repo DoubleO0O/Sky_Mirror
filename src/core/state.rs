@@ -77,8 +77,8 @@ impl CompositorState {
         // backend 初始化必须发生在运行阶段，而不是纯状态构造阶段。
         self.backend.init();
 
-        // 标记 compositor 已进入主循环。
-        // TODO: 后续增加退出 Action 时，应通过统一状态方法把该字段设回 false。
+        // Lifecycle invariant: `running` 只在集中状态边界修改；退出路径也必须通过
+        // 对应的统一状态操作更新它，不能由 backend 或 renderer 直接写入。
         self.running = true;
     }
 

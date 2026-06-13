@@ -2,6 +2,9 @@
 //!
 //! 本模块只编排已有的生命周期回放、候选意图规划和接纳预检，不重复实现
 //! 任一阶段的规则，也不提交任何状态变化。
+//!
+//! Pipeline contract: `trace -> intent -> preview` 的每一步都生成独立报告。来源
+//! trace 失败时，后两步只消费失败前保留的快照，不能把部分结果解释为接纳成功。
 
 use crate::smithay_backend::{
     surface_lifecycle::{BackendSurfaceLifecycleEvent, BackendSurfaceRegistry},
@@ -30,6 +33,7 @@ pub enum BackendSurfaceAdmissionPipelineStatus {
 /// Surface 接纳预检管线的完整报告。
 ///
 /// 三个阶段报告全部保留，便于调用方检查状态快照、候选意图和预检动作。
+/// `Complete` 仅表示纯数据管线完成，不表示真实 surface 或核心窗口已建立。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendSurfaceAdmissionPipelineReport {
     /// 管线整体状态。

@@ -3,6 +3,9 @@
 //! 本模块只在 Linux 上启用 `smithay-linux` feature 时编译。它负责持有真实
 //! Wayland Display 和 listening socket 探针，但所有状态变化仍交给纯数据
 //! `SmithayRuntimeProbe`，并继续通过 `BackendDriverRunner` 进入核心。
+//!
+//! Boundary: 该组合类型可以驱动预置的纯数据事件，但不从 Wayland socket 接收
+//! client，也不把 Display 事件转换为协议回调。
 
 use crate::{
     core::{backend_driver::BackendDriverRunReport, backend_event::BackendEvent, state::State},
@@ -81,7 +84,8 @@ impl SmithayLinuxRuntimeProbe {
 
     /// 可变访问内部纯数据 runtime。
     ///
-    /// 调用方只能通过 runtime helper 入队事件，状态仍在 `run_once` 时统一推进。
+    /// 该访问只暴露纯数据队列 helper，不暴露 bootstrap 或系统资源。状态仍在
+    /// `run_once` 时通过 `BackendDriverRunner` 统一推进。
     pub fn runtime_mut(&mut self) -> &mut SmithayRuntimeProbe {
         &mut self.runtime
     }

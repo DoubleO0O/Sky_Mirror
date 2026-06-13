@@ -2,6 +2,9 @@
 //!
 //! 本模块把 Smithay probe 与 Linux 资源探针转换为后端中立的结构化报告。
 //! 它不持有核心 `State`，不提交 `BackendEvent`，也不会启动 compositor。
+//!
+//! Diagnostic-only invariant: 报告中的资源和 skeleton 边界只描述可观测状态，
+//! 不授予 client accept、protocol dispatch、real surface 或 GPU 能力。
 
 use std::{fmt, path::PathBuf};
 
@@ -18,7 +21,7 @@ use crate::smithay_backend::{
 
 /// 后端启动模式。
 ///
-/// 当前阶段只有纯探针模式；即使 Linux Display 和 socket 已构造，也不会接收
+/// 唯一模式是纯探针模式；即使 Linux Display 和 socket 已构造，也不会接收
 /// client、注册协议 global 或进入真实 compositor 主循环。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendBootstrapMode {
@@ -30,7 +33,7 @@ pub enum BackendBootstrapMode {
 ///
 /// 字段只描述已经实现并可由当前实例提供的能力。纯数据 surface 生命周期边界
 /// 与真实 Wayland surface 接入是两项独立能力，后者和 GPU 渲染必须保持为
-/// `false`。
+/// `false`，除非对应执行路径和验收契约同时存在。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendRuntimeCapabilities {
     /// 是否能够构造 Wayland Display。
@@ -487,7 +490,8 @@ impl fmt::Display for BackendRuntimeDiagnostic {
 /// 后端运行时门面报告。
 ///
 /// 报告只描述启动资源和能力，不包含 workspace、focus、scene 或渲染帧，也不会
-/// 修改任何核心状态。
+/// 修改任何核心状态。`ProbeOnly` 与保守 capability 字段是报告契约的一部分：
+/// socket 名称或 adapter diagnostic 存在不能提升真实运行能力。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendRuntimeReport {
     /// 后端实现名称。
@@ -554,6 +558,10 @@ impl From<&SmithayLinuxRuntimeProbe> for BackendRuntimeReport {
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
     /// 从 adapter event pump skeleton 创建保守的后端中立报告。
+    ///
+    /// Boundary invariant: 转换只读取 snapshot，并保持 `ProbeOnly`。报告沿用 Linux
+    /// 资源探针能力，adapter 的 plan/ledger 信息仅追加为 diagnostic，不把真实
+    /// surface 或 GPU capability 提升为 `true`。
     fn from(adapter: &SmithayLinuxAdapterSkeleton) -> Self {
         let snapshot = adapter.snapshot();
         let capabilities = snapshot.capabilities;

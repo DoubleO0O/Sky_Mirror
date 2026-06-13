@@ -4,6 +4,9 @@
 //! `BackendSurfaceLifecycleEvent`，不保存真实 surface，不依赖系统后端，也不会
 //! 把事件提交到核心状态。未来平台 adapter 应复用同一事件形状，而不是复制
 //! `BackendSurfaceRegistry` 的状态转换规则。
+//!
+//! Contract: trace 中的事件顺序是测试输入，不声明 Wayland request、configure
+//! 或 commit 的真实协议顺序已经得到验证。
 
 use crate::smithay_backend::surface_lifecycle::{
     BackendSurfaceId, BackendSurfaceLifecycleError, BackendSurfaceLifecycleEvent,
@@ -94,7 +97,8 @@ impl BackendSurfaceTraceReport {
 /// Surface 生命周期事件轨迹 runner。
 ///
 /// Runner 不实现任何状态转换，只按顺序调用
-/// `BackendSurfaceRegistry::apply_event`，确保 mock 场景和未来 adapter 共用同一套规则。
+/// `BackendSurfaceRegistry::apply_event`，确保 mock 场景和未来 adapter 共用同一套
+/// 纯数据规则。首个错误后的事件不会执行。
 pub struct BackendSurfaceTraceRunner;
 
 impl BackendSurfaceTraceRunner {

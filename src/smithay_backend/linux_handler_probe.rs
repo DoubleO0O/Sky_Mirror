@@ -2,13 +2,13 @@
 
 //! Smithay handler 边界的隔离类型形状探针与 requirement matrix。
 //!
-//! 本模块只记录 Phase 49C 的编译审计结果和 Phase 49D 的 blocker evidence。
-//! 它不实现 Smithay handler trait，不持有原生对象，也不进入 adapter、runtime
-//! 或核心状态。
+//! 本模块只记录隔离类型形状的编译审计结果和 blocker evidence。它不实现
+//! Smithay handler trait，不持有原生对象，也不进入 adapter、runtime 或核心状态。
+//! Requirement matrix 描述建立 handler 前缺少什么，不表示这些入口已部分可用。
 
 use super::linux_adapter::SmithayLinuxAdapterGlobalHandlerKind;
 
-/// Phase 49C handler compile probe 的完成范围。
+/// 隔离 handler compile probe 的完成范围。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmithayLinuxHandlerProbeKind {
     /// 只验证隔离 inert handler 类型和报告可以编译。
@@ -17,11 +17,11 @@ pub enum SmithayLinuxHandlerProbeKind {
     /// trait 形状已审计，但因会建立可执行处理边界而被阻止。
     TraitShapeBlocked,
 
-    /// 为未来阶段保留的隔离 trait 编译完成状态。
+    /// 为受控后续实现保留的隔离 trait 编译完成状态。
     TraitShapeCompiled,
 }
 
-/// 阻止 Phase 49C 扩展到真实 Smithay handler trait 的结构化原因。
+/// 阻止 compile probe 扩展到真实 Smithay handler trait 的结构化原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SmithayLinuxHandlerProbeBlocker {
     /// trait 实现会定义真实 client bind 入口。
@@ -52,7 +52,10 @@ pub enum SmithayLinuxHandlerProbeBlocker {
     AdapterIntegrationForbidden,
 }
 
-/// Phase 49C 隔离 handler compile probe 的纯数据报告。
+/// 隔离 handler compile probe 的纯数据报告。
+///
+/// Diagnostic-only: `compiled_type_shape` 只证明无状态占位类型可编译；它不证明
+/// `GlobalDispatch`、`Dispatch`、delegate 宏或 runtime global 已建立。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SmithayLinuxHandlerProbeReport {
     /// 当前 probe 的完成范围。
@@ -134,7 +137,7 @@ pub enum SmithayLinuxHandlerRequirement {
     CoreAdmissionMapping,
 }
 
-/// Phase 49D requirement matrix 中单项要求的保守状态。
+/// Handler requirement matrix 中单项要求的保守状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SmithayLinuxHandlerRequirementState {
     /// 必需 trait 或 handler 尚未实现。
@@ -143,7 +146,7 @@ pub enum SmithayLinuxHandlerRequirementState {
     /// 当前 skeleton policy 或 activation gate 阻止该能力。
     Blocked,
 
-    /// 为未来尚未进入审计的 requirement 保留。
+    /// 为尚未进入审计的 requirement 保留。
     NotAttempted,
 }
 
@@ -183,7 +186,7 @@ pub enum SmithayLinuxHandlerRequirementEvidence {
     /// 常规 Smithay handler 集成路径会需要 delegate 宏。
     WouldRequireDelegateMacro,
 
-    /// Phase 48 activation gate 阻止该要求进入生产路径。
+    /// Adapter activation gate 阻止该要求进入生产路径。
     BlockedByActivationGate,
 
     /// skeleton-only policy 阻止该要求进入生产路径。
@@ -209,7 +212,10 @@ pub struct SmithayLinuxHandlerRequirementMatrixItem {
     pub skeleton_only: bool,
 }
 
-/// Phase 49D handler requirement matrix 的纯数据报告。
+/// Handler requirement matrix 的纯数据报告。
+///
+/// Matrix 将 `Missing` 与 `Blocked` 分开：前者表示 trait/handler 不存在，后者表示
+/// 即使数据形状存在也不能越过当前安全策略。两者都不等于 runtime readiness。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SmithayLinuxHandlerRequirementMatrixReport {
     /// 按 handler 和 requirement 固定顺序排列的矩阵项。
@@ -221,14 +227,14 @@ pub struct SmithayLinuxHandlerRequirementMatrixReport {
     /// 被能力边界阻止的 requirement 数量。
     pub blocked_count: usize,
 
-    /// 已安全就绪的 requirement 数量；Phase 49D 恒为零。
+    /// 已安全就绪的 requirement 数量；当前保守矩阵恒为零。
     pub ready_count: usize,
 
     /// 当前报告是否仍然只描述结构骨架。
     pub skeleton_only: bool,
 }
 
-/// 返回 Phase 49C handler trait 审计的固定保守报告。
+/// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
         kind: SmithayLinuxHandlerProbeKind::TypeShapeOnly,
@@ -254,7 +260,7 @@ pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     }
 }
 
-/// 返回 Phase 49D handler requirements 和 blocker evidence 的固定矩阵。
+/// 返回 handler requirements 和 blocker evidence 的固定矩阵。
 pub fn smithay_linux_handler_requirement_matrix_report()
 -> SmithayLinuxHandlerRequirementMatrixReport {
     use SmithayLinuxAdapterGlobalHandlerKind as Handler;
