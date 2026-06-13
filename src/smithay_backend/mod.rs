@@ -153,6 +153,8 @@ pub use linux_adapter::{
     SmithayLinuxAdapterProtocolRequestLedgerReport, SmithayLinuxAdapterProtocolRequestObservation,
     SmithayLinuxAdapterProtocolRequestOutcome, SmithayLinuxAdapterPumpOperation,
     SmithayLinuxAdapterPumpResult, SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats,
+    SmithayLinuxAdapterRealGlobalRegistrationBlocker,
+    SmithayLinuxAdapterRealGlobalRegistrationMode, SmithayLinuxAdapterRealGlobalRegistrationReport,
     SmithayLinuxAdapterSkeleton, SmithayLinuxAdapterSnapshot,
     SmithayLinuxAdapterUnsupportedRequestReason,
 };

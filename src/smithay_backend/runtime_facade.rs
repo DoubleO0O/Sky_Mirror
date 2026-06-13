@@ -280,6 +280,31 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前 ledger 是否仍然只属于 skeleton。
         skeleton_only: bool,
     },
+
+    /// Linux adapter 的真实 global registration 可行性仍被明确阻止。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterRealGlobalRegistrationFeasibility {
+        /// 是否已经执行过可行性 attempt。
+        attempted: bool,
+
+        /// 被阻止的 global 数量。
+        blocked_count: usize,
+
+        /// 真实注册成功的 global 数量。
+        real_registered_count: usize,
+
+        /// 真实 global registration 是否已启用。
+        registration_enabled: bool,
+
+        /// 是否接受真实 client。
+        accepts_clients: bool,
+
+        /// 是否分发真实协议事件。
+        dispatches_protocol_events: bool,
+
+        /// 当前报告是否仍然只属于 skeleton 可行性边界。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -395,6 +420,23 @@ impl fmt::Display for BackendRuntimeDiagnostic {
                 formatter,
                 "adapter activation attempt ledger: observed={observed_count}, \
                  blocked={blocked_count}, allowed={allowed_count}, \
+                 skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterRealGlobalRegistrationFeasibility {
+                attempted,
+                blocked_count,
+                real_registered_count,
+                registration_enabled,
+                accepts_clients,
+                dispatches_protocol_events,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter real global registration feasibility: attempted={attempted}, \
+                 blocked={blocked_count}, real_registered={real_registered_count}, \
+                 enabled={registration_enabled}, clients={accepts_clients}, \
+                 protocol_events={dispatches_protocol_events}, \
                  skeleton_only={skeleton_only}"
             ),
         }
@@ -545,6 +587,19 @@ impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
                 blocked_count: snapshot.activation_attempt_ledger.blocked_count,
                 allowed_count: snapshot.activation_attempt_ledger.allowed_count,
                 skeleton_only: snapshot.activation_attempt_ledger.skeleton_only,
+            },
+        );
+        let real_registration = snapshot.real_global_registration_report.as_ref();
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterRealGlobalRegistrationFeasibility {
+                attempted: real_registration.is_some(),
+                blocked_count: real_registration.map_or(0, |report| report.blocked_kinds.len()),
+                real_registered_count: real_registration
+                    .map_or(0, |report| report.real_registered_count),
+                registration_enabled: capabilities.registers_protocol_globals,
+                accepts_clients: capabilities.accepts_clients,
+                dispatches_protocol_events: capabilities.dispatches_protocol_events,
+                skeleton_only: real_registration.map_or(true, |report| report.skeleton_only),
             },
         );
 

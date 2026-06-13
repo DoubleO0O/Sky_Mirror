@@ -191,6 +191,75 @@ pub struct SmithayLinuxAdapterGlobalRegistrationReport {
     pub skeleton_only: bool,
 }
 
+/// Smithay Linux adapter 真实 protocol global 注册的可行性模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterRealGlobalRegistrationMode {
+    /// 尚未执行可行性检查。
+    Disabled,
+
+    /// activation gate 或必要 handler 边界阻止了真实注册。
+    FeasibilityBlocked,
+
+    /// 为未来受控 inert 注册保留；Phase 49A fallback 不会产生该状态。
+    InertRegistrationAttempted,
+
+    /// 为未来受控 inert 注册保留；Phase 49A fallback 不会产生该状态。
+    InertRegistrationSucceeded,
+}
+
+/// 阻止真实 protocol global 注册可行性切片的结构化原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterRealGlobalRegistrationBlocker {
+    /// Phase 48 activation gate 阻止了真实 global registration target。
+    ActivationGateBlocked,
+
+    /// 尚未建立 client bind 所需的 global handler。
+    GlobalBindHandlerUnavailable,
+
+    /// 尚未建立协议请求处理 handler。
+    ProtocolRequestHandlerUnavailable,
+
+    /// 当前 adapter 不支持 surface 请求。
+    SurfaceRequestsUnsupported,
+
+    /// 当前 adapter 不支持真实 client handling。
+    ClientHandlingUnsupported,
+
+    /// 当前 adapter 不支持协议 dispatch。
+    ProtocolDispatchUnsupported,
+
+    /// 当前 adapter 不支持进入核心集成边界。
+    CoreIntegrationUnsupported,
+}
+
+/// Smithay Linux adapter 真实 protocol global 注册可行性报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterRealGlobalRegistrationReport {
+    /// 当前可行性模式。
+    pub mode: SmithayLinuxAdapterRealGlobalRegistrationMode,
+
+    /// 实际进入真实注册调用的 global；blocked fallback 恒为空。
+    pub attempted_kinds: Vec<SmithayLinuxAdapterGlobalKind>,
+
+    /// 实际完成真实注册的 global；blocked fallback 恒为空。
+    pub succeeded_kinds: Vec<SmithayLinuxAdapterGlobalKind>,
+
+    /// 被可行性边界阻止的 global，按计划顺序排列。
+    pub blocked_kinds: Vec<SmithayLinuxAdapterGlobalKind>,
+
+    /// 来自 Phase 48 activation gate 的原始 blocker。
+    pub activation_blockers: Vec<SmithayLinuxAdapterActivationBlocker>,
+
+    /// 更具体的真实 registration 可行性 blocker。
+    pub blockers: Vec<SmithayLinuxAdapterRealGlobalRegistrationBlocker>,
+
+    /// 实际真实注册 global 数量；blocked fallback 恒为零。
+    pub real_registered_count: usize,
+
+    /// 当前报告是否仍然只属于受控 skeleton 可行性边界。
+    pub skeleton_only: bool,
+}
+
 /// Smithay Linux adapter 未来可能观察到的协议请求类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SmithayLinuxAdapterProtocolRequestKind {
@@ -576,6 +645,15 @@ pub enum SmithayLinuxAdapterDiagnostic {
     /// 所有已观察 activation attempt 都被 gate 明确阻止。
     ActivationAttemptsBlocked,
 
+    /// adapter 提供真实 global registration 的受控可行性边界。
+    RealGlobalRegistrationFeasibilityPresent,
+
+    /// 最近一次真实 global registration 可行性检查被明确阻止。
+    RealGlobalRegistrationBlocked,
+
+    /// 真实 global registration 当前未启用。
+    RealGlobalRegistrationNotEnabled,
+
     /// 所有真实能力当前都被明确阻止激活。
     AllRealCapabilitiesBlocked,
 
@@ -673,6 +751,9 @@ pub struct SmithayLinuxAdapterCapabilities {
     /// 是否提供纯数据 activation attempt ledger。
     pub has_activation_attempt_ledger: bool,
 
+    /// 是否提供真实 global registration 的受控可行性边界。
+    pub has_real_global_registration_feasibility: bool,
+
     /// 是否提供显式 event pump 边界。
     pub has_event_pump_boundary: bool,
 
@@ -722,6 +803,7 @@ impl SmithayLinuxAdapterCapabilities {
             has_adapter_lifecycle_boundary: true,
             has_activation_gate: true,
             has_activation_attempt_ledger: true,
+            has_real_global_registration_feasibility: true,
             has_event_pump_boundary: true,
             pumps_once: true,
             runs_event_loop: false,
@@ -765,6 +847,9 @@ pub struct SmithayLinuxAdapterSnapshot {
 
     /// adapter 当前 registration skeleton 报告。
     pub global_registration_report: Option<SmithayLinuxAdapterGlobalRegistrationReport>,
+
+    /// adapter 当前真实 global registration 可行性报告。
+    pub real_global_registration_report: Option<SmithayLinuxAdapterRealGlobalRegistrationReport>,
 
     /// adapter 当前 unsupported protocol request ledger。
     pub protocol_request_ledger: SmithayLinuxAdapterProtocolRequestLedgerReport,
@@ -892,6 +977,9 @@ pub struct SmithayLinuxAdapterSkeleton {
     /// 一次性 protocol global registration skeleton ledger。
     global_registration_report: Option<SmithayLinuxAdapterGlobalRegistrationReport>,
 
+    /// 最近一次真实 protocol global registration 可行性报告。
+    real_global_registration_report: Option<SmithayLinuxAdapterRealGlobalRegistrationReport>,
+
     /// 已观察的 unsupported protocol request ledger。
     protocol_request_observations: Vec<SmithayLinuxAdapterProtocolRequestObservation>,
 
@@ -942,6 +1030,7 @@ impl SmithayLinuxAdapterSkeleton {
             pump_stats: SmithayLinuxAdapterPumpStats::empty(),
             last_pump_result: None,
             global_registration_report: None,
+            real_global_registration_report: None,
             protocol_request_observations: Vec::new(),
             next_protocol_request_sequence: 1,
             client_session_observations: Vec::new(),
@@ -980,7 +1069,7 @@ impl SmithayLinuxAdapterSkeleton {
     /// 返回按稳定顺序生成的 adapter 结构化诊断。
     pub fn diagnostics(&self) -> Vec<SmithayLinuxAdapterDiagnostic> {
         let capabilities = self.capabilities();
-        let mut diagnostics = Vec::with_capacity(33);
+        let mut diagnostics = Vec::with_capacity(36);
 
         if capabilities.is_skeleton_only {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::SkeletonOnly);
@@ -1002,6 +1091,14 @@ impl SmithayLinuxAdapterSkeleton {
             if !self.activation_attempt_observations.is_empty() {
                 diagnostics.push(SmithayLinuxAdapterDiagnostic::ActivationAttemptsBlocked);
             }
+        }
+        if capabilities.has_real_global_registration_feasibility {
+            diagnostics
+                .push(SmithayLinuxAdapterDiagnostic::RealGlobalRegistrationFeasibilityPresent);
+            if self.real_global_registration_report.is_some() {
+                diagnostics.push(SmithayLinuxAdapterDiagnostic::RealGlobalRegistrationBlocked);
+            }
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::RealGlobalRegistrationNotEnabled);
         }
         if capabilities.has_activation_gate {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::AllRealCapabilitiesBlocked);
@@ -1134,6 +1231,13 @@ impl SmithayLinuxAdapterSkeleton {
         &self,
     ) -> Option<SmithayLinuxAdapterGlobalRegistrationReport> {
         self.global_registration_report.clone()
+    }
+
+    /// 返回最近一次真实 protocol global registration 可行性报告。
+    pub fn real_global_registration_report(
+        &self,
+    ) -> Option<SmithayLinuxAdapterRealGlobalRegistrationReport> {
+        self.real_global_registration_report.clone()
     }
 
     /// 把协议请求记录为明确拒绝的 inert ledger observation。
@@ -1270,6 +1374,33 @@ impl SmithayLinuxAdapterSkeleton {
         }
     }
 
+    /// 通过 activation gate 执行一次真实 global registration 可行性检查。
+    ///
+    /// Phase 49A fallback 只记录 blocked attempt 和纯数据报告，不访问 Display
+    /// handle，也不执行任何真实 protocol global 注册。
+    pub fn attempt_real_global_registration_feasibility(
+        &mut self,
+    ) -> SmithayLinuxAdapterRealGlobalRegistrationReport {
+        let activation_attempt = self
+            .attempt_activate(SmithayLinuxAdapterActivationTarget::RealProtocolGlobalRegistration);
+        let SmithayLinuxAdapterActivationAttemptOutcome::Blocked {
+            blockers: activation_blockers,
+        } = activation_attempt.outcome;
+        let report = SmithayLinuxAdapterRealGlobalRegistrationReport {
+            mode: SmithayLinuxAdapterRealGlobalRegistrationMode::FeasibilityBlocked,
+            attempted_kinds: Vec::new(),
+            succeeded_kinds: Vec::new(),
+            blocked_kinds: PROTOCOL_GLOBAL_PLAN.iter().map(|plan| plan.kind).collect(),
+            activation_blockers,
+            blockers: real_global_registration_blockers(),
+            real_registered_count: 0,
+            skeleton_only: true,
+        };
+        self.real_global_registration_report = Some(report.clone());
+
+        report
+    }
+
     /// 返回 adapter 当前状态的纯数据只读快照。
     pub fn snapshot(&self) -> SmithayLinuxAdapterSnapshot {
         SmithayLinuxAdapterSnapshot {
@@ -1281,6 +1412,7 @@ impl SmithayLinuxAdapterSkeleton {
             client_session_ledger: self.client_session_ledger_report(),
             global_plan: self.global_plan_report(),
             global_registration_report: self.global_registration_report(),
+            real_global_registration_report: self.real_global_registration_report(),
             protocol_request_ledger: self.protocol_request_ledger_report(),
             pump_stats: self.pump_stats,
             last_pump_result: self.last_pump_result,
@@ -1465,6 +1597,20 @@ fn activation_blockers_for(
     }
 }
 
+fn real_global_registration_blockers() -> Vec<SmithayLinuxAdapterRealGlobalRegistrationBlocker> {
+    use SmithayLinuxAdapterRealGlobalRegistrationBlocker as Blocker;
+
+    vec![
+        Blocker::ActivationGateBlocked,
+        Blocker::GlobalBindHandlerUnavailable,
+        Blocker::ProtocolRequestHandlerUnavailable,
+        Blocker::SurfaceRequestsUnsupported,
+        Blocker::ClientHandlingUnsupported,
+        Blocker::ProtocolDispatchUnsupported,
+        Blocker::CoreIntegrationUnsupported,
+    ]
+}
+
 fn resource_initialization_error(source: Box<dyn Error>) -> SmithayLinuxAdapterError {
     SmithayLinuxAdapterError::ResourceInitialization {
         source: Box::new(std::io::Error::other(source.to_string())),
@@ -1485,7 +1631,8 @@ mod tests {
         SmithayLinuxAdapterOperation, SmithayLinuxAdapterProtocolRequestKind,
         SmithayLinuxAdapterProtocolRequestLedgerReport, SmithayLinuxAdapterProtocolRequestOutcome,
         SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpState,
-        SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
+        SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterRealGlobalRegistrationBlocker,
+        SmithayLinuxAdapterRealGlobalRegistrationMode, SmithayLinuxAdapterSkeleton,
         SmithayLinuxAdapterUnsupportedRequestReason,
     };
     use crate::smithay_backend::{
@@ -1518,6 +1665,7 @@ mod tests {
         assert_eq!(adapter.socket_name_string(), socket_name);
         assert_eq!(adapter.last_pump_result(), None);
         assert_eq!(adapter.global_registration_report(), None);
+        assert_eq!(adapter.real_global_registration_report(), None);
         assert_eq!(
             adapter.activation_attempt_ledger_report(),
             SmithayLinuxAdapterActivationAttemptLedgerReport {
@@ -1563,6 +1711,8 @@ mod tests {
             SmithayLinuxAdapterDiagnostic::EventPumpBoundaryPresent,
             SmithayLinuxAdapterDiagnostic::ActivationGatePresent,
             SmithayLinuxAdapterDiagnostic::ActivationAttemptLedgerPresent,
+            SmithayLinuxAdapterDiagnostic::RealGlobalRegistrationFeasibilityPresent,
+            SmithayLinuxAdapterDiagnostic::RealGlobalRegistrationNotEnabled,
             SmithayLinuxAdapterDiagnostic::AllRealCapabilitiesBlocked,
             SmithayLinuxAdapterDiagnostic::RealEventLoopBlocked,
             SmithayLinuxAdapterDiagnostic::RealClientAcceptBlocked,
@@ -1619,6 +1769,7 @@ mod tests {
         assert_eq!(first.global_plan.registered_count, 0);
         assert!(first.global_plan.skeleton_only);
         assert_eq!(first.global_registration_report, None);
+        assert_eq!(first.real_global_registration_report, None);
         assert_eq!(first.client_session_ledger.observed_count, 0);
         assert_eq!(first.client_session_ledger.rejected_unsupported_count, 0);
         assert!(first.client_session_ledger.observations.is_empty());
@@ -2317,6 +2468,180 @@ mod tests {
     }
 
     #[test]
+    fn guarded_real_global_registration_feasibility_is_blocked_without_side_effects() {
+        assert_runtime_dir();
+
+        use SmithayLinuxAdapterActivationBlocker as ActivationBlocker;
+        use SmithayLinuxAdapterGlobalKind as GlobalKind;
+        use SmithayLinuxAdapterRealGlobalRegistrationBlocker as FeasibilityBlocker;
+
+        let socket_name = unique_socket_name("adapter-real-global-feasibility");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        adapter
+            .register_planned_globals_skeleton()
+            .expect("registration skeleton 必须能够建立");
+        adapter.start_pump().expect("NotStarted 必须允许启动 pump");
+        let last_result = adapter
+            .pump_once()
+            .expect("Ready 必须允许一次 skeleton tick");
+        adapter.observe_unsupported_protocol_request(
+            SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface,
+        );
+        adapter.observe_unsupported_client_session();
+
+        let lifecycle = adapter.lifecycle();
+        let pump_state = adapter.pump_state();
+        let pump_stats = adapter.pump_stats();
+        let registration_report = adapter.global_registration_report();
+        let global_plan = adapter.global_plan_report();
+        let protocol_request_ledger = adapter.protocol_request_ledger_report();
+        let client_session_ledger = adapter.client_session_ledger_report();
+        let gate_report = adapter.activation_report_for(
+            SmithayLinuxAdapterActivationTarget::RealProtocolGlobalRegistration,
+        );
+        let ledger_before = adapter.activation_attempt_ledger_report();
+
+        let report = adapter.attempt_real_global_registration_feasibility();
+
+        assert_eq!(
+            report.mode,
+            SmithayLinuxAdapterRealGlobalRegistrationMode::FeasibilityBlocked
+        );
+        assert!(report.attempted_kinds.is_empty());
+        assert!(report.succeeded_kinds.is_empty());
+        assert_eq!(
+            report.blocked_kinds,
+            vec![
+                GlobalKind::Compositor,
+                GlobalKind::Shm,
+                GlobalKind::XdgWmBase,
+            ]
+        );
+        assert_eq!(report.activation_blockers, gate_report.blockers);
+        assert_eq!(
+            report.activation_blockers,
+            vec![
+                ActivationBlocker::SkeletonOnly,
+                ActivationBlocker::ProtocolGlobalRegistrationUnsupported,
+                ActivationBlocker::MissingProtocolGlobalImplementation,
+            ]
+        );
+        assert_eq!(
+            report.blockers,
+            vec![
+                FeasibilityBlocker::ActivationGateBlocked,
+                FeasibilityBlocker::GlobalBindHandlerUnavailable,
+                FeasibilityBlocker::ProtocolRequestHandlerUnavailable,
+                FeasibilityBlocker::SurfaceRequestsUnsupported,
+                FeasibilityBlocker::ClientHandlingUnsupported,
+                FeasibilityBlocker::ProtocolDispatchUnsupported,
+                FeasibilityBlocker::CoreIntegrationUnsupported,
+            ]
+        );
+        assert!(!report.blockers.is_empty());
+        assert_eq!(report.real_registered_count, 0);
+        assert!(report.skeleton_only);
+        assert_eq!(
+            adapter.real_global_registration_report(),
+            Some(report.clone())
+        );
+        assert!(
+            !adapter
+                .can_activate(SmithayLinuxAdapterActivationTarget::RealProtocolGlobalRegistration)
+        );
+
+        let ledger = adapter.activation_attempt_ledger_report();
+        assert_eq!(ledger.observed_count, ledger_before.observed_count + 1);
+        assert_eq!(ledger.blocked_count, ledger_before.blocked_count + 1);
+        assert_eq!(ledger.allowed_count, 0);
+        let observation = ledger
+            .observations
+            .last()
+            .expect("feasibility attempt 必须写入 activation ledger");
+        assert_eq!(
+            observation.target,
+            SmithayLinuxAdapterActivationTarget::RealProtocolGlobalRegistration
+        );
+        assert_eq!(
+            observation.decision,
+            SmithayLinuxAdapterActivationDecision::Blocked
+        );
+        assert_eq!(
+            observation.outcome,
+            SmithayLinuxAdapterActivationAttemptOutcome::Blocked {
+                blockers: report.activation_blockers.clone(),
+            }
+        );
+
+        assert_eq!(adapter.lifecycle(), lifecycle);
+        assert_eq!(adapter.pump_state(), pump_state);
+        assert_eq!(adapter.pump_stats(), pump_stats);
+        assert_eq!(adapter.last_pump_result(), Some(last_result));
+        assert_eq!(adapter.global_registration_report(), registration_report);
+        assert_eq!(adapter.global_plan_report(), global_plan);
+        assert_eq!(
+            adapter.protocol_request_ledger_report(),
+            protocol_request_ledger
+        );
+        assert_eq!(
+            adapter.client_session_ledger_report(),
+            client_session_ledger
+        );
+
+        let snapshot = adapter.snapshot();
+        assert_eq!(
+            snapshot.real_global_registration_report,
+            Some(report.clone())
+        );
+        assert_eq!(snapshot.activation_attempt_ledger, ledger);
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::RealGlobalRegistrationFeasibilityPresent)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::RealGlobalRegistrationBlocked)
+        );
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::RealGlobalRegistrationNotEnabled)
+        );
+
+        let runtime_report = BackendRuntimeReport::from(&adapter);
+        assert_eq!(
+            runtime_report.bootstrap_mode,
+            BackendBootstrapMode::ProbeOnly
+        );
+        assert!(!runtime_report.capabilities.supports_real_wayland_surfaces);
+        assert!(!runtime_report.capabilities.supports_gpu_rendering);
+        assert!(runtime_report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterEventPumpSkeleton {
+                accepts_clients: false,
+                dispatches_protocol_events: false,
+                registers_protocol_globals: false,
+                ..
+            }
+        )));
+        assert!(runtime_report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterRealGlobalRegistrationFeasibility {
+                attempted: true,
+                blocked_count: 3,
+                real_registered_count: 0,
+                registration_enabled: false,
+                accepts_clients: false,
+                dispatches_protocol_events: false,
+                skeleton_only: true,
+            }
+        )));
+    }
+
+    #[test]
     fn adapter_skeleton_capabilities_remain_conservative() {
         assert_runtime_dir();
 
@@ -2330,6 +2655,7 @@ mod tests {
         assert!(capabilities.has_adapter_lifecycle_boundary);
         assert!(capabilities.has_activation_gate);
         assert!(capabilities.has_activation_attempt_ledger);
+        assert!(capabilities.has_real_global_registration_feasibility);
         assert!(capabilities.has_event_pump_boundary);
         assert!(capabilities.pumps_once);
         assert!(!capabilities.runs_event_loop);
@@ -2689,6 +3015,18 @@ mod tests {
                 observed_count: 0,
                 blocked_count: 0,
                 allowed_count: 0,
+                skeleton_only: true,
+            }
+        )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterRealGlobalRegistrationFeasibility {
+                attempted: false,
+                blocked_count: 0,
+                real_registered_count: 0,
+                registration_enabled: false,
+                accepts_clients: false,
+                dispatches_protocol_events: false,
                 skeleton_only: true,
             }
         )));
