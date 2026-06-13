@@ -204,6 +204,19 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前 registration 状态是否仍然只属于 skeleton。
         skeleton_only: bool,
     },
+
+    /// Linux adapter 只记录被拒绝的 inert protocol request observations。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterInertProtocolRequestLedger {
+        /// 已观察请求数量。
+        observed_count: usize,
+
+        /// 被明确拒绝为 unsupported 的请求数量。
+        rejected_unsupported_count: usize,
+
+        /// 当前 ledger 是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -265,6 +278,17 @@ impl fmt::Display for BackendRuntimeDiagnostic {
                 "adapter protocol global registration skeleton: attempted={attempted}, \
                  skeleton_registered={skeleton_registered_count}, \
                  real_registered={real_registered_count}, skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterInertProtocolRequestLedger {
+                observed_count,
+                rejected_unsupported_count,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter inert protocol request ledger: observed={observed_count}, \
+                 rejected_unsupported={rejected_unsupported_count}, \
+                 skeleton_only={skeleton_only}"
             ),
         }
     }
@@ -374,6 +398,15 @@ impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
                 real_registered_count: registration
                     .map_or(0, |report| report.real_registered_count),
                 skeleton_only: registration.map_or(true, |report| report.skeleton_only),
+            },
+        );
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterInertProtocolRequestLedger {
+                observed_count: snapshot.protocol_request_ledger.observed_count,
+                rejected_unsupported_count: snapshot
+                    .protocol_request_ledger
+                    .rejected_unsupported_count,
+                skeleton_only: snapshot.protocol_request_ledger.skeleton_only,
             },
         );
 

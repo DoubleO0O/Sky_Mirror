@@ -191,6 +191,92 @@ pub struct SmithayLinuxAdapterGlobalRegistrationReport {
     pub skeleton_only: bool,
 }
 
+/// Smithay Linux adapter 未来可能观察到的协议请求类别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterProtocolRequestKind {
+    /// 未来 compositor surface 创建请求的纯数据标识。
+    CompositorCreateSurface,
+
+    /// 未来 compositor region 创建请求的纯数据标识。
+    CompositorCreateRegion,
+
+    /// 未来 shared-memory pool 创建请求的纯数据标识。
+    ShmCreatePool,
+
+    /// 未来 XDG positioner 创建请求的纯数据标识。
+    XdgWmBaseCreatePositioner,
+
+    /// 未来 XDG surface 获取请求的纯数据标识。
+    XdgWmBaseGetXdgSurface,
+
+    /// 未来 XDG ping 回复请求的纯数据标识。
+    XdgWmBasePong,
+}
+
+/// Smithay Linux adapter 拒绝协议请求的结构化原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SmithayLinuxAdapterUnsupportedRequestReason {
+    /// 当前 adapter 仍然只提供 skeleton。
+    SkeletonOnly,
+
+    /// 当前 adapter 不支持协议 request dispatch。
+    ProtocolDispatchUnsupported,
+
+    /// 当前 adapter 不支持真实 surface。
+    RealSurfaceUnsupported,
+
+    /// 当前 adapter 不支持 XDG toplevel。
+    XdgToplevelUnsupported,
+
+    /// 当前 adapter 不支持客户端处理。
+    ClientHandlingUnsupported,
+
+    /// 当前 adapter 不支持进入核心接纳流程。
+    CoreAdmissionUnsupported,
+}
+
+/// Smithay Linux adapter 对协议请求的保守结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxAdapterProtocolRequestOutcome {
+    /// 请求被明确拒绝，不会被静默忽略或伪装为成功。
+    RejectedUnsupported {
+        /// 拒绝该请求的固定结构化原因。
+        reason: SmithayLinuxAdapterUnsupportedRequestReason,
+    },
+}
+
+/// 单次 unsupported protocol request observation。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterProtocolRequestObservation {
+    /// 从 1 开始递增的稳定 ledger 序号。
+    pub sequence: u64,
+
+    /// 被观察到的纯数据请求类别。
+    pub kind: SmithayLinuxAdapterProtocolRequestKind,
+
+    /// 当前阶段恒为明确拒绝的结果。
+    pub outcome: SmithayLinuxAdapterProtocolRequestOutcome,
+
+    /// 当前 observation 是否严格属于 skeleton。
+    pub skeleton_only: bool,
+}
+
+/// Smithay Linux adapter unsupported protocol request ledger 报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxAdapterProtocolRequestLedgerReport {
+    /// 已观察请求数量。
+    pub observed_count: usize,
+
+    /// 被明确拒绝为 unsupported 的请求数量。
+    pub rejected_unsupported_count: usize,
+
+    /// 按 observation 顺序保存的纯数据 ledger。
+    pub observations: Vec<SmithayLinuxAdapterProtocolRequestObservation>,
+
+    /// 当前 ledger 是否严格属于 skeleton。
+    pub skeleton_only: bool,
+}
+
 const PROTOCOL_GLOBAL_PLAN: [SmithayLinuxAdapterGlobalPlan; 3] = [
     SmithayLinuxAdapterGlobalPlan {
         kind: SmithayLinuxAdapterGlobalKind::Compositor,
@@ -238,6 +324,12 @@ pub enum SmithayLinuxAdapterDiagnostic {
 
     /// adapter 未分发协议事件。
     ProtocolEventsNotDispatched,
+
+    /// adapter 提供 inert protocol request ledger。
+    InertProtocolRequestLedgerPresent,
+
+    /// 所有已观察协议请求都被明确拒绝为 unsupported。
+    ProtocolRequestsRejectedUnsupported,
 
     /// adapter 提供 protocol global 计划边界。
     ProtocolGlobalPlanPresent,
@@ -303,6 +395,9 @@ pub struct SmithayLinuxAdapterCapabilities {
     /// 是否提供 protocol global registration skeleton 边界。
     pub has_protocol_global_registration_boundary: bool,
 
+    /// 是否提供 inert protocol request ledger。
+    pub has_inert_protocol_request_ledger: bool,
+
     /// 是否注册协议对象。
     pub registers_protocol_globals: bool,
 
@@ -332,6 +427,7 @@ impl SmithayLinuxAdapterCapabilities {
             accepts_clients: false,
             has_protocol_global_plan_boundary: true,
             has_protocol_global_registration_boundary: true,
+            has_inert_protocol_request_ledger: true,
             registers_protocol_globals: false,
             dispatches_protocol_events: false,
             supports_real_wayland_surfaces: false,
@@ -358,6 +454,9 @@ pub struct SmithayLinuxAdapterSnapshot {
 
     /// adapter 当前 registration skeleton 报告。
     pub global_registration_report: Option<SmithayLinuxAdapterGlobalRegistrationReport>,
+
+    /// adapter 当前 unsupported protocol request ledger。
+    pub protocol_request_ledger: SmithayLinuxAdapterProtocolRequestLedgerReport,
 
     /// event pump 当前累计统计。
     pub pump_stats: SmithayLinuxAdapterPumpStats,
@@ -481,6 +580,12 @@ pub struct SmithayLinuxAdapterSkeleton {
 
     /// 一次性 protocol global registration skeleton ledger。
     global_registration_report: Option<SmithayLinuxAdapterGlobalRegistrationReport>,
+
+    /// 已观察的 unsupported protocol request ledger。
+    protocol_request_observations: Vec<SmithayLinuxAdapterProtocolRequestObservation>,
+
+    /// 下一个 protocol request observation 序号。
+    next_protocol_request_sequence: u64,
 }
 
 impl SmithayLinuxAdapterSkeleton {
@@ -511,6 +616,8 @@ impl SmithayLinuxAdapterSkeleton {
             pump_stats: SmithayLinuxAdapterPumpStats::empty(),
             last_pump_result: None,
             global_registration_report: None,
+            protocol_request_observations: Vec::new(),
+            next_protocol_request_sequence: 1,
         }
     }
 
@@ -542,7 +649,7 @@ impl SmithayLinuxAdapterSkeleton {
     /// 返回按稳定顺序生成的 adapter 结构化诊断。
     pub fn diagnostics(&self) -> Vec<SmithayLinuxAdapterDiagnostic> {
         let capabilities = self.capabilities();
-        let mut diagnostics = Vec::with_capacity(18);
+        let mut diagnostics = Vec::with_capacity(20);
 
         if capabilities.is_skeleton_only {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::SkeletonOnly);
@@ -564,6 +671,13 @@ impl SmithayLinuxAdapterSkeleton {
         }
         if !capabilities.dispatches_protocol_events {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched);
+        }
+        if capabilities.has_inert_protocol_request_ledger {
+            diagnostics.push(SmithayLinuxAdapterDiagnostic::InertProtocolRequestLedgerPresent);
+            if !self.protocol_request_observations.is_empty() {
+                diagnostics
+                    .push(SmithayLinuxAdapterDiagnostic::ProtocolRequestsRejectedUnsupported);
+            }
         }
         if capabilities.has_protocol_global_plan_boundary {
             diagnostics.push(SmithayLinuxAdapterDiagnostic::ProtocolGlobalPlanPresent);
@@ -666,6 +780,36 @@ impl SmithayLinuxAdapterSkeleton {
         self.global_registration_report.clone()
     }
 
+    /// 把协议请求记录为明确拒绝的 inert ledger observation。
+    pub fn observe_unsupported_protocol_request(
+        &mut self,
+        kind: SmithayLinuxAdapterProtocolRequestKind,
+    ) -> SmithayLinuxAdapterProtocolRequestObservation {
+        let observation = SmithayLinuxAdapterProtocolRequestObservation {
+            sequence: self.next_protocol_request_sequence,
+            kind,
+            outcome: SmithayLinuxAdapterProtocolRequestOutcome::RejectedUnsupported {
+                reason: unsupported_request_reason(kind),
+            },
+            skeleton_only: true,
+        };
+
+        self.next_protocol_request_sequence = self.next_protocol_request_sequence.saturating_add(1);
+        self.protocol_request_observations.push(observation);
+
+        observation
+    }
+
+    /// 返回当前 unsupported protocol request ledger 的纯数据报告。
+    pub fn protocol_request_ledger_report(&self) -> SmithayLinuxAdapterProtocolRequestLedgerReport {
+        SmithayLinuxAdapterProtocolRequestLedgerReport {
+            observed_count: self.protocol_request_observations.len(),
+            rejected_unsupported_count: self.protocol_request_observations.len(),
+            observations: self.protocol_request_observations.clone(),
+            skeleton_only: true,
+        }
+    }
+
     /// 返回 adapter 当前状态的纯数据只读快照。
     pub fn snapshot(&self) -> SmithayLinuxAdapterSnapshot {
         SmithayLinuxAdapterSnapshot {
@@ -674,6 +818,7 @@ impl SmithayLinuxAdapterSkeleton {
             capabilities: self.capabilities(),
             global_plan: self.global_plan_report(),
             global_registration_report: self.global_registration_report(),
+            protocol_request_ledger: self.protocol_request_ledger_report(),
             pump_stats: self.pump_stats,
             last_pump_result: self.last_pump_result,
             diagnostics: self.diagnostics(),
@@ -797,6 +942,23 @@ impl SmithayLinuxAdapterSkeleton {
     }
 }
 
+fn unsupported_request_reason(
+    kind: SmithayLinuxAdapterProtocolRequestKind,
+) -> SmithayLinuxAdapterUnsupportedRequestReason {
+    match kind {
+        SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface
+        | SmithayLinuxAdapterProtocolRequestKind::XdgWmBaseGetXdgSurface => {
+            SmithayLinuxAdapterUnsupportedRequestReason::RealSurfaceUnsupported
+        }
+        SmithayLinuxAdapterProtocolRequestKind::CompositorCreateRegion
+        | SmithayLinuxAdapterProtocolRequestKind::ShmCreatePool
+        | SmithayLinuxAdapterProtocolRequestKind::XdgWmBaseCreatePositioner
+        | SmithayLinuxAdapterProtocolRequestKind::XdgWmBasePong => {
+            SmithayLinuxAdapterUnsupportedRequestReason::ProtocolDispatchUnsupported
+        }
+    }
+}
+
 fn resource_initialization_error(source: Box<dyn Error>) -> SmithayLinuxAdapterError {
     SmithayLinuxAdapterError::ResourceInitialization {
         source: Box::new(std::io::Error::other(source.to_string())),
@@ -809,8 +971,11 @@ mod tests {
         SmithayLinuxAdapterDiagnostic, SmithayLinuxAdapterError, SmithayLinuxAdapterGlobalKind,
         SmithayLinuxAdapterGlobalPlan, SmithayLinuxAdapterGlobalRegistrationOperation,
         SmithayLinuxAdapterGlobalRegistrationState, SmithayLinuxAdapterLifecycle,
-        SmithayLinuxAdapterOperation, SmithayLinuxAdapterPumpOperation,
-        SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
+        SmithayLinuxAdapterOperation, SmithayLinuxAdapterProtocolRequestKind,
+        SmithayLinuxAdapterProtocolRequestLedgerReport, SmithayLinuxAdapterProtocolRequestOutcome,
+        SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpState,
+        SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton,
+        SmithayLinuxAdapterUnsupportedRequestReason,
     };
     use crate::smithay_backend::{
         runtime_facade::{BackendBootstrapMode, BackendRuntimeDiagnostic, BackendRuntimeReport},
@@ -842,6 +1007,15 @@ mod tests {
         assert_eq!(adapter.socket_name_string(), socket_name);
         assert_eq!(adapter.last_pump_result(), None);
         assert_eq!(adapter.global_registration_report(), None);
+        assert_eq!(
+            adapter.protocol_request_ledger_report(),
+            SmithayLinuxAdapterProtocolRequestLedgerReport {
+                observed_count: 0,
+                rejected_unsupported_count: 0,
+                observations: Vec::new(),
+                skeleton_only: true,
+            }
+        );
         assert!(adapter.is_skeleton_only());
     }
 
@@ -860,6 +1034,7 @@ mod tests {
             SmithayLinuxAdapterDiagnostic::EventLoopNotRunning,
             SmithayLinuxAdapterDiagnostic::ClientsNotAccepted,
             SmithayLinuxAdapterDiagnostic::ProtocolEventsNotDispatched,
+            SmithayLinuxAdapterDiagnostic::InertProtocolRequestLedgerPresent,
             SmithayLinuxAdapterDiagnostic::ProtocolGlobalPlanPresent,
             SmithayLinuxAdapterDiagnostic::ProtocolGlobalsPlannedOnly,
             SmithayLinuxAdapterDiagnostic::ProtocolGlobalRegistrationBoundaryPresent,
@@ -895,6 +1070,10 @@ mod tests {
         assert_eq!(first.global_plan.registered_count, 0);
         assert!(first.global_plan.skeleton_only);
         assert_eq!(first.global_registration_report, None);
+        assert_eq!(first.protocol_request_ledger.observed_count, 0);
+        assert_eq!(first.protocol_request_ledger.rejected_unsupported_count, 0);
+        assert!(first.protocol_request_ledger.observations.is_empty());
+        assert!(first.protocol_request_ledger.skeleton_only);
         assert_eq!(first.socket_name, socket_name);
         assert!(first.is_skeleton_only);
         assert_eq!(adapter.pump_stats(), stats_before);
@@ -1074,6 +1253,113 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_protocol_request_reason_mapping_is_fixed() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-request-reasons");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        let expected = [
+            (
+                SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface,
+                SmithayLinuxAdapterUnsupportedRequestReason::RealSurfaceUnsupported,
+            ),
+            (
+                SmithayLinuxAdapterProtocolRequestKind::CompositorCreateRegion,
+                SmithayLinuxAdapterUnsupportedRequestReason::ProtocolDispatchUnsupported,
+            ),
+            (
+                SmithayLinuxAdapterProtocolRequestKind::ShmCreatePool,
+                SmithayLinuxAdapterUnsupportedRequestReason::ProtocolDispatchUnsupported,
+            ),
+            (
+                SmithayLinuxAdapterProtocolRequestKind::XdgWmBaseCreatePositioner,
+                SmithayLinuxAdapterUnsupportedRequestReason::ProtocolDispatchUnsupported,
+            ),
+            (
+                SmithayLinuxAdapterProtocolRequestKind::XdgWmBaseGetXdgSurface,
+                SmithayLinuxAdapterUnsupportedRequestReason::RealSurfaceUnsupported,
+            ),
+            (
+                SmithayLinuxAdapterProtocolRequestKind::XdgWmBasePong,
+                SmithayLinuxAdapterUnsupportedRequestReason::ProtocolDispatchUnsupported,
+            ),
+        ];
+
+        for (index, (kind, reason)) in expected.into_iter().enumerate() {
+            let observation = adapter.observe_unsupported_protocol_request(kind);
+
+            assert_eq!(observation.sequence, index as u64 + 1);
+            assert_eq!(observation.kind, kind);
+            assert_eq!(
+                observation.outcome,
+                SmithayLinuxAdapterProtocolRequestOutcome::RejectedUnsupported { reason }
+            );
+            assert!(observation.skeleton_only);
+        }
+
+        let report = adapter.protocol_request_ledger_report();
+        assert_eq!(report.observed_count, expected.len());
+        assert_eq!(report.rejected_unsupported_count, expected.len());
+        assert!(report.skeleton_only);
+        assert!(report.observations.iter().all(|observation| matches!(
+            observation.outcome,
+            SmithayLinuxAdapterProtocolRequestOutcome::RejectedUnsupported { .. }
+        )));
+    }
+
+    #[test]
+    fn unsupported_protocol_request_ledger_preserves_adapter_state() {
+        assert_runtime_dir();
+
+        let socket_name = unique_socket_name("adapter-request-ledger-state");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("adapter skeleton 必须能够构造");
+        adapter
+            .register_planned_globals_skeleton()
+            .expect("registration skeleton 必须能够建立");
+        adapter.start_pump().expect("NotStarted 必须允许启动 pump");
+        let last_result = adapter
+            .pump_once()
+            .expect("Ready 必须允许一次 skeleton tick");
+
+        let lifecycle = adapter.lifecycle();
+        let pump_state = adapter.pump_state();
+        let pump_stats = adapter.pump_stats();
+        let registration_report = adapter.global_registration_report();
+        let global_plan = adapter.global_plan_report();
+
+        let first = adapter.observe_unsupported_protocol_request(
+            SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface,
+        );
+        let second = adapter.observe_unsupported_protocol_request(
+            SmithayLinuxAdapterProtocolRequestKind::ShmCreatePool,
+        );
+
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 2);
+        assert_eq!(adapter.lifecycle(), lifecycle);
+        assert_eq!(adapter.pump_state(), pump_state);
+        assert_eq!(adapter.pump_stats(), pump_stats);
+        assert_eq!(adapter.last_pump_result(), Some(last_result));
+        assert_eq!(adapter.global_registration_report(), registration_report);
+        assert_eq!(adapter.global_plan_report(), global_plan);
+
+        let report = adapter.protocol_request_ledger_report();
+        assert_eq!(report.observations, vec![first, second]);
+        assert_eq!(report.observed_count, 2);
+        assert_eq!(report.rejected_unsupported_count, 2);
+
+        let snapshot = adapter.snapshot();
+        assert_eq!(snapshot.protocol_request_ledger, report);
+        assert!(
+            snapshot
+                .diagnostics
+                .contains(&SmithayLinuxAdapterDiagnostic::ProtocolRequestsRejectedUnsupported)
+        );
+    }
+
+    #[test]
     fn adapter_skeleton_capabilities_remain_conservative() {
         assert_runtime_dir();
 
@@ -1091,6 +1377,7 @@ mod tests {
         assert!(!capabilities.accepts_clients);
         assert!(capabilities.has_protocol_global_plan_boundary);
         assert!(capabilities.has_protocol_global_registration_boundary);
+        assert!(capabilities.has_inert_protocol_request_ledger);
         assert!(!capabilities.registers_protocol_globals);
         assert!(!capabilities.dispatches_protocol_events);
         assert!(!capabilities.supports_real_wayland_surfaces);
@@ -1407,6 +1694,14 @@ mod tests {
         )));
         assert!(report.has_diagnostic(|diagnostic| matches!(
             diagnostic,
+            BackendRuntimeDiagnostic::AdapterInertProtocolRequestLedger {
+                observed_count: 0,
+                rejected_unsupported_count: 0,
+                skeleton_only: true,
+            }
+        )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
             BackendRuntimeDiagnostic::AdapterProtocolGlobalRegistrationSkeleton {
                 attempted: false,
                 skeleton_registered_count: 0,
@@ -1426,6 +1721,9 @@ mod tests {
         adapter
             .register_planned_globals_skeleton()
             .expect("首次 registration skeleton 必须成功");
+        adapter.observe_unsupported_protocol_request(
+            SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface,
+        );
         let report = BackendRuntimeReport::from(&adapter);
 
         assert_eq!(report.bootstrap_mode, BackendBootstrapMode::ProbeOnly);
@@ -1437,6 +1735,14 @@ mod tests {
                 attempted: true,
                 skeleton_registered_count: 3,
                 real_registered_count: 0,
+                skeleton_only: true,
+            }
+        )));
+        assert!(report.has_diagnostic(|diagnostic| matches!(
+            diagnostic,
+            BackendRuntimeDiagnostic::AdapterInertProtocolRequestLedger {
+                observed_count: 1,
+                rejected_unsupported_count: 1,
                 skeleton_only: true,
             }
         )));

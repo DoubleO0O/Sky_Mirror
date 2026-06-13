@@ -141,9 +141,12 @@ pub use linux_adapter::{
     SmithayLinuxAdapterGlobalKind, SmithayLinuxAdapterGlobalPlan,
     SmithayLinuxAdapterGlobalPlanReport, SmithayLinuxAdapterGlobalRegistrationOperation,
     SmithayLinuxAdapterGlobalRegistrationReport, SmithayLinuxAdapterGlobalRegistrationState,
-    SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation, SmithayLinuxAdapterPumpOperation,
-    SmithayLinuxAdapterPumpResult, SmithayLinuxAdapterPumpState, SmithayLinuxAdapterPumpStats,
-    SmithayLinuxAdapterSkeleton, SmithayLinuxAdapterSnapshot,
+    SmithayLinuxAdapterLifecycle, SmithayLinuxAdapterOperation,
+    SmithayLinuxAdapterProtocolRequestKind, SmithayLinuxAdapterProtocolRequestLedgerReport,
+    SmithayLinuxAdapterProtocolRequestObservation, SmithayLinuxAdapterProtocolRequestOutcome,
+    SmithayLinuxAdapterPumpOperation, SmithayLinuxAdapterPumpResult, SmithayLinuxAdapterPumpState,
+    SmithayLinuxAdapterPumpStats, SmithayLinuxAdapterSkeleton, SmithayLinuxAdapterSnapshot,
+    SmithayLinuxAdapterUnsupportedRequestReason,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
