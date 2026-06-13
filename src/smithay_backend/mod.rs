@@ -59,6 +59,9 @@ pub mod driver;
 /// 真实 Smithay adapter 的 Linux 专属结构骨架。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_adapter;
+/// Smithay handler trait 边界的隔离类型形状探针。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_handler_probe;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
@@ -160,6 +163,12 @@ pub use linux_adapter::{
     SmithayLinuxAdapterRealGlobalRegistrationMode, SmithayLinuxAdapterRealGlobalRegistrationReport,
     SmithayLinuxAdapterSkeleton, SmithayLinuxAdapterSnapshot,
     SmithayLinuxAdapterUnsupportedRequestReason,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_handler_probe::{
+    SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerProbeReport,
+    SmithayLinuxInertHandlerProbe, smithay_linux_handler_probe_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
