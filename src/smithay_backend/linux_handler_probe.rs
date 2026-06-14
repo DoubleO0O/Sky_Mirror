@@ -1389,6 +1389,194 @@ pub struct SmithayLinuxDisplayHandleInternalOwnershipEvidenceReport {
     pub skeleton_only: bool,
 }
 
+/// Planned protocol global 从 skeleton promotion 到真实注册的结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalRegistrationPromotionDecision {
+    /// 当前 promotion 前置条件仍未满足。
+    Blocked,
+}
+
+/// Global registration promotion 审计的稳定目标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalRegistrationPromotionTarget {
+    /// Compositor protocol global。
+    CompositorGlobal,
+
+    /// Shared-memory protocol global。
+    ShmGlobal,
+
+    /// XDG window management base protocol global。
+    XdgWmBaseGlobal,
+}
+
+/// 每个 planned global promotion 前必须满足的稳定条件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalRegistrationPromotionPrecondition {
+    /// Adapter internal ownership 静态证据已建立。
+    DisplayHandleInternalOwnershipProven,
+
+    /// Adapter public API non-exposure 静态证据已建立。
+    DisplayHandlePublicNonExposureProven,
+
+    /// Display handle redaction policy 仍保持保守。
+    DisplayHandleRedactionPolicyPreserved,
+
+    /// Activation gate 允许真实 protocol global 注册。
+    ActivationGateAllowsRealProtocolGlobalRegistration,
+
+    /// `GlobalDispatch` trait 边界已编译。
+    GlobalDispatchTraitBoundaryCompiled,
+
+    /// Protocol request dispatch 边界已定义。
+    DispatchRequestBoundaryDefined,
+
+    /// Handler state 已在内部完成集成。
+    HandlerStateIntegratedInternally,
+
+    /// 三类 planned protocol global 仍保持稳定。
+    ProtocolGlobalPlanStillStable,
+
+    /// 真实 registration call site 已获得授权。
+    RealRegistrationCallSiteAuthorized,
+}
+
+/// Global registration promotion 单项前置条件状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalRegistrationPromotionPreconditionState {
+    /// 静态 planning 证据已满足。
+    Satisfied,
+
+    /// 对应结构边界尚未建立。
+    Missing,
+
+    /// 对应能力被安全策略明确阻止。
+    Blocked,
+}
+
+/// 阻止 planned global promotion 的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalRegistrationPromotionBlocker {
+    /// Activation gate 仍阻止真实 protocol global 注册。
+    ActivationGateBlocked,
+
+    /// `GlobalDispatch` trait 边界尚未编译。
+    GlobalDispatchTraitMissing,
+
+    /// Protocol request dispatch 边界尚未定义。
+    DispatchRequestBoundaryMissing,
+
+    /// Handler state 仍然只有 synthetic 模型。
+    HandlerStateOnlySynthetic,
+
+    /// 真实 registration call site 仍被禁止。
+    RealRegistrationCallForbidden,
+
+    /// 真实 global 创建调用仍被禁止。
+    CreateGlobalForbidden,
+
+    /// 真实 global 注册调用仍被禁止。
+    RegisterGlobalForbidden,
+
+    /// 真实 display handle 读取仍被禁止。
+    DisplayHandleReadForbidden,
+
+    /// Promotion report 禁止接入生产 adapter。
+    AdapterIntegrationForbidden,
+}
+
+/// 单项 global registration promotion 前置条件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxGlobalRegistrationPromotionPreconditionItem {
+    /// 当前稳定前置条件。
+    pub precondition: SmithayLinuxGlobalRegistrationPromotionPrecondition,
+
+    /// 当前前置条件状态。
+    pub state: SmithayLinuxGlobalRegistrationPromotionPreconditionState,
+
+    /// 非 `Satisfied` 状态对应的非空 blocker。
+    pub blockers: Vec<SmithayLinuxGlobalRegistrationPromotionBlocker>,
+
+    /// 当前 item 是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// 单个 planned global 的 promotion 前置条件报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxGlobalRegistrationPromotionTargetReport {
+    /// 当前 planned global 目标。
+    pub target: SmithayLinuxGlobalRegistrationPromotionTarget,
+
+    /// 当前 promotion 决策。
+    pub decision: SmithayLinuxGlobalRegistrationPromotionDecision,
+
+    /// 按稳定顺序排列的 promotion 前置条件。
+    pub preconditions: Vec<SmithayLinuxGlobalRegistrationPromotionPreconditionItem>,
+
+    /// 已满足的前置条件数量。
+    pub satisfied_count: usize,
+
+    /// 尚未建立的前置条件数量。
+    pub missing_count: usize,
+
+    /// 被安全策略明确阻止的前置条件数量。
+    pub blocked_count: usize,
+
+    /// 当前 target 是否允许读取真实 handle。
+    pub can_read_display_handle: bool,
+
+    /// 当前 target 是否允许调用真实 global 创建入口。
+    pub can_call_create_global: bool,
+
+    /// 当前 target 是否允许调用真实 global 注册入口。
+    pub can_call_register_global: bool,
+
+    /// 当前 target 是否允许编译真实 `GlobalDispatch`。
+    pub can_compile_global_dispatch: bool,
+
+    /// 当前 target 是否允许进入 protocol request dispatch。
+    pub can_dispatch_requests: bool,
+
+    /// 当前 target 是否允许接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前 target 是否可以 promotion 到真实注册。
+    pub can_promote_to_real_registration: bool,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// 三类 planned protocol global 的 promotion 前置条件总报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxGlobalRegistrationPromotionReport {
+    /// 按稳定顺序排列的 promotion target。
+    pub targets: Vec<SmithayLinuxGlobalRegistrationPromotionTargetReport>,
+
+    /// 已 promotion 到真实注册的 target 数量。
+    pub promoted_count: usize,
+
+    /// 仍被阻止的 target 数量。
+    pub blocked_count: usize,
+
+    /// 当前报告是否足以满足 skeleton plan 已 promotion 的前置条件。
+    pub can_satisfy_global_registration_plan_promoted_precondition: bool,
+
+    /// 当前报告是否允许读取真实 handle。
+    pub can_read_display_handle: bool,
+
+    /// 当前报告是否允许调用真实 global 创建入口。
+    pub can_call_create_global: bool,
+
+    /// 当前报告是否允许调用真实 global 注册入口。
+    pub can_call_register_global: bool,
+
+    /// 当前报告是否允许接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -2373,6 +2561,138 @@ pub fn smithay_linux_display_handle_internal_access_gate_report()
     }
 }
 
+/// 返回三类 planned protocol global 的固定 promotion 前置条件报告。
+///
+/// 该函数只对齐 planning 层纯数据，不读取 adapter、bootstrap 或任何真实 handle，
+/// 也不执行 protocol global 创建或注册。
+pub fn smithay_linux_global_registration_promotion_report()
+-> SmithayLinuxGlobalRegistrationPromotionReport {
+    use SmithayLinuxDisplayHandleAccessPolicy as AccessPolicy;
+    use SmithayLinuxDisplayHandleInternalAccessPrecondition as GatePrecondition;
+    use SmithayLinuxDisplayHandleInternalAccessPreconditionState as GateState;
+    use SmithayLinuxDisplayHandleInternalOwnershipDecision as OwnershipDecision;
+    use SmithayLinuxDisplayHandlePublicApiExposureDecision as ExposureDecision;
+    use SmithayLinuxDisplayHandleRedaction as Redaction;
+    use SmithayLinuxGlobalDispatchBindInput as BindInput;
+    use SmithayLinuxGlobalDispatchBindReadiness as Readiness;
+    use SmithayLinuxGlobalRegistrationPromotionTarget as Target;
+    use SmithayLinuxHandlerReductionCandidate as Candidate;
+
+    let ownership = smithay_linux_display_handle_internal_ownership_evidence_report();
+    let public_api = smithay_linux_display_handle_public_api_evidence_report();
+    let display_policy = smithay_linux_display_handle_access_report();
+    let gate = smithay_linux_display_handle_internal_access_gate_report();
+    let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+    let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+    let reduction_plan = smithay_linux_handler_reduction_plan_report();
+    let matrix = smithay_linux_handler_requirement_matrix_report();
+    let probe = smithay_linux_handler_probe_report();
+
+    let gate_state = |precondition| {
+        gate.preconditions
+            .iter()
+            .find(|item| item.precondition == precondition)
+            .map(|item| item.state)
+    };
+    let internal_ownership_proven = ownership.decision
+        == OwnershipDecision::StaticPrivateOwnershipEvidencePresent
+        && ownership.can_satisfy_internal_ownership_precondition;
+    let public_non_exposure_proven = public_api.decision == ExposureDecision::NotExposed
+        && public_api.exposed_count == 0
+        && public_api.can_satisfy_public_non_exposure_precondition;
+    let redaction_preserved = display_policy.policy == AccessPolicy::Hidden
+        && display_policy.redaction == Redaction::FullyRedacted
+        && !display_policy.reads_display_handle
+        && !display_policy.stores_display_handle
+        && !display_policy.exposes_display_handle;
+    let activation_blocked =
+        gate_state(GatePrecondition::ActivationGateAllowsRealProtocolGlobalRegistration)
+            == Some(GateState::Blocked);
+    let trait_boundary_missing = gate_state(GatePrecondition::GlobalDispatchTraitBoundaryCompiled)
+        == Some(GateState::Missing)
+        && !probe.compiled_trait_shape
+        && !final_seal.can_compile_trait_impl;
+    let dispatch_boundary_missing = gate_state(GatePrecondition::DispatchRequestBoundaryDefined)
+        == Some(GateState::Missing)
+        && !final_seal.can_dispatch_requests;
+    let handler_state_missing = gate_state(GatePrecondition::HandlerStateIntegratedInternally)
+        == Some(GateState::Missing)
+        && bind_shape
+            .items
+            .iter()
+            .find(|item| item.input == BindInput::HandlerState)
+            .is_some_and(|item| item.modeled)
+        && !bind_shape.can_attach_to_adapter;
+    let protocol_global_plan_stable = [
+        SmithayLinuxAdapterGlobalHandlerKind::CompositorGlobalHandler,
+        SmithayLinuxAdapterGlobalHandlerKind::ShmGlobalHandler,
+        SmithayLinuxAdapterGlobalHandlerKind::XdgWmBaseGlobalHandler,
+    ]
+    .into_iter()
+    .all(|handler| matrix.items.iter().any(|item| item.handler == handler))
+        && reduction_plan.selected_first == Some(Candidate::GlobalDispatchBindShape)
+        && final_seal.readiness == Readiness::NotReady
+        && final_seal.blocked_count == 5
+        && !final_seal.can_register_global;
+    let real_registration_call_blocked = activation_blocked
+        && !gate.can_call_create_global
+        && !gate.can_call_register_global
+        && !final_seal.can_register_global
+        && matrix.ready_count == 0;
+
+    let targets = [
+        Target::CompositorGlobal,
+        Target::ShmGlobal,
+        Target::XdgWmBaseGlobal,
+    ]
+    .into_iter()
+    .map(|target| {
+        global_registration_promotion_target_report(
+            target,
+            internal_ownership_proven,
+            public_non_exposure_proven,
+            redaction_preserved,
+            activation_blocked,
+            trait_boundary_missing,
+            dispatch_boundary_missing,
+            handler_state_missing,
+            protocol_global_plan_stable,
+            real_registration_call_blocked,
+        )
+    })
+    .collect::<Vec<_>>();
+    let promoted_count = targets
+        .iter()
+        .filter(|target| target.can_promote_to_real_registration)
+        .count();
+    let blocked_count = targets
+        .iter()
+        .filter(|target| {
+            target.decision == SmithayLinuxGlobalRegistrationPromotionDecision::Blocked
+        })
+        .count();
+
+    SmithayLinuxGlobalRegistrationPromotionReport {
+        targets,
+        promoted_count,
+        blocked_count,
+        can_satisfy_global_registration_plan_promoted_precondition: false,
+        can_read_display_handle: false,
+        can_call_create_global: false,
+        can_call_register_global: false,
+        can_attach_to_adapter: false,
+        skeleton_only: ownership.skeleton_only
+            && public_api.skeleton_only
+            && display_policy.skeleton_only
+            && gate.skeleton_only
+            && final_seal.skeleton_only
+            && bind_shape.skeleton_only
+            && reduction_plan.skeleton_only
+            && matrix.skeleton_only
+            && probe.skeleton_only,
+    }
+}
+
 fn requirement_item(
     handler: SmithayLinuxAdapterGlobalHandlerKind,
     requirement: SmithayLinuxHandlerRequirement,
@@ -2508,6 +2828,184 @@ fn internal_access_precondition_item(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn global_registration_promotion_target_report(
+    target: SmithayLinuxGlobalRegistrationPromotionTarget,
+    internal_ownership_proven: bool,
+    public_non_exposure_proven: bool,
+    redaction_preserved: bool,
+    activation_blocked: bool,
+    trait_boundary_missing: bool,
+    dispatch_boundary_missing: bool,
+    handler_state_missing: bool,
+    protocol_global_plan_stable: bool,
+    real_registration_call_blocked: bool,
+) -> SmithayLinuxGlobalRegistrationPromotionTargetReport {
+    use SmithayLinuxGlobalRegistrationPromotionBlocker as Blocker;
+    use SmithayLinuxGlobalRegistrationPromotionPrecondition as Precondition;
+    use SmithayLinuxGlobalRegistrationPromotionPreconditionState as State;
+
+    let preconditions = vec![
+        global_registration_promotion_precondition_item(
+            Precondition::DisplayHandleInternalOwnershipProven,
+            if internal_ownership_proven {
+                State::Satisfied
+            } else {
+                State::Missing
+            },
+            if internal_ownership_proven {
+                Vec::new()
+            } else {
+                vec![
+                    Blocker::DisplayHandleReadForbidden,
+                    Blocker::AdapterIntegrationForbidden,
+                ]
+            },
+        ),
+        global_registration_promotion_precondition_item(
+            Precondition::DisplayHandlePublicNonExposureProven,
+            if public_non_exposure_proven {
+                State::Satisfied
+            } else {
+                State::Missing
+            },
+            if public_non_exposure_proven {
+                Vec::new()
+            } else {
+                vec![Blocker::AdapterIntegrationForbidden]
+            },
+        ),
+        global_registration_promotion_precondition_item(
+            Precondition::DisplayHandleRedactionPolicyPreserved,
+            if redaction_preserved {
+                State::Satisfied
+            } else {
+                State::Blocked
+            },
+            if redaction_preserved {
+                Vec::new()
+            } else {
+                vec![Blocker::DisplayHandleReadForbidden]
+            },
+        ),
+        global_registration_promotion_precondition_item(
+            Precondition::ActivationGateAllowsRealProtocolGlobalRegistration,
+            State::Blocked,
+            if activation_blocked {
+                vec![
+                    Blocker::ActivationGateBlocked,
+                    Blocker::AdapterIntegrationForbidden,
+                ]
+            } else {
+                vec![Blocker::AdapterIntegrationForbidden]
+            },
+        ),
+        global_registration_promotion_precondition_item(
+            Precondition::GlobalDispatchTraitBoundaryCompiled,
+            if trait_boundary_missing {
+                State::Missing
+            } else {
+                State::Blocked
+            },
+            vec![Blocker::GlobalDispatchTraitMissing],
+        ),
+        global_registration_promotion_precondition_item(
+            Precondition::DispatchRequestBoundaryDefined,
+            if dispatch_boundary_missing {
+                State::Missing
+            } else {
+                State::Blocked
+            },
+            vec![Blocker::DispatchRequestBoundaryMissing],
+        ),
+        global_registration_promotion_precondition_item(
+            Precondition::HandlerStateIntegratedInternally,
+            if handler_state_missing {
+                State::Missing
+            } else {
+                State::Blocked
+            },
+            vec![
+                Blocker::HandlerStateOnlySynthetic,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+        global_registration_promotion_precondition_item(
+            Precondition::ProtocolGlobalPlanStillStable,
+            if protocol_global_plan_stable {
+                State::Satisfied
+            } else {
+                State::Missing
+            },
+            if protocol_global_plan_stable {
+                Vec::new()
+            } else {
+                vec![Blocker::AdapterIntegrationForbidden]
+            },
+        ),
+        global_registration_promotion_precondition_item(
+            Precondition::RealRegistrationCallSiteAuthorized,
+            State::Blocked,
+            if real_registration_call_blocked {
+                vec![
+                    Blocker::RealRegistrationCallForbidden,
+                    Blocker::CreateGlobalForbidden,
+                    Blocker::RegisterGlobalForbidden,
+                    Blocker::DisplayHandleReadForbidden,
+                    Blocker::AdapterIntegrationForbidden,
+                ]
+            } else {
+                vec![
+                    Blocker::RealRegistrationCallForbidden,
+                    Blocker::AdapterIntegrationForbidden,
+                ]
+            },
+        ),
+    ];
+    let satisfied_count = preconditions
+        .iter()
+        .filter(|item| item.state == State::Satisfied)
+        .count();
+    let missing_count = preconditions
+        .iter()
+        .filter(|item| item.state == State::Missing)
+        .count();
+    let blocked_count = preconditions
+        .iter()
+        .filter(|item| item.state == State::Blocked)
+        .count();
+
+    SmithayLinuxGlobalRegistrationPromotionTargetReport {
+        target,
+        decision: SmithayLinuxGlobalRegistrationPromotionDecision::Blocked,
+        preconditions,
+        satisfied_count,
+        missing_count,
+        blocked_count,
+        can_read_display_handle: false,
+        can_call_create_global: false,
+        can_call_register_global: false,
+        can_compile_global_dispatch: false,
+        can_dispatch_requests: false,
+        can_attach_to_adapter: false,
+        can_promote_to_real_registration: false,
+        skeleton_only: true,
+    }
+}
+
+fn global_registration_promotion_precondition_item(
+    precondition: SmithayLinuxGlobalRegistrationPromotionPrecondition,
+    state: SmithayLinuxGlobalRegistrationPromotionPreconditionState,
+    blockers: Vec<SmithayLinuxGlobalRegistrationPromotionBlocker>,
+) -> SmithayLinuxGlobalRegistrationPromotionPreconditionItem {
+    SmithayLinuxGlobalRegistrationPromotionPreconditionItem {
+        precondition,
+        state,
+        blockers,
+        skeleton_only: true,
+    }
+}
+
 fn reduction_candidate(
     candidate: SmithayLinuxHandlerReductionCandidate,
     decision: SmithayLinuxHandlerReductionDecision,
@@ -2567,7 +3065,12 @@ mod tests {
         SmithayLinuxDisplayHandlePublicApiSurface, SmithayLinuxDisplayHandleRedaction,
         SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindFinalBlocker,
         SmithayLinuxGlobalDispatchBindInput, SmithayLinuxGlobalDispatchBindReadiness,
-        SmithayLinuxGlobalDispatchBindSealedInputState, SmithayLinuxHandlerProbeBlocker,
+        SmithayLinuxGlobalDispatchBindSealedInputState,
+        SmithayLinuxGlobalRegistrationPromotionBlocker,
+        SmithayLinuxGlobalRegistrationPromotionDecision,
+        SmithayLinuxGlobalRegistrationPromotionPrecondition,
+        SmithayLinuxGlobalRegistrationPromotionPreconditionState,
+        SmithayLinuxGlobalRegistrationPromotionTarget, SmithayLinuxHandlerProbeBlocker,
         SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerReductionCandidate,
         SmithayLinuxHandlerReductionDecision, SmithayLinuxHandlerReductionRisk,
         SmithayLinuxHandlerRequirement, SmithayLinuxHandlerRequirementEvidence,
@@ -2579,7 +3082,8 @@ mod tests {
         smithay_linux_display_handle_internal_ownership_evidence_report,
         smithay_linux_display_handle_public_api_evidence_report,
         smithay_linux_global_dispatch_bind_final_seal_report,
-        smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
+        smithay_linux_global_dispatch_bind_shape_report,
+        smithay_linux_global_registration_promotion_report, smithay_linux_handler_probe_report,
         smithay_linux_handler_reduction_plan_report,
         smithay_linux_handler_requirement_matrix_report,
     };
@@ -3912,6 +4416,232 @@ mod tests {
     }
 
     #[test]
+    fn global_registration_promotion_preconditions_remain_blocked() {
+        use SmithayLinuxDisplayHandleInternalAccessPrecondition as GatePrecondition;
+        use SmithayLinuxDisplayHandleInternalAccessPreconditionState as GateState;
+        use SmithayLinuxGlobalDispatchBindInput as BindInput;
+        use SmithayLinuxGlobalRegistrationPromotionBlocker as Blocker;
+        use SmithayLinuxGlobalRegistrationPromotionPrecondition as Precondition;
+        use SmithayLinuxGlobalRegistrationPromotionPreconditionState as State;
+        use SmithayLinuxGlobalRegistrationPromotionTarget as Target;
+        use SmithayLinuxHandlerReductionCandidate as Candidate;
+
+        let report = smithay_linux_global_registration_promotion_report();
+        let target_order = report
+            .targets
+            .iter()
+            .map(|target| target.target)
+            .collect::<Vec<_>>();
+        let precondition_order = [
+            Precondition::DisplayHandleInternalOwnershipProven,
+            Precondition::DisplayHandlePublicNonExposureProven,
+            Precondition::DisplayHandleRedactionPolicyPreserved,
+            Precondition::ActivationGateAllowsRealProtocolGlobalRegistration,
+            Precondition::GlobalDispatchTraitBoundaryCompiled,
+            Precondition::DispatchRequestBoundaryDefined,
+            Precondition::HandlerStateIntegratedInternally,
+            Precondition::ProtocolGlobalPlanStillStable,
+            Precondition::RealRegistrationCallSiteAuthorized,
+        ];
+
+        assert_eq!(report.targets.len(), 3);
+        assert_eq!(
+            target_order,
+            vec![
+                Target::CompositorGlobal,
+                Target::ShmGlobal,
+                Target::XdgWmBaseGlobal,
+            ]
+        );
+        assert_eq!(report.promoted_count, 0);
+        assert_eq!(report.blocked_count, 3);
+        assert!(!report.can_satisfy_global_registration_plan_promoted_precondition);
+        assert!(!report.can_read_display_handle);
+        assert!(!report.can_call_create_global);
+        assert!(!report.can_call_register_global);
+        assert!(!report.can_attach_to_adapter);
+        assert!(report.skeleton_only);
+
+        for target in &report.targets {
+            assert_eq!(
+                target.decision,
+                SmithayLinuxGlobalRegistrationPromotionDecision::Blocked
+            );
+            assert_eq!(
+                target
+                    .preconditions
+                    .iter()
+                    .map(|item| item.precondition)
+                    .collect::<Vec<_>>(),
+                precondition_order
+            );
+            assert_eq!(target.satisfied_count, 4);
+            assert_eq!(target.missing_count, 3);
+            assert_eq!(target.blocked_count, 2);
+            assert_eq!(
+                target.satisfied_count + target.missing_count + target.blocked_count,
+                target.preconditions.len()
+            );
+            assert!(!target.can_read_display_handle);
+            assert!(!target.can_call_create_global);
+            assert!(!target.can_call_register_global);
+            assert!(!target.can_compile_global_dispatch);
+            assert!(!target.can_dispatch_requests);
+            assert!(!target.can_attach_to_adapter);
+            assert!(!target.can_promote_to_real_registration);
+            assert!(target.skeleton_only);
+            assert!(target.preconditions.iter().all(|item| {
+                item.skeleton_only && (item.state == State::Satisfied || !item.blockers.is_empty())
+            }));
+            for precondition in [
+                Precondition::DisplayHandleInternalOwnershipProven,
+                Precondition::DisplayHandlePublicNonExposureProven,
+                Precondition::DisplayHandleRedactionPolicyPreserved,
+                Precondition::ProtocolGlobalPlanStillStable,
+            ] {
+                assert_eq!(
+                    promotion_precondition(target, precondition).state,
+                    State::Satisfied
+                );
+            }
+            for precondition in [
+                Precondition::GlobalDispatchTraitBoundaryCompiled,
+                Precondition::DispatchRequestBoundaryDefined,
+                Precondition::HandlerStateIntegratedInternally,
+            ] {
+                assert_eq!(
+                    promotion_precondition(target, precondition).state,
+                    State::Missing
+                );
+            }
+            for precondition in [
+                Precondition::ActivationGateAllowsRealProtocolGlobalRegistration,
+                Precondition::RealRegistrationCallSiteAuthorized,
+            ] {
+                assert_eq!(
+                    promotion_precondition(target, precondition).state,
+                    State::Blocked
+                );
+            }
+            assert!(
+                promotion_precondition(
+                    target,
+                    Precondition::ActivationGateAllowsRealProtocolGlobalRegistration
+                )
+                .blockers
+                .contains(&Blocker::ActivationGateBlocked)
+            );
+            let call_site =
+                promotion_precondition(target, Precondition::RealRegistrationCallSiteAuthorized);
+            for blocker in [
+                Blocker::RealRegistrationCallForbidden,
+                Blocker::CreateGlobalForbidden,
+                Blocker::RegisterGlobalForbidden,
+                Blocker::DisplayHandleReadForbidden,
+                Blocker::AdapterIntegrationForbidden,
+            ] {
+                assert!(call_site.blockers.contains(&blocker));
+            }
+        }
+
+        let ownership = smithay_linux_display_handle_internal_ownership_evidence_report();
+        assert!(ownership.can_satisfy_internal_ownership_precondition);
+        let public_api = smithay_linux_display_handle_public_api_evidence_report();
+        assert_eq!(
+            public_api.decision,
+            SmithayLinuxDisplayHandlePublicApiExposureDecision::NotExposed
+        );
+        assert_eq!(public_api.exposed_count, 0);
+        let display_policy = smithay_linux_display_handle_access_report();
+        assert_eq!(
+            display_policy.policy,
+            SmithayLinuxDisplayHandleAccessPolicy::Hidden
+        );
+        assert_eq!(
+            display_policy.redaction,
+            SmithayLinuxDisplayHandleRedaction::FullyRedacted
+        );
+        assert!(!display_policy.reads_display_handle);
+        assert!(!display_policy.stores_display_handle);
+        assert!(!display_policy.exposes_display_handle);
+
+        let gate = smithay_linux_display_handle_internal_access_gate_report();
+        assert_eq!(
+            gate.decision,
+            SmithayLinuxDisplayHandleInternalAccessDecision::Blocked
+        );
+        assert_eq!(gate.satisfied_count, 3);
+        assert_eq!(gate.missing_count, 3);
+        assert_eq!(gate.blocked_count, 2);
+        assert_ne!(
+            internal_access_precondition(
+                &gate,
+                GatePrecondition::GlobalRegistrationPlanPromotedFromSkeleton
+            )
+            .state,
+            GateState::Satisfied
+        );
+        assert!(!gate.can_read_display_handle);
+        assert!(!gate.can_call_create_global);
+        assert!(!gate.can_compile_global_dispatch);
+
+        let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+        assert_eq!(
+            final_seal.readiness,
+            SmithayLinuxGlobalDispatchBindReadiness::NotReady
+        );
+        assert_eq!(final_seal.synthetic_modeled_count, 4);
+        assert_eq!(final_seal.hidden_redacted_count, 1);
+        assert_eq!(final_seal.blocked_count, 5);
+        assert!(!final_seal.can_compile_trait_impl);
+        assert!(!final_seal.can_attach_to_adapter);
+        assert!(!final_seal.can_register_global);
+        assert!(!final_seal.can_dispatch_requests);
+        assert!(!final_seal.can_create_surfaces);
+        assert!(!final_seal.can_enter_core_admission);
+        let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+        assert_eq!(bind_shape.modeled_count, 4);
+        assert_eq!(bind_shape.blocked_count, 5);
+        assert!(!bind_shape_item(&bind_shape, BindInput::DisplayHandleObject).modeled);
+
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        assert_eq!(matrix.ready_count, 0);
+        let plan = smithay_linux_handler_reduction_plan_report();
+        assert_eq!(
+            plan.selected_first,
+            Some(Candidate::GlobalDispatchBindShape)
+        );
+        let probe = smithay_linux_handler_probe_report();
+        assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
+        assert!(!probe.compiled_trait_shape);
+
+        let adapter_source = include_str!("linux_adapter.rs");
+        let runtime_source = include_str!("runtime_facade.rs");
+        let linux_runtime_source = include_str!("linux_runtime.rs");
+        for source in [adapter_source, runtime_source, linux_runtime_source] {
+            assert!(!source.contains("SmithayLinuxGlobalRegistrationPromotionReport"));
+            assert!(!source.contains("smithay_linux_global_registration_promotion_report"));
+        }
+
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("phase49p-promotion-preconditions");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("Phase 49P 边界测试应能构造 adapter skeleton");
+        let registration = adapter.attempt_real_global_registration_feasibility();
+        assert_eq!(
+            registration.mode,
+            SmithayLinuxAdapterRealGlobalRegistrationMode::FeasibilityBlocked
+        );
+        assert_eq!(adapter.global_handler_boundary_report().ready_count, 0);
+        let capabilities = adapter.capabilities();
+        assert!(!capabilities.registers_protocol_globals);
+        assert!(!capabilities.dispatches_protocol_events);
+        assert!(!capabilities.accepts_clients);
+        assert!(!capabilities.supports_real_wayland_surfaces);
+        assert!(!capabilities.supports_gpu_rendering);
+    }
+
+    #[test]
     fn display_handle_internal_access_gate_remains_blocked() {
         use SmithayLinuxDisplayHandleInternalAccessBlocker as Blocker;
         use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
@@ -4396,6 +5126,7 @@ mod tests {
             .expect("probe source 应包含生产代码");
         let adapter_source = include_str!("linux_adapter.rs");
         let runtime_source = include_str!("runtime_facade.rs");
+        let linux_runtime_source = include_str!("linux_runtime.rs");
 
         let forbidden_probe_tokens = [
             ("crate::", "core"),
@@ -4511,6 +5242,8 @@ mod tests {
             .replace("AdapterOwnsDisplayHandleInternally", "")
             .replace("AdapterDoesNotExposeDisplayHandlePublicly", "")
             .replace("DisplayHandleRedactionPolicyPreserved", "")
+            .replace("DisplayHandleInternalOwnershipProven", "")
+            .replace("DisplayHandlePublicNonExposureProven", "")
             .replace("RealDisplayHandleAccessForbidden", "")
             .replace("DisplayHandleReadForbidden", "")
             .replace("SmithayLinuxDisplayHandlePublicApiExposureDecision", "")
@@ -4591,7 +5324,10 @@ mod tests {
             "display_handle_internal_ownership_evidence_report",
         ]
         .concat();
-        for source in [adapter_source, runtime_source] {
+        let promotion_report_type = ["SmithayLinux", "GlobalRegistrationPromotionReport"].concat();
+        let promotion_function =
+            ["smithay_linux_", "global_registration_promotion_report"].concat();
+        for source in [adapter_source, runtime_source, linux_runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
             assert!(!source.contains(&probe_function));
@@ -4619,7 +5355,20 @@ mod tests {
             assert!(!source.contains(&public_api_evidence_function));
             assert!(!source.contains(&internal_ownership_evidence_report_type));
             assert!(!source.contains(&internal_ownership_evidence_function));
+            assert!(!source.contains(&promotion_report_type));
+            assert!(!source.contains(&promotion_function));
         }
+    }
+
+    fn promotion_precondition(
+        report: &super::SmithayLinuxGlobalRegistrationPromotionTargetReport,
+        precondition: SmithayLinuxGlobalRegistrationPromotionPrecondition,
+    ) -> &super::SmithayLinuxGlobalRegistrationPromotionPreconditionItem {
+        report
+            .preconditions
+            .iter()
+            .find(|item| item.precondition == precondition)
+            .expect("promotion target report 必须包含指定 precondition")
     }
 
     fn internal_ownership_evidence_item_by_source(
