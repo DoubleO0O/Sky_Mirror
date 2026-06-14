@@ -365,6 +365,88 @@ pub struct SmithayLinuxHandlerReductionPlanReport {
     pub skeleton_only: bool,
 }
 
+/// Bind shape 使用的纯 synthetic client 标识。
+///
+/// 数值只用于隔离测试和诊断，不对应真实 client、进程、socket 或文件描述符。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SmithayLinuxBindClientSyntheticId(u64);
+
+impl SmithayLinuxBindClientSyntheticId {
+    /// 从任意 inert 数值构造 synthetic ID；零值同样有效。
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// 返回 synthetic ID 的原始数值。
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// Bind client identity 的稳定来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindClientIdentitySource {
+    /// Identity 仅由隔离 synthetic 数据提供。
+    SyntheticOnly,
+}
+
+/// Bind client identity 的稳定建模状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindClientIdentityState {
+    /// Synthetic identity 已建模，但不代表真实 client 可用。
+    SyntheticModeled,
+}
+
+/// 阻止 synthetic client identity 进入真实 bind 路径的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindClientIdentityBlocker {
+    /// 真实 Smithay client object 仍不可用。
+    RealClientObjectUnavailable,
+
+    /// 当前阶段禁止接收真实 client。
+    ClientAcceptForbidden,
+
+    /// 当前阶段禁止管理 socket client。
+    SocketClientHandlingForbidden,
+
+    /// Identity model 禁止接入生产 adapter。
+    AdapterIntegrationForbidden,
+
+    /// `GlobalDispatch` bind 入口仍禁止实现。
+    GlobalDispatchBindStillForbidden,
+}
+
+/// 隔离 synthetic bind client identity 的纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxBindClientIdentityReport {
+    /// Identity 数据的稳定来源。
+    pub source: SmithayLinuxBindClientIdentitySource,
+
+    /// Identity 的稳定建模状态。
+    pub state: SmithayLinuxBindClientIdentityState,
+
+    /// 用于隔离诊断的固定 synthetic ID。
+    pub synthetic_id: SmithayLinuxBindClientSyntheticId,
+
+    /// 当前 identity 是否代表真实 client。
+    pub represents_real_client: bool,
+
+    /// 当前模型是否接收真实 client。
+    pub accepts_client: bool,
+
+    /// 当前模型是否接触 socket 或文件描述符。
+    pub touches_socket: bool,
+
+    /// 当前模型是否接触生产 adapter。
+    pub touches_adapter: bool,
+
+    /// 阻止 identity 进入真实 bind 路径的非空原因。
+    pub blockers: Vec<SmithayLinuxBindClientIdentityBlocker>,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// `GlobalDispatch` bind 入口会暴露的稳定输入概念。
 ///
 /// 这些变体只记录类型形状，不持有相应的 Smithay 原生对象。
@@ -438,7 +520,7 @@ pub struct SmithayLinuxGlobalDispatchBindShapeReport {
     /// 按 bind 输入概念固定顺序排列的报告项。
     pub items: Vec<SmithayLinuxGlobalDispatchBindShapeItem>,
 
-    /// 已具备稳定模型的输入数量；当前保守报告恒为零。
+    /// 已具备隔离模型的输入数量；不代表相应真实对象可用。
     pub modeled_count: usize,
 
     /// 仍被 blocker 阻止的输入数量。
@@ -821,9 +903,35 @@ pub fn smithay_linux_handler_reduction_plan_report() -> SmithayLinuxHandlerReduc
     }
 }
 
+/// 返回固定的 synthetic bind client identity 报告。
+///
+/// 该函数只构造纯数据，不读取 adapter、bootstrap、socket 或真实 client 状态。
+pub fn smithay_linux_bind_client_identity_report() -> SmithayLinuxBindClientIdentityReport {
+    use SmithayLinuxBindClientIdentityBlocker as Blocker;
+
+    SmithayLinuxBindClientIdentityReport {
+        source: SmithayLinuxBindClientIdentitySource::SyntheticOnly,
+        state: SmithayLinuxBindClientIdentityState::SyntheticModeled,
+        synthetic_id: SmithayLinuxBindClientSyntheticId::new(1),
+        represents_real_client: false,
+        accepts_client: false,
+        touches_socket: false,
+        touches_adapter: false,
+        blockers: vec![
+            Blocker::RealClientObjectUnavailable,
+            Blocker::ClientAcceptForbidden,
+            Blocker::SocketClientHandlingForbidden,
+            Blocker::AdapterIntegrationForbidden,
+            Blocker::GlobalDispatchBindStillForbidden,
+        ],
+        skeleton_only: true,
+    }
+}
+
 /// 返回 `GlobalDispatch` bind 输入概念的固定保守形状报告。
 ///
-/// 所有输入都保持未建模；该函数只构造诊断数据，不读取或改变任何运行时状态。
+/// ClientObject 只有 synthetic identity 模型；其他输入仍未建模。所有 item 仍有
+/// blocker，因此该函数不建立 trait、adapter 或 global readiness。
 pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDispatchBindShapeReport
 {
     use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
@@ -832,14 +940,16 @@ pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDi
     let items = vec![
         global_dispatch_bind_shape_item(
             Input::ClientObject,
+            true,
             vec![
-                Blocker::ClientObjectNotModeled,
                 Blocker::WouldCreateClientBindEntry,
+                Blocker::WouldRequireRealGlobalRegistration,
                 Blocker::AdapterIntegrationForbidden,
             ],
         ),
         global_dispatch_bind_shape_item(
             Input::GlobalResourceObject,
+            false,
             vec![
                 Blocker::ResourceObjectNotModeled,
                 Blocker::WouldCreateClientBindEntry,
@@ -849,6 +959,7 @@ pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDi
         ),
         global_dispatch_bind_shape_item(
             Input::GlobalDataObject,
+            false,
             vec![
                 Blocker::GlobalDataNotModeled,
                 Blocker::WouldRequireRealGlobalRegistration,
@@ -857,6 +968,7 @@ pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDi
         ),
         global_dispatch_bind_shape_item(
             Input::DisplayHandleObject,
+            false,
             vec![
                 Blocker::DisplayHandleMustRemainHidden,
                 Blocker::WouldRequireRealGlobalRegistration,
@@ -865,6 +977,7 @@ pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDi
         ),
         global_dispatch_bind_shape_item(
             Input::HandlerState,
+            false,
             vec![
                 Blocker::HandlerStateNotIntegrated,
                 Blocker::AdapterIntegrationForbidden,
@@ -910,11 +1023,12 @@ fn requirement_item(
 
 fn global_dispatch_bind_shape_item(
     input: SmithayLinuxGlobalDispatchBindInput,
+    modeled: bool,
     blockers: Vec<SmithayLinuxGlobalDispatchBindBlocker>,
 ) -> SmithayLinuxGlobalDispatchBindShapeItem {
     SmithayLinuxGlobalDispatchBindShapeItem {
         input,
-        modeled: false,
+        modeled,
         blockers,
         skeleton_only: true,
     }
@@ -955,13 +1069,16 @@ fn requirement_is_missing_for_all_handlers(
 #[cfg(test)]
 mod tests {
     use super::{
+        SmithayLinuxBindClientIdentityBlocker, SmithayLinuxBindClientIdentitySource,
+        SmithayLinuxBindClientIdentityState, SmithayLinuxBindClientSyntheticId,
         SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindInput,
         SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind,
         SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionDecision,
         SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
         SmithayLinuxHandlerRequirementEvidence, SmithayLinuxHandlerRequirementState,
-        SmithayLinuxInertHandlerProbe, smithay_linux_global_dispatch_bind_shape_report,
-        smithay_linux_handler_probe_report, smithay_linux_handler_reduction_plan_report,
+        SmithayLinuxInertHandlerProbe, smithay_linux_bind_client_identity_report,
+        smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
+        smithay_linux_handler_reduction_plan_report,
         smithay_linux_handler_requirement_matrix_report,
     };
     use crate::smithay_backend::{
@@ -1363,7 +1480,7 @@ mod tests {
             ]
         );
         assert_eq!(report.items.len(), 5);
-        assert_eq!(report.modeled_count, 0);
+        assert_eq!(report.modeled_count, 1);
         assert_eq!(report.blocked_count, 5);
         assert!(!report.can_compile_trait_impl);
         assert!(!report.can_attach_to_adapter);
@@ -1372,13 +1489,21 @@ mod tests {
             report
                 .items
                 .iter()
-                .all(|item| { !item.modeled && !item.blockers.is_empty() && item.skeleton_only })
+                .all(|item| !item.blockers.is_empty() && item.skeleton_only)
         );
 
+        let client = bind_shape_item(&report, Input::ClientObject);
+        assert!(client.modeled);
+        assert!(!client.blockers.contains(&Blocker::ClientObjectNotModeled));
         assert!(
-            bind_shape_item(&report, Input::ClientObject)
+            client
                 .blockers
-                .contains(&Blocker::ClientObjectNotModeled)
+                .contains(&Blocker::WouldCreateClientBindEntry)
+        );
+        assert!(
+            client
+                .blockers
+                .contains(&Blocker::WouldRequireRealGlobalRegistration)
         );
         assert!(
             bind_shape_item(&report, Input::GlobalResourceObject)
@@ -1391,19 +1516,67 @@ mod tests {
                 .contains(&Blocker::GlobalDataNotModeled)
         );
         assert!(
-            bind_shape_item(&report, Input::DisplayHandleObject)
-                .blockers
-                .contains(&Blocker::DisplayHandleMustRemainHidden)
+            !bind_shape_item(&report, Input::DisplayHandleObject).modeled
+                && bind_shape_item(&report, Input::DisplayHandleObject)
+                    .blockers
+                    .contains(&Blocker::DisplayHandleMustRemainHidden)
         );
         assert!(
-            bind_shape_item(&report, Input::HandlerState)
-                .blockers
-                .contains(&Blocker::HandlerStateNotIntegrated)
+            !bind_shape_item(&report, Input::HandlerState).modeled
+                && bind_shape_item(&report, Input::HandlerState)
+                    .blockers
+                    .contains(&Blocker::HandlerStateNotIntegrated)
         );
         assert!(report.items.iter().all(|item| {
             item.blockers
                 .contains(&Blocker::AdapterIntegrationForbidden)
         }));
+    }
+
+    #[test]
+    fn bind_client_identity_is_stable_synthetic_data() {
+        use SmithayLinuxBindClientIdentityBlocker as Blocker;
+
+        let zero = SmithayLinuxBindClientSyntheticId::new(0);
+        let report = smithay_linux_bind_client_identity_report();
+
+        assert_eq!(zero.value(), 0);
+        assert_eq!(
+            report.source,
+            SmithayLinuxBindClientIdentitySource::SyntheticOnly
+        );
+        assert_eq!(
+            report.state,
+            SmithayLinuxBindClientIdentityState::SyntheticModeled
+        );
+        assert_eq!(report.synthetic_id.value(), 1);
+        assert!(!report.represents_real_client);
+        assert!(!report.accepts_client);
+        assert!(!report.touches_socket);
+        assert!(!report.touches_adapter);
+        assert!(report.skeleton_only);
+        assert!(!report.blockers.is_empty());
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::RealClientObjectUnavailable)
+        );
+        assert!(report.blockers.contains(&Blocker::ClientAcceptForbidden));
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::SocketClientHandlingForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::AdapterIntegrationForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::GlobalDispatchBindStillForbidden)
+        );
     }
 
     #[test]
@@ -1434,16 +1607,21 @@ mod tests {
         assert!(!bind_shape.can_compile_trait_impl);
         assert!(!bind_shape.can_attach_to_adapter);
         assert!(!bind_shape.can_register_global);
+        assert_eq!(bind_shape.modeled_count, 1);
+        assert_eq!(bind_shape.blocked_count, 5);
         assert_eq!(bind_requirements.len(), 3);
         assert!(
             bind_requirements
                 .iter()
                 .all(|item| { item.evidence.contains(&Evidence::RequiresClientBindEntry) })
         );
+        let client = bind_shape_item(&bind_shape, Input::ClientObject);
+        assert!(client.modeled);
+        assert!(!client.blockers.contains(&Blocker::ClientObjectNotModeled));
         assert!(
-            bind_shape_item(&bind_shape, Input::ClientObject)
+            client
                 .blockers
-                .contains(&Blocker::ClientObjectNotModeled)
+                .contains(&Blocker::WouldCreateClientBindEntry)
         );
         assert!(
             bind_shape_item(&bind_shape, Input::DisplayHandleObject)
@@ -1650,6 +1828,11 @@ mod tests {
             ("smithay", "::"),
             ("Display", "<"),
             ("display_", "handle"),
+            ("Raw", "Fd"),
+            ("Owned", "Fd"),
+            ("Borrowed", "Fd"),
+            ("Unix", "Stream"),
+            ("process::", "id"),
             ("accept", "("),
             ("create_", "global("),
             (".create_", "global"),
@@ -1700,6 +1883,8 @@ mod tests {
         let reduction_function = ["smithay_linux_", "handler_reduction_plan_report"].concat();
         let bind_shape_report_type = ["SmithayLinux", "GlobalDispatchBindShapeReport"].concat();
         let bind_shape_function = ["smithay_linux_", "global_dispatch_bind_shape_report"].concat();
+        let client_identity_report_type = ["SmithayLinux", "BindClientIdentityReport"].concat();
+        let client_identity_function = ["smithay_linux_", "bind_client_identity_report"].concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -1710,6 +1895,8 @@ mod tests {
             assert!(!source.contains(&reduction_function));
             assert!(!source.contains(&bind_shape_report_type));
             assert!(!source.contains(&bind_shape_function));
+            assert!(!source.contains(&client_identity_report_type));
+            assert!(!source.contains(&client_identity_function));
         }
     }
 

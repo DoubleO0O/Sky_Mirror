@@ -169,17 +169,20 @@ pub use linux_adapter::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_handler_probe::{
-    SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindInput,
-    SmithayLinuxGlobalDispatchBindShapeItem, SmithayLinuxGlobalDispatchBindShapeReport,
-    SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerProbeReport,
+    SmithayLinuxBindClientIdentityBlocker, SmithayLinuxBindClientIdentityReport,
+    SmithayLinuxBindClientIdentitySource, SmithayLinuxBindClientIdentityState,
+    SmithayLinuxBindClientSyntheticId, SmithayLinuxGlobalDispatchBindBlocker,
+    SmithayLinuxGlobalDispatchBindInput, SmithayLinuxGlobalDispatchBindShapeItem,
+    SmithayLinuxGlobalDispatchBindShapeReport, SmithayLinuxHandlerProbeBlocker,
+    SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerProbeReport,
     SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionCandidateReport,
     SmithayLinuxHandlerReductionDecision, SmithayLinuxHandlerReductionPlanReport,
     SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
     SmithayLinuxHandlerRequirementEvidence, SmithayLinuxHandlerRequirementMatrixItem,
     SmithayLinuxHandlerRequirementMatrixReport, SmithayLinuxHandlerRequirementState,
-    SmithayLinuxInertHandlerProbe, smithay_linux_global_dispatch_bind_shape_report,
-    smithay_linux_handler_probe_report, smithay_linux_handler_reduction_plan_report,
-    smithay_linux_handler_requirement_matrix_report,
+    SmithayLinuxInertHandlerProbe, smithay_linux_bind_client_identity_report,
+    smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
+    smithay_linux_handler_reduction_plan_report, smithay_linux_handler_requirement_matrix_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
