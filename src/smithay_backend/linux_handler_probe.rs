@@ -365,6 +365,98 @@ pub struct SmithayLinuxHandlerReductionPlanReport {
     pub skeleton_only: bool,
 }
 
+/// `GlobalDispatch` bind 入口会暴露的稳定输入概念。
+///
+/// 这些变体只记录类型形状，不持有相应的 Smithay 原生对象。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalDispatchBindInput {
+    /// 发起 bind 的 client 概念。
+    ClientObject,
+
+    /// bind 后创建的 global resource 概念。
+    GlobalResourceObject,
+
+    /// global 注册时关联的数据概念。
+    GlobalDataObject,
+
+    /// bind 签名中的 display handle 概念；真实 handle 必须保持隐藏。
+    DisplayHandleObject,
+
+    /// 接收 bind 回调的 handler state 概念。
+    HandlerState,
+}
+
+/// 阻止 bind 输入概念进入真实 trait 或 adapter 的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalDispatchBindBlocker {
+    /// Client 身份和所有权尚未建模。
+    ClientObjectNotModeled,
+
+    /// Protocol resource 身份和生命周期尚未建模。
+    ResourceObjectNotModeled,
+
+    /// Global data 的稳定表示尚未建模。
+    GlobalDataNotModeled,
+
+    /// 原生 display handle 不能从 probe 层暴露。
+    DisplayHandleMustRemainHidden,
+
+    /// Handler state 尚未接入任何协议处理边界。
+    HandlerStateNotIntegrated,
+
+    /// Shape probe 禁止接入生产 adapter。
+    AdapterIntegrationForbidden,
+
+    /// 继续实现会建立真实 client bind 入口。
+    WouldCreateClientBindEntry,
+
+    /// 继续实现会依赖真实 protocol global 注册。
+    WouldRequireRealGlobalRegistration,
+}
+
+/// 单项 `GlobalDispatch` bind 输入形状及其 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxGlobalDispatchBindShapeItem {
+    /// 被审计的稳定输入概念。
+    pub input: SmithayLinuxGlobalDispatchBindInput,
+
+    /// 当前输入概念是否已有可用于 trait 实现的模型。
+    pub modeled: bool,
+
+    /// 阻止该输入进入真实 bind 入口的非空原因。
+    pub blockers: Vec<SmithayLinuxGlobalDispatchBindBlocker>,
+
+    /// 当前 item 是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// `GlobalDispatch` bind 入口的隔离纯数据形状报告。
+///
+/// 该报告不读取 adapter 或 bootstrap，不创建 global，也不安装 trait 实现。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxGlobalDispatchBindShapeReport {
+    /// 按 bind 输入概念固定顺序排列的报告项。
+    pub items: Vec<SmithayLinuxGlobalDispatchBindShapeItem>,
+
+    /// 已具备稳定模型的输入数量；当前保守报告恒为零。
+    pub modeled_count: usize,
+
+    /// 仍被 blocker 阻止的输入数量。
+    pub blocked_count: usize,
+
+    /// 当前输入模型是否足以编译真实 trait 实现。
+    pub can_compile_trait_impl: bool,
+
+    /// 当前报告是否可以接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前报告是否可以注册真实 protocol global。
+    pub can_register_global: bool,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -729,6 +821,73 @@ pub fn smithay_linux_handler_reduction_plan_report() -> SmithayLinuxHandlerReduc
     }
 }
 
+/// 返回 `GlobalDispatch` bind 输入概念的固定保守形状报告。
+///
+/// 所有输入都保持未建模；该函数只构造诊断数据，不读取或改变任何运行时状态。
+pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDispatchBindShapeReport
+{
+    use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
+    use SmithayLinuxGlobalDispatchBindInput as Input;
+
+    let items = vec![
+        global_dispatch_bind_shape_item(
+            Input::ClientObject,
+            vec![
+                Blocker::ClientObjectNotModeled,
+                Blocker::WouldCreateClientBindEntry,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+        global_dispatch_bind_shape_item(
+            Input::GlobalResourceObject,
+            vec![
+                Blocker::ResourceObjectNotModeled,
+                Blocker::WouldCreateClientBindEntry,
+                Blocker::WouldRequireRealGlobalRegistration,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+        global_dispatch_bind_shape_item(
+            Input::GlobalDataObject,
+            vec![
+                Blocker::GlobalDataNotModeled,
+                Blocker::WouldRequireRealGlobalRegistration,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+        global_dispatch_bind_shape_item(
+            Input::DisplayHandleObject,
+            vec![
+                Blocker::DisplayHandleMustRemainHidden,
+                Blocker::WouldRequireRealGlobalRegistration,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+        global_dispatch_bind_shape_item(
+            Input::HandlerState,
+            vec![
+                Blocker::HandlerStateNotIntegrated,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+    ];
+    let modeled_count = items.iter().filter(|item| item.modeled).count();
+    let blocked_count = items
+        .iter()
+        .filter(|item| !item.blockers.is_empty())
+        .count();
+
+    SmithayLinuxGlobalDispatchBindShapeReport {
+        items,
+        modeled_count,
+        blocked_count,
+        can_compile_trait_impl: false,
+        can_attach_to_adapter: false,
+        can_register_global: false,
+        skeleton_only: true,
+    }
+}
+
 fn requirement_item(
     handler: SmithayLinuxAdapterGlobalHandlerKind,
     requirement: SmithayLinuxHandlerRequirement,
@@ -745,6 +904,18 @@ fn requirement_item(
         requirement,
         state,
         evidence,
+        skeleton_only: true,
+    }
+}
+
+fn global_dispatch_bind_shape_item(
+    input: SmithayLinuxGlobalDispatchBindInput,
+    blockers: Vec<SmithayLinuxGlobalDispatchBindBlocker>,
+) -> SmithayLinuxGlobalDispatchBindShapeItem {
+    SmithayLinuxGlobalDispatchBindShapeItem {
+        input,
+        modeled: false,
+        blockers,
         skeleton_only: true,
     }
 }
@@ -784,12 +955,13 @@ fn requirement_is_missing_for_all_handlers(
 #[cfg(test)]
 mod tests {
     use super::{
+        SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindInput,
         SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind,
         SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionDecision,
         SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
         SmithayLinuxHandlerRequirementEvidence, SmithayLinuxHandlerRequirementState,
-        SmithayLinuxInertHandlerProbe, smithay_linux_handler_probe_report,
-        smithay_linux_handler_reduction_plan_report,
+        SmithayLinuxInertHandlerProbe, smithay_linux_global_dispatch_bind_shape_report,
+        smithay_linux_handler_probe_report, smithay_linux_handler_reduction_plan_report,
         smithay_linux_handler_requirement_matrix_report,
     };
     use crate::smithay_backend::{
@@ -1168,6 +1340,122 @@ mod tests {
     }
 
     #[test]
+    fn global_dispatch_bind_shape_is_stable_and_fully_blocked() {
+        use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
+        use SmithayLinuxGlobalDispatchBindInput as Input;
+
+        let report = smithay_linux_global_dispatch_bind_shape_report();
+        let actual_order = report
+            .items
+            .iter()
+            .map(|item| item.input)
+            .collect::<Vec<_>>();
+
+        assert!(report.skeleton_only);
+        assert_eq!(
+            actual_order,
+            vec![
+                Input::ClientObject,
+                Input::GlobalResourceObject,
+                Input::GlobalDataObject,
+                Input::DisplayHandleObject,
+                Input::HandlerState,
+            ]
+        );
+        assert_eq!(report.items.len(), 5);
+        assert_eq!(report.modeled_count, 0);
+        assert_eq!(report.blocked_count, 5);
+        assert!(!report.can_compile_trait_impl);
+        assert!(!report.can_attach_to_adapter);
+        assert!(!report.can_register_global);
+        assert!(
+            report
+                .items
+                .iter()
+                .all(|item| { !item.modeled && !item.blockers.is_empty() && item.skeleton_only })
+        );
+
+        assert!(
+            bind_shape_item(&report, Input::ClientObject)
+                .blockers
+                .contains(&Blocker::ClientObjectNotModeled)
+        );
+        assert!(
+            bind_shape_item(&report, Input::GlobalResourceObject)
+                .blockers
+                .contains(&Blocker::ResourceObjectNotModeled)
+        );
+        assert!(
+            bind_shape_item(&report, Input::GlobalDataObject)
+                .blockers
+                .contains(&Blocker::GlobalDataNotModeled)
+        );
+        assert!(
+            bind_shape_item(&report, Input::DisplayHandleObject)
+                .blockers
+                .contains(&Blocker::DisplayHandleMustRemainHidden)
+        );
+        assert!(
+            bind_shape_item(&report, Input::HandlerState)
+                .blockers
+                .contains(&Blocker::HandlerStateNotIntegrated)
+        );
+        assert!(report.items.iter().all(|item| {
+            item.blockers
+                .contains(&Blocker::AdapterIntegrationForbidden)
+        }));
+    }
+
+    #[test]
+    fn global_dispatch_bind_shape_aligns_with_reduction_matrix_and_probe() {
+        use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
+        use SmithayLinuxGlobalDispatchBindInput as Input;
+        use SmithayLinuxHandlerReductionCandidate as Candidate;
+        use SmithayLinuxHandlerReductionRisk as Risk;
+        use SmithayLinuxHandlerRequirement as Requirement;
+        use SmithayLinuxHandlerRequirementEvidence as Evidence;
+
+        let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+        let plan = smithay_linux_handler_reduction_plan_report();
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        let probe = smithay_linux_handler_probe_report();
+        let selected = reduction_candidate_report(&plan, Candidate::GlobalDispatchBindShape);
+        let bind_requirements = matrix
+            .items
+            .iter()
+            .filter(|item| item.requirement == Requirement::GlobalDispatchBind)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            plan.selected_first,
+            Some(Candidate::GlobalDispatchBindShape)
+        );
+        assert!(selected.risks.contains(&Risk::IntroducesClientBindEntry));
+        assert!(!bind_shape.can_compile_trait_impl);
+        assert!(!bind_shape.can_attach_to_adapter);
+        assert!(!bind_shape.can_register_global);
+        assert_eq!(bind_requirements.len(), 3);
+        assert!(
+            bind_requirements
+                .iter()
+                .all(|item| { item.evidence.contains(&Evidence::RequiresClientBindEntry) })
+        );
+        assert!(
+            bind_shape_item(&bind_shape, Input::ClientObject)
+                .blockers
+                .contains(&Blocker::ClientObjectNotModeled)
+        );
+        assert!(
+            bind_shape_item(&bind_shape, Input::DisplayHandleObject)
+                .blockers
+                .contains(&Blocker::DisplayHandleMustRemainHidden)
+        );
+        assert_eq!(matrix.ready_count, 0);
+        assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
+        assert!(!probe.compiled_trait_shape);
+    }
+
+    #[test]
     fn existing_adapter_boundaries_remain_blocked() {
         assert_runtime_dir();
         let socket_name = unique_socket_name("phase49c-boundary");
@@ -1360,7 +1648,6 @@ mod tests {
             ("Core", "Command"),
             ("BackendDriver", "Runner"),
             ("smithay", "::"),
-            ("Display", "Handle"),
             ("Display", "<"),
             ("display_", "handle"),
             ("accept", "("),
@@ -1395,6 +1682,14 @@ mod tests {
                 "production probe 不得包含受限入口 {token}"
             );
         }
+        let display_handle_token = ["Display", "Handle"].concat();
+        let production_without_bind_diagnostics = production_source
+            .replace("DisplayHandleObject", "")
+            .replace("DisplayHandleMustRemainHidden", "");
+        assert!(
+            !production_without_bind_diagnostics.contains(&display_handle_token),
+            "production probe 除固定诊断名称外不得暴露原生 display handle"
+        );
 
         let probe_type = ["SmithayLinux", "InertHandlerProbe"].concat();
         let probe_report_type = ["SmithayLinux", "HandlerProbeReport"].concat();
@@ -1403,6 +1698,8 @@ mod tests {
         let matrix_function = ["smithay_linux_", "handler_requirement_matrix_report"].concat();
         let reduction_report_type = ["SmithayLinux", "HandlerReductionPlanReport"].concat();
         let reduction_function = ["smithay_linux_", "handler_reduction_plan_report"].concat();
+        let bind_shape_report_type = ["SmithayLinux", "GlobalDispatchBindShapeReport"].concat();
+        let bind_shape_function = ["smithay_linux_", "global_dispatch_bind_shape_report"].concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -1411,7 +1708,20 @@ mod tests {
             assert!(!source.contains(&matrix_function));
             assert!(!source.contains(&reduction_report_type));
             assert!(!source.contains(&reduction_function));
+            assert!(!source.contains(&bind_shape_report_type));
+            assert!(!source.contains(&bind_shape_function));
         }
+    }
+
+    fn bind_shape_item(
+        report: &super::SmithayLinuxGlobalDispatchBindShapeReport,
+        input: SmithayLinuxGlobalDispatchBindInput,
+    ) -> &super::SmithayLinuxGlobalDispatchBindShapeItem {
+        report
+            .items
+            .iter()
+            .find(|item| item.input == input)
+            .expect("bind shape report 必须包含指定 input")
     }
 
     fn reduction_candidate_report(
