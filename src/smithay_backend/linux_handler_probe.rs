@@ -1131,6 +1131,138 @@ pub struct SmithayLinuxDisplayHandleInternalAccessGateReport {
     pub skeleton_only: bool,
 }
 
+/// Adapter public API 的 display handle 暴露结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandlePublicApiExposureDecision {
+    /// 静态证据未发现受限 public API surface。
+    NotExposed,
+}
+
+/// Display handle public API non-exposure 审计的稳定 surface。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandlePublicApiSurface {
+    /// Public API 返回 display handle。
+    DisplayHandleReturnValue,
+
+    /// Public API 接收 display handle 参数。
+    DisplayHandleArgument,
+
+    /// Public API 返回 display 对象。
+    DisplayReturnValue,
+
+    /// Public API 接收 display 对象参数。
+    DisplayArgument,
+
+    /// Public API 返回可变 bootstrap。
+    MutableBootstrapReturnValue,
+
+    /// Public API 接收可变 bootstrap 参数。
+    MutableBootstrapArgument,
+
+    /// Public API 暴露真实 global 创建入口。
+    CreateGlobalEntrypoint,
+
+    /// Public API 暴露真实 global 注册入口。
+    RegisterGlobalEntrypoint,
+
+    /// Adapter capability 暗示真实能力已打开。
+    AdapterCapabilityFlag,
+}
+
+/// Public API non-exposure 单项证据的稳定状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandlePublicApiEvidenceState {
+    /// 对应 public API surface 不存在。
+    Absent,
+
+    /// 对应 capability 明确保持保守 false。
+    ConservativeFalse,
+}
+
+/// Public API non-exposure 静态证据的稳定限制。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandlePublicApiEvidenceLimitation {
+    /// 证据只描述当前静态 API 边界。
+    StaticEvidenceOnly,
+
+    /// 证据不读取 adapter runtime state。
+    DoesNotReadAdapterRuntimeState,
+
+    /// 证据不证明 handle internal ownership 已建立。
+    DoesNotProveInternalOwnership,
+
+    /// 证据不允许读取或持有真实 handle。
+    DoesNotPermitDisplayHandleAccess,
+
+    /// 证据不允许真实 protocol global 注册。
+    DoesNotPermitGlobalRegistration,
+
+    /// 证据不允许实现真实 dispatch trait。
+    DoesNotPermitTraitImplementation,
+}
+
+/// Public API non-exposure 的单项纯数据证据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDisplayHandlePublicApiEvidenceItem {
+    /// 被审计的稳定 public API surface。
+    pub surface: SmithayLinuxDisplayHandlePublicApiSurface,
+
+    /// 当前静态证据状态。
+    pub state: SmithayLinuxDisplayHandlePublicApiEvidenceState,
+
+    /// 当前证据不能证明或允许的非空限制。
+    pub limitations: Vec<SmithayLinuxDisplayHandlePublicApiEvidenceLimitation>,
+
+    /// 当前 item 是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// Adapter public API non-exposure 的纯数据静态证据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDisplayHandlePublicApiEvidenceReport {
+    /// 当前稳定 non-exposure 结论。
+    pub decision: SmithayLinuxDisplayHandlePublicApiExposureDecision,
+
+    /// 按稳定顺序排列的 public API surface 证据。
+    pub items: Vec<SmithayLinuxDisplayHandlePublicApiEvidenceItem>,
+
+    /// 被静态证据判定为不存在的 surface 数量。
+    pub absent_count: usize,
+
+    /// 明确保持保守 false 的 capability surface 数量。
+    pub conservative_false_count: usize,
+
+    /// 暴露受限 public API surface 的数量。
+    pub exposed_count: usize,
+
+    /// 证据是否足以满足 public non-exposure 前置条件。
+    pub can_satisfy_public_non_exposure_precondition: bool,
+
+    /// 当前证据是否允许读取真实 handle。
+    pub can_read_display_handle: bool,
+
+    /// 当前证据是否允许存储真实 handle。
+    pub can_store_display_handle: bool,
+
+    /// 当前证据是否允许暴露真实 handle。
+    pub can_expose_display_handle: bool,
+
+    /// 当前证据是否允许调用真实 global 创建入口。
+    pub can_call_create_global: bool,
+
+    /// 当前证据是否允许调用真实 global 注册入口。
+    pub can_call_register_global: bool,
+
+    /// 当前证据是否允许编译真实 `GlobalDispatch`。
+    pub can_compile_global_dispatch: bool,
+
+    /// 当前证据是否允许接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -1763,12 +1895,89 @@ pub fn smithay_linux_global_dispatch_bind_final_seal_report()
     }
 }
 
+/// 返回 adapter public API non-exposure 的固定静态证据报告。
+///
+/// 该函数只汇总 planning 层纯数据，不读取 adapter、bootstrap 或任何真实 handle。
+pub fn smithay_linux_display_handle_public_api_evidence_report()
+-> SmithayLinuxDisplayHandlePublicApiEvidenceReport {
+    use SmithayLinuxDisplayHandleAccessPolicy as AccessPolicy;
+    use SmithayLinuxDisplayHandlePublicApiEvidenceState as State;
+    use SmithayLinuxDisplayHandlePublicApiSurface as Surface;
+    use SmithayLinuxDisplayHandleRedaction as Redaction;
+    use SmithayLinuxGlobalDispatchBindInput as Input;
+    use SmithayLinuxGlobalDispatchBindReadiness as Readiness;
+    use SmithayLinuxHandlerReductionCandidate as Candidate;
+
+    let display_policy = smithay_linux_display_handle_access_report();
+    let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+    let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+    let reduction_plan = smithay_linux_handler_reduction_plan_report();
+    let matrix = smithay_linux_handler_requirement_matrix_report();
+    let probe = smithay_linux_handler_probe_report();
+
+    let items = vec![
+        public_api_evidence_item(Surface::DisplayHandleReturnValue, State::Absent),
+        public_api_evidence_item(Surface::DisplayHandleArgument, State::Absent),
+        public_api_evidence_item(Surface::DisplayReturnValue, State::Absent),
+        public_api_evidence_item(Surface::DisplayArgument, State::Absent),
+        public_api_evidence_item(Surface::MutableBootstrapReturnValue, State::Absent),
+        public_api_evidence_item(Surface::MutableBootstrapArgument, State::Absent),
+        public_api_evidence_item(Surface::CreateGlobalEntrypoint, State::Absent),
+        public_api_evidence_item(Surface::RegisterGlobalEntrypoint, State::Absent),
+        public_api_evidence_item(Surface::AdapterCapabilityFlag, State::ConservativeFalse),
+    ];
+    let absent_count = items
+        .iter()
+        .filter(|item| item.state == State::Absent)
+        .count();
+    let conservative_false_count = items
+        .iter()
+        .filter(|item| item.state == State::ConservativeFalse)
+        .count();
+    let public_non_exposure_is_preserved = display_policy.policy == AccessPolicy::Hidden
+        && display_policy.redaction == Redaction::FullyRedacted
+        && !display_policy.exposes_display_handle
+        && !display_policy.touches_adapter_public_api
+        && final_seal.readiness == Readiness::NotReady
+        && !final_seal.can_attach_to_adapter
+        && !final_seal.can_register_global
+        && bind_shape
+            .items
+            .iter()
+            .find(|item| item.input == Input::DisplayHandleObject)
+            .is_some_and(|item| !item.modeled)
+        && reduction_plan.selected_first == Some(Candidate::GlobalDispatchBindShape)
+        && matrix.ready_count == 0
+        && !probe.compiled_trait_shape;
+
+    SmithayLinuxDisplayHandlePublicApiEvidenceReport {
+        decision: SmithayLinuxDisplayHandlePublicApiExposureDecision::NotExposed,
+        items,
+        absent_count,
+        conservative_false_count,
+        exposed_count: 0,
+        can_satisfy_public_non_exposure_precondition: public_non_exposure_is_preserved,
+        can_read_display_handle: false,
+        can_store_display_handle: false,
+        can_expose_display_handle: false,
+        can_call_create_global: false,
+        can_call_register_global: false,
+        can_compile_global_dispatch: false,
+        can_attach_to_adapter: false,
+        skeleton_only: display_policy.skeleton_only
+            && final_seal.skeleton_only
+            && bind_shape.skeleton_only
+            && reduction_plan.skeleton_only
+            && matrix.skeleton_only
+            && probe.skeleton_only,
+    }
+}
+
 /// 返回 display handle internal-only access gate 的固定保守报告。
 ///
 /// 该函数只汇总 planning 层纯数据，不读取 adapter、bootstrap 或任何真实 handle。
 pub fn smithay_linux_display_handle_internal_access_gate_report()
 -> SmithayLinuxDisplayHandleInternalAccessGateReport {
-    use SmithayLinuxDisplayHandleAccessPolicy as AccessPolicy;
     use SmithayLinuxDisplayHandleInternalAccessBlocker as Blocker;
     use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
     use SmithayLinuxDisplayHandleInternalAccessPreconditionState as State;
@@ -1783,10 +1992,10 @@ pub fn smithay_linux_display_handle_internal_access_gate_report()
     let reduction_plan = smithay_linux_handler_reduction_plan_report();
     let matrix = smithay_linux_handler_requirement_matrix_report();
     let probe = smithay_linux_handler_probe_report();
+    let public_api_evidence = smithay_linux_display_handle_public_api_evidence_report();
 
-    let public_exposure_is_blocked = display_policy.policy == AccessPolicy::Hidden
-        && !display_policy.exposes_display_handle
-        && !display_policy.touches_adapter_public_api;
+    let public_non_exposure_is_proven =
+        public_api_evidence.can_satisfy_public_non_exposure_precondition;
     let redaction_is_preserved = display_policy.redaction == Redaction::FullyRedacted
         && !display_policy.represents_real_display_handle
         && !display_policy.reads_display_handle
@@ -1816,15 +2025,19 @@ pub fn smithay_linux_display_handle_internal_access_gate_report()
         ),
         internal_access_precondition_item(
             Precondition::AdapterDoesNotExposeDisplayHandlePublicly,
-            if public_exposure_is_blocked {
-                State::Missing
+            if public_non_exposure_is_proven {
+                State::Satisfied
             } else {
                 State::Blocked
             },
-            vec![
-                Blocker::PublicExposureForbidden,
-                Blocker::AdapterIntegrationForbidden,
-            ],
+            if public_non_exposure_is_proven {
+                Vec::new()
+            } else {
+                vec![
+                    Blocker::PublicExposureForbidden,
+                    Blocker::AdapterIntegrationForbidden,
+                ]
+            },
         ),
         internal_access_precondition_item(
             Precondition::ActivationGateAllowsRealProtocolGlobalRegistration,
@@ -1916,7 +2129,8 @@ pub fn smithay_linux_display_handle_internal_access_gate_report()
             && bind_shape.skeleton_only
             && reduction_plan.skeleton_only
             && matrix.skeleton_only
-            && probe.skeleton_only,
+            && probe.skeleton_only
+            && public_api_evidence.skeleton_only,
     }
 }
 
@@ -2000,6 +2214,27 @@ fn push_unique_final_blocker(
     }
 }
 
+fn public_api_evidence_item(
+    surface: SmithayLinuxDisplayHandlePublicApiSurface,
+    state: SmithayLinuxDisplayHandlePublicApiEvidenceState,
+) -> SmithayLinuxDisplayHandlePublicApiEvidenceItem {
+    use SmithayLinuxDisplayHandlePublicApiEvidenceLimitation as Limitation;
+
+    SmithayLinuxDisplayHandlePublicApiEvidenceItem {
+        surface,
+        state,
+        limitations: vec![
+            Limitation::StaticEvidenceOnly,
+            Limitation::DoesNotReadAdapterRuntimeState,
+            Limitation::DoesNotProveInternalOwnership,
+            Limitation::DoesNotPermitDisplayHandleAccess,
+            Limitation::DoesNotPermitGlobalRegistration,
+            Limitation::DoesNotPermitTraitImplementation,
+        ],
+        skeleton_only: true,
+    }
+}
+
 fn internal_access_precondition_item(
     precondition: SmithayLinuxDisplayHandleInternalAccessPrecondition,
     state: SmithayLinuxDisplayHandleInternalAccessPreconditionState,
@@ -2061,7 +2296,11 @@ mod tests {
         SmithayLinuxDisplayHandleInternalAccessDecision,
         SmithayLinuxDisplayHandleInternalAccessPrecondition,
         SmithayLinuxDisplayHandleInternalAccessPreconditionState,
-        SmithayLinuxDisplayHandleInternalAccessTarget, SmithayLinuxDisplayHandleRedaction,
+        SmithayLinuxDisplayHandleInternalAccessTarget,
+        SmithayLinuxDisplayHandlePublicApiEvidenceLimitation,
+        SmithayLinuxDisplayHandlePublicApiEvidenceState,
+        SmithayLinuxDisplayHandlePublicApiExposureDecision,
+        SmithayLinuxDisplayHandlePublicApiSurface, SmithayLinuxDisplayHandleRedaction,
         SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindFinalBlocker,
         SmithayLinuxGlobalDispatchBindInput, SmithayLinuxGlobalDispatchBindReadiness,
         SmithayLinuxGlobalDispatchBindSealedInputState, SmithayLinuxHandlerProbeBlocker,
@@ -2073,6 +2312,7 @@ mod tests {
         smithay_linux_bind_global_resource_identity_report,
         smithay_linux_bind_handler_state_report, smithay_linux_display_handle_access_report,
         smithay_linux_display_handle_internal_access_gate_report,
+        smithay_linux_display_handle_public_api_evidence_report,
         smithay_linux_global_dispatch_bind_final_seal_report,
         smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
         smithay_linux_handler_reduction_plan_report,
@@ -2997,6 +3237,204 @@ mod tests {
     }
 
     #[test]
+    fn display_handle_public_api_evidence_proves_non_exposure_only() {
+        use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
+        use SmithayLinuxDisplayHandleInternalAccessPreconditionState as PreconditionState;
+        use SmithayLinuxDisplayHandlePublicApiEvidenceLimitation as Limitation;
+        use SmithayLinuxDisplayHandlePublicApiEvidenceState as EvidenceState;
+        use SmithayLinuxDisplayHandlePublicApiSurface as Surface;
+        use SmithayLinuxGlobalDispatchBindInput as Input;
+        use SmithayLinuxHandlerReductionCandidate as Candidate;
+
+        let evidence = smithay_linux_display_handle_public_api_evidence_report();
+        let actual_order = evidence
+            .items
+            .iter()
+            .map(|item| item.surface)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            evidence.decision,
+            SmithayLinuxDisplayHandlePublicApiExposureDecision::NotExposed
+        );
+        assert_eq!(
+            actual_order,
+            vec![
+                Surface::DisplayHandleReturnValue,
+                Surface::DisplayHandleArgument,
+                Surface::DisplayReturnValue,
+                Surface::DisplayArgument,
+                Surface::MutableBootstrapReturnValue,
+                Surface::MutableBootstrapArgument,
+                Surface::CreateGlobalEntrypoint,
+                Surface::RegisterGlobalEntrypoint,
+                Surface::AdapterCapabilityFlag,
+            ]
+        );
+        assert_eq!(evidence.items.len(), 9);
+        assert_eq!(evidence.absent_count, 8);
+        assert_eq!(evidence.conservative_false_count, 1);
+        assert_eq!(evidence.exposed_count, 0);
+        assert!(evidence.can_satisfy_public_non_exposure_precondition);
+        assert!(!evidence.can_read_display_handle);
+        assert!(!evidence.can_store_display_handle);
+        assert!(!evidence.can_expose_display_handle);
+        assert!(!evidence.can_call_create_global);
+        assert!(!evidence.can_call_register_global);
+        assert!(!evidence.can_compile_global_dispatch);
+        assert!(!evidence.can_attach_to_adapter);
+        assert!(evidence.skeleton_only);
+        assert!(
+            evidence
+                .items
+                .iter()
+                .all(|item| !item.limitations.is_empty() && item.skeleton_only)
+        );
+        for surface in [
+            Surface::DisplayHandleReturnValue,
+            Surface::DisplayHandleArgument,
+            Surface::DisplayReturnValue,
+            Surface::DisplayArgument,
+            Surface::MutableBootstrapReturnValue,
+            Surface::MutableBootstrapArgument,
+            Surface::CreateGlobalEntrypoint,
+            Surface::RegisterGlobalEntrypoint,
+        ] {
+            assert_eq!(
+                public_api_evidence_item_by_surface(&evidence, surface).state,
+                EvidenceState::Absent
+            );
+        }
+        let capability =
+            public_api_evidence_item_by_surface(&evidence, Surface::AdapterCapabilityFlag);
+        assert_eq!(capability.state, EvidenceState::ConservativeFalse);
+        for limitation in [
+            Limitation::StaticEvidenceOnly,
+            Limitation::DoesNotReadAdapterRuntimeState,
+            Limitation::DoesNotProveInternalOwnership,
+            Limitation::DoesNotPermitDisplayHandleAccess,
+            Limitation::DoesNotPermitGlobalRegistration,
+            Limitation::DoesNotPermitTraitImplementation,
+        ] {
+            assert!(
+                evidence
+                    .items
+                    .iter()
+                    .all(|item| item.limitations.contains(&limitation))
+            );
+        }
+
+        let gate = smithay_linux_display_handle_internal_access_gate_report();
+        assert_eq!(
+            gate.decision,
+            SmithayLinuxDisplayHandleInternalAccessDecision::Blocked
+        );
+        assert_eq!(gate.satisfied_count, 2);
+        assert_eq!(gate.missing_count, 4);
+        assert_eq!(gate.blocked_count, 2);
+        assert_eq!(
+            internal_access_precondition(
+                &gate,
+                Precondition::AdapterDoesNotExposeDisplayHandlePublicly
+            )
+            .state,
+            PreconditionState::Satisfied
+        );
+        assert_eq!(
+            internal_access_precondition(
+                &gate,
+                Precondition::DisplayHandleRedactionPolicyPreserved
+            )
+            .state,
+            PreconditionState::Satisfied
+        );
+        assert!(!gate.can_read_display_handle);
+        assert!(!gate.can_store_display_handle);
+        assert!(!gate.can_expose_display_handle);
+        assert!(!gate.can_call_create_global);
+        assert!(!gate.can_call_register_global);
+        assert!(!gate.can_compile_global_dispatch);
+        assert!(!gate.can_attach_to_adapter);
+
+        let display_policy = smithay_linux_display_handle_access_report();
+        assert_eq!(
+            display_policy.policy,
+            SmithayLinuxDisplayHandleAccessPolicy::Hidden
+        );
+        assert_eq!(
+            display_policy.redaction,
+            SmithayLinuxDisplayHandleRedaction::FullyRedacted
+        );
+        assert!(!display_policy.represents_real_display_handle);
+        assert!(!display_policy.exposes_display_handle);
+        assert!(!display_policy.stores_display_handle);
+        assert!(!display_policy.reads_display_handle);
+
+        let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+        assert_eq!(
+            final_seal.readiness,
+            SmithayLinuxGlobalDispatchBindReadiness::NotReady
+        );
+        assert!(!final_seal.can_compile_trait_impl);
+        assert!(!final_seal.can_register_global);
+        let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+        assert_eq!(bind_shape.modeled_count, 4);
+        assert_eq!(bind_shape.blocked_count, 5);
+        assert!(!bind_shape_item(&bind_shape, Input::DisplayHandleObject).modeled);
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        assert_eq!(matrix.ready_count, 0);
+        let plan = smithay_linux_handler_reduction_plan_report();
+        assert_eq!(
+            plan.selected_first,
+            Some(Candidate::GlobalDispatchBindShape)
+        );
+        let probe = smithay_linux_handler_probe_report();
+        assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
+        assert!(!probe.compiled_trait_shape);
+
+        let adapter_source = include_str!("linux_adapter.rs");
+        let adapter_production = adapter_source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("adapter source 应包含生产代码");
+        for forbidden_public_surface in [
+            "pub fn display_handle",
+            "pub fn display(",
+            "-> DisplayHandle",
+            ": DisplayHandle",
+            "-> Display<",
+            ": Display<",
+            "pub fn bootstrap_mut",
+            "-> &mut SmithayBootstrapProbe",
+            ": &mut SmithayBootstrapProbe",
+            "pub fn create_global",
+            "pub fn register_global",
+        ] {
+            assert!(
+                !adapter_production.contains(forbidden_public_surface),
+                "adapter production public API 不得暴露 {forbidden_public_surface}"
+            );
+        }
+
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("phase49n-public-api-evidence");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("Phase 49N 边界测试应能构造 adapter skeleton");
+        let registration = adapter.attempt_real_global_registration_feasibility();
+        assert_eq!(
+            registration.mode,
+            SmithayLinuxAdapterRealGlobalRegistrationMode::FeasibilityBlocked
+        );
+        assert_eq!(adapter.global_handler_boundary_report().ready_count, 0);
+        let capabilities = adapter.capabilities();
+        assert!(!capabilities.registers_protocol_globals);
+        assert!(!capabilities.dispatches_protocol_events);
+        assert!(!capabilities.accepts_clients);
+        assert!(!capabilities.supports_real_wayland_surfaces);
+        assert!(!capabilities.supports_gpu_rendering);
+    }
+
+    #[test]
     fn display_handle_internal_access_gate_remains_blocked() {
         use SmithayLinuxDisplayHandleInternalAccessBlocker as Blocker;
         use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
@@ -3035,8 +3473,8 @@ mod tests {
             ]
         );
         assert!(!gate.preconditions.is_empty());
-        assert_eq!(gate.satisfied_count, 1);
-        assert_eq!(gate.missing_count, 5);
+        assert_eq!(gate.satisfied_count, 2);
+        assert_eq!(gate.missing_count, 4);
         assert_eq!(gate.blocked_count, 2);
         assert_eq!(
             gate.satisfied_count + gate.missing_count + gate.blocked_count,
@@ -3059,7 +3497,7 @@ mod tests {
                 .state,
             State::Satisfied
         );
-        assert_ne!(
+        assert_eq!(
             internal_access_precondition(
                 &gate,
                 Precondition::AdapterDoesNotExposeDisplayHandlePublicly
@@ -3555,6 +3993,10 @@ mod tests {
             .replace(
                 "smithay_linux_display_handle_internal_access_gate_report",
                 "",
+            )
+            .replace(
+                "smithay_linux_display_handle_public_api_evidence_report",
+                "",
             );
         assert!(
             !production_without_synthetic_display_flag.contains(&display_handle_api_token),
@@ -3592,7 +4034,16 @@ mod tests {
             .replace("AdapterDoesNotExposeDisplayHandlePublicly", "")
             .replace("DisplayHandleRedactionPolicyPreserved", "")
             .replace("RealDisplayHandleAccessForbidden", "")
-            .replace("DisplayHandleReadForbidden", "");
+            .replace("DisplayHandleReadForbidden", "")
+            .replace("SmithayLinuxDisplayHandlePublicApiExposureDecision", "")
+            .replace("SmithayLinuxDisplayHandlePublicApiSurface", "")
+            .replace("SmithayLinuxDisplayHandlePublicApiEvidenceState", "")
+            .replace("SmithayLinuxDisplayHandlePublicApiEvidenceLimitation", "")
+            .replace("SmithayLinuxDisplayHandlePublicApiEvidenceItem", "")
+            .replace("SmithayLinuxDisplayHandlePublicApiEvidenceReport", "")
+            .replace("DisplayHandleReturnValue", "")
+            .replace("DisplayHandleArgument", "")
+            .replace("DoesNotPermitDisplayHandleAccess", "");
         assert!(
             !production_without_bind_diagnostics.contains(&display_handle_token),
             "production probe 除固定诊断名称外不得暴露原生 display handle"
@@ -3629,6 +4080,13 @@ mod tests {
             "display_handle_internal_access_gate_report",
         ]
         .concat();
+        let public_api_evidence_report_type =
+            ["SmithayLinux", "DisplayHandlePublicApiEvidenceReport"].concat();
+        let public_api_evidence_function = [
+            "smithay_linux_",
+            "display_handle_public_api_evidence_report",
+        ]
+        .concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -3653,7 +4111,20 @@ mod tests {
             assert!(!source.contains(&final_seal_function));
             assert!(!source.contains(&internal_gate_report_type));
             assert!(!source.contains(&internal_gate_function));
+            assert!(!source.contains(&public_api_evidence_report_type));
+            assert!(!source.contains(&public_api_evidence_function));
         }
+    }
+
+    fn public_api_evidence_item_by_surface(
+        report: &super::SmithayLinuxDisplayHandlePublicApiEvidenceReport,
+        surface: SmithayLinuxDisplayHandlePublicApiSurface,
+    ) -> &super::SmithayLinuxDisplayHandlePublicApiEvidenceItem {
+        report
+            .items
+            .iter()
+            .find(|item| item.surface == surface)
+            .expect("public API evidence report 必须包含指定 surface")
     }
 
     fn internal_access_precondition(
