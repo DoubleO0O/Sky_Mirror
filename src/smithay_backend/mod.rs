@@ -176,10 +176,12 @@ pub use linux_handler_probe::{
     SmithayLinuxBindGlobalDataState, SmithayLinuxBindGlobalDataSyntheticId,
     SmithayLinuxBindGlobalResourceIdentityBlocker, SmithayLinuxBindGlobalResourceIdentityReport,
     SmithayLinuxBindGlobalResourceIdentitySource, SmithayLinuxBindGlobalResourceIdentityState,
-    SmithayLinuxBindGlobalResourceSyntheticId, SmithayLinuxGlobalDispatchBindBlocker,
-    SmithayLinuxGlobalDispatchBindInput, SmithayLinuxGlobalDispatchBindShapeItem,
-    SmithayLinuxGlobalDispatchBindShapeReport, SmithayLinuxHandlerProbeBlocker,
-    SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerProbeReport,
+    SmithayLinuxBindGlobalResourceSyntheticId, SmithayLinuxBindHandlerStateBlocker,
+    SmithayLinuxBindHandlerStateReport, SmithayLinuxBindHandlerStateSource,
+    SmithayLinuxBindHandlerStateState, SmithayLinuxBindHandlerStateSyntheticId,
+    SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindInput,
+    SmithayLinuxGlobalDispatchBindShapeItem, SmithayLinuxGlobalDispatchBindShapeReport,
+    SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerProbeReport,
     SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionCandidateReport,
     SmithayLinuxHandlerReductionDecision, SmithayLinuxHandlerReductionPlanReport,
     SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
@@ -187,8 +189,9 @@ pub use linux_handler_probe::{
     SmithayLinuxHandlerRequirementMatrixReport, SmithayLinuxHandlerRequirementState,
     SmithayLinuxInertHandlerProbe, smithay_linux_bind_client_identity_report,
     smithay_linux_bind_global_data_report, smithay_linux_bind_global_resource_identity_report,
-    smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
-    smithay_linux_handler_reduction_plan_report, smithay_linux_handler_requirement_matrix_report,
+    smithay_linux_bind_handler_state_report, smithay_linux_global_dispatch_bind_shape_report,
+    smithay_linux_handler_probe_report, smithay_linux_handler_reduction_plan_report,
+    smithay_linux_handler_requirement_matrix_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]

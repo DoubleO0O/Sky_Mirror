@@ -611,6 +611,88 @@ pub struct SmithayLinuxBindGlobalDataReport {
     pub skeleton_only: bool,
 }
 
+/// Bind shape 使用的纯 synthetic handler state 标识。
+///
+/// 数值只用于隔离测试和诊断，不对应真实 Smithay、adapter 或 protocol dispatch state。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SmithayLinuxBindHandlerStateSyntheticId(u64);
+
+impl SmithayLinuxBindHandlerStateSyntheticId {
+    /// 从任意 inert 数值构造 synthetic ID；零值同样有效。
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// 返回 synthetic ID 的原始数值。
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// Bind handler state 的稳定来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindHandlerStateSource {
+    /// Handler state 仅由隔离 synthetic 数据提供。
+    SyntheticOnly,
+}
+
+/// Bind handler state 的稳定建模状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindHandlerStateState {
+    /// Synthetic handler state 已建模，但不代表真实 Smithay state 可用。
+    SyntheticModeled,
+}
+
+/// 阻止 synthetic handler state 进入真实 bind 路径的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindHandlerStateBlocker {
+    /// 真实 Smithay handler state 仍不可用。
+    RealSmithayHandlerStateUnavailable,
+
+    /// 当前模型禁止接入生产 adapter state。
+    AdapterStateIntegrationForbidden,
+
+    /// 真实 protocol dispatch state 仍不可用。
+    ProtocolDispatchStateUnavailable,
+
+    /// 原生 display handle 必须继续保持隐藏。
+    DisplayHandleStillHidden,
+
+    /// `GlobalDispatch` bind 入口仍禁止实现。
+    GlobalDispatchBindStillForbidden,
+}
+
+/// 隔离 synthetic bind handler state 的纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxBindHandlerStateReport {
+    /// Handler state 的稳定来源。
+    pub source: SmithayLinuxBindHandlerStateSource,
+
+    /// Handler state 的稳定建模状态。
+    pub state: SmithayLinuxBindHandlerStateState,
+
+    /// 用于隔离诊断的固定 synthetic ID。
+    pub synthetic_id: SmithayLinuxBindHandlerStateSyntheticId,
+
+    /// 当前模型是否代表真实 Smithay handler state。
+    pub represents_real_handler_state: bool,
+
+    /// 当前模型是否接触生产 adapter。
+    pub touches_adapter: bool,
+
+    /// 当前模型是否接触真实 protocol dispatch state。
+    pub touches_dispatch_state: bool,
+
+    /// 当前模型是否接触原生 display handle。
+    pub touches_display_handle: bool,
+
+    /// 阻止 handler state 进入真实 bind 路径的非空原因。
+    pub blockers: Vec<SmithayLinuxBindHandlerStateBlocker>,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// `GlobalDispatch` bind 入口会暴露的稳定输入概念。
 ///
 /// 这些变体只记录类型形状，不持有相应的 Smithay 原生对象。
@@ -1143,10 +1225,35 @@ pub fn smithay_linux_bind_global_data_report() -> SmithayLinuxBindGlobalDataRepo
     }
 }
 
+/// 返回固定的 synthetic bind handler state 报告。
+///
+/// 该函数只构造纯数据，不读取 adapter、bootstrap、display handle 或 dispatch state。
+pub fn smithay_linux_bind_handler_state_report() -> SmithayLinuxBindHandlerStateReport {
+    use SmithayLinuxBindHandlerStateBlocker as Blocker;
+
+    SmithayLinuxBindHandlerStateReport {
+        source: SmithayLinuxBindHandlerStateSource::SyntheticOnly,
+        state: SmithayLinuxBindHandlerStateState::SyntheticModeled,
+        synthetic_id: SmithayLinuxBindHandlerStateSyntheticId::new(1),
+        represents_real_handler_state: false,
+        touches_adapter: false,
+        touches_dispatch_state: false,
+        touches_display_handle: false,
+        blockers: vec![
+            Blocker::RealSmithayHandlerStateUnavailable,
+            Blocker::AdapterStateIntegrationForbidden,
+            Blocker::ProtocolDispatchStateUnavailable,
+            Blocker::DisplayHandleStillHidden,
+            Blocker::GlobalDispatchBindStillForbidden,
+        ],
+        skeleton_only: true,
+    }
+}
+
 /// 返回 `GlobalDispatch` bind 输入概念的固定保守形状报告。
 ///
-/// ClientObject、GlobalResourceObject 和 GlobalDataObject 只有 synthetic 模型；
-/// 其他输入仍未建模。所有 item 仍有 blocker，因此不建立 trait、adapter 或 global readiness。
+/// 除 DisplayHandleObject 外的输入都只有 synthetic 模型。所有 item 仍有 blocker，
+/// 因此不建立 trait、adapter 或 global readiness。
 pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDispatchBindShapeReport
 {
     use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
@@ -1190,9 +1297,10 @@ pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDi
         ),
         global_dispatch_bind_shape_item(
             Input::HandlerState,
-            false,
+            true,
             vec![
-                Blocker::HandlerStateNotIntegrated,
+                Blocker::WouldCreateClientBindEntry,
+                Blocker::WouldRequireRealGlobalRegistration,
                 Blocker::AdapterIntegrationForbidden,
             ],
         ),
@@ -1288,7 +1396,9 @@ mod tests {
         SmithayLinuxBindGlobalDataState, SmithayLinuxBindGlobalDataSyntheticId,
         SmithayLinuxBindGlobalResourceIdentityBlocker,
         SmithayLinuxBindGlobalResourceIdentitySource, SmithayLinuxBindGlobalResourceIdentityState,
-        SmithayLinuxBindGlobalResourceSyntheticId, SmithayLinuxGlobalDispatchBindBlocker,
+        SmithayLinuxBindGlobalResourceSyntheticId, SmithayLinuxBindHandlerStateBlocker,
+        SmithayLinuxBindHandlerStateSource, SmithayLinuxBindHandlerStateState,
+        SmithayLinuxBindHandlerStateSyntheticId, SmithayLinuxGlobalDispatchBindBlocker,
         SmithayLinuxGlobalDispatchBindInput, SmithayLinuxHandlerProbeBlocker,
         SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerReductionCandidate,
         SmithayLinuxHandlerReductionDecision, SmithayLinuxHandlerReductionRisk,
@@ -1296,8 +1406,8 @@ mod tests {
         SmithayLinuxHandlerRequirementState, SmithayLinuxInertHandlerProbe,
         smithay_linux_bind_client_identity_report, smithay_linux_bind_global_data_report,
         smithay_linux_bind_global_resource_identity_report,
-        smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
-        smithay_linux_handler_reduction_plan_report,
+        smithay_linux_bind_handler_state_report, smithay_linux_global_dispatch_bind_shape_report,
+        smithay_linux_handler_probe_report, smithay_linux_handler_reduction_plan_report,
         smithay_linux_handler_requirement_matrix_report,
     };
     use crate::smithay_backend::{
@@ -1699,7 +1809,7 @@ mod tests {
             ]
         );
         assert_eq!(report.items.len(), 5);
-        assert_eq!(report.modeled_count, 3);
+        assert_eq!(report.modeled_count, 4);
         assert_eq!(report.blocked_count, 5);
         assert!(!report.can_compile_trait_impl);
         assert!(!report.can_attach_to_adapter);
@@ -1759,11 +1869,27 @@ mod tests {
                     .blockers
                     .contains(&Blocker::DisplayHandleMustRemainHidden)
         );
+        let handler_state = bind_shape_item(&report, Input::HandlerState);
+        assert!(handler_state.modeled);
         assert!(
-            !bind_shape_item(&report, Input::HandlerState).modeled
-                && bind_shape_item(&report, Input::HandlerState)
-                    .blockers
-                    .contains(&Blocker::HandlerStateNotIntegrated)
+            !handler_state
+                .blockers
+                .contains(&Blocker::HandlerStateNotIntegrated)
+        );
+        assert!(
+            handler_state
+                .blockers
+                .contains(&Blocker::WouldCreateClientBindEntry)
+        );
+        assert!(
+            handler_state
+                .blockers
+                .contains(&Blocker::WouldRequireRealGlobalRegistration)
+        );
+        assert!(
+            handler_state
+                .blockers
+                .contains(&Blocker::AdapterIntegrationForbidden)
         );
         assert!(report.items.iter().all(|item| {
             item.blockers
@@ -1918,6 +2044,52 @@ mod tests {
     }
 
     #[test]
+    fn bind_handler_state_is_stable_synthetic_data() {
+        use SmithayLinuxBindHandlerStateBlocker as Blocker;
+
+        let zero = SmithayLinuxBindHandlerStateSyntheticId::new(0);
+        let report = smithay_linux_bind_handler_state_report();
+
+        assert_eq!(zero.value(), 0);
+        assert_eq!(
+            report.source,
+            SmithayLinuxBindHandlerStateSource::SyntheticOnly
+        );
+        assert_eq!(
+            report.state,
+            SmithayLinuxBindHandlerStateState::SyntheticModeled
+        );
+        assert_eq!(report.synthetic_id.value(), 1);
+        assert!(!report.represents_real_handler_state);
+        assert!(!report.touches_adapter);
+        assert!(!report.touches_dispatch_state);
+        assert!(!report.touches_display_handle);
+        assert!(report.skeleton_only);
+        assert!(!report.blockers.is_empty());
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::RealSmithayHandlerStateUnavailable)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::AdapterStateIntegrationForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::ProtocolDispatchStateUnavailable)
+        );
+        assert!(report.blockers.contains(&Blocker::DisplayHandleStillHidden));
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::GlobalDispatchBindStillForbidden)
+        );
+    }
+
+    #[test]
     fn global_dispatch_bind_shape_aligns_with_reduction_matrix_and_probe() {
         use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
         use SmithayLinuxGlobalDispatchBindInput as Input;
@@ -1945,7 +2117,7 @@ mod tests {
         assert!(!bind_shape.can_compile_trait_impl);
         assert!(!bind_shape.can_attach_to_adapter);
         assert!(!bind_shape.can_register_global);
-        assert_eq!(bind_shape.modeled_count, 3);
+        assert_eq!(bind_shape.modeled_count, 4);
         assert_eq!(bind_shape.blocked_count, 5);
         assert_eq!(bind_requirements.len(), 3);
         assert!(
@@ -2001,7 +2173,28 @@ mod tests {
                     .blockers
                     .contains(&Blocker::DisplayHandleMustRemainHidden)
         );
-        assert!(!bind_shape_item(&bind_shape, Input::HandlerState).modeled);
+        let handler_state = bind_shape_item(&bind_shape, Input::HandlerState);
+        assert!(handler_state.modeled);
+        assert!(
+            !handler_state
+                .blockers
+                .contains(&Blocker::HandlerStateNotIntegrated)
+        );
+        assert!(
+            handler_state
+                .blockers
+                .contains(&Blocker::WouldCreateClientBindEntry)
+        );
+        assert!(
+            handler_state
+                .blockers
+                .contains(&Blocker::WouldRequireRealGlobalRegistration)
+        );
+        assert!(
+            handler_state
+                .blockers
+                .contains(&Blocker::AdapterIntegrationForbidden)
+        );
         assert_eq!(matrix.ready_count, 0);
         assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
         assert!(!probe.compiled_trait_shape);
@@ -2201,7 +2394,6 @@ mod tests {
             ("BackendDriver", "Runner"),
             ("smithay", "::"),
             ("Display", "<"),
-            ("display_", "handle"),
             ("Raw", "Fd"),
             ("Owned", "Fd"),
             ("Borrowed", "Fd"),
@@ -2211,6 +2403,10 @@ mod tests {
             ("wl_", "resource"),
             ("GlobalData", "<"),
             ("wayland_server::", "GlobalData"),
+            ("SmithayHandlerState", "<"),
+            ("DispatchState", "<"),
+            ("wayland_server::", "DispatchState"),
+            ("AdapterState", "<"),
             ("Object", "Id"),
             ("object_", "id"),
             ("process::", "id"),
@@ -2246,10 +2442,18 @@ mod tests {
                 "production probe 不得包含受限入口 {token}"
             );
         }
+        let display_handle_api_token = ["display_", "handle"].concat();
+        let production_without_synthetic_display_flag =
+            production_source.replace("touches_display_handle", "");
+        assert!(
+            !production_without_synthetic_display_flag.contains(&display_handle_api_token),
+            "production probe 除纯数据布尔字段外不得读取原生 display handle"
+        );
         let display_handle_token = ["Display", "Handle"].concat();
         let production_without_bind_diagnostics = production_source
             .replace("DisplayHandleObject", "")
-            .replace("DisplayHandleMustRemainHidden", "");
+            .replace("DisplayHandleMustRemainHidden", "")
+            .replace("DisplayHandleStillHidden", "");
         assert!(
             !production_without_bind_diagnostics.contains(&display_handle_token),
             "production probe 除固定诊断名称外不得暴露原生 display handle"
@@ -2272,6 +2476,8 @@ mod tests {
             ["smithay_linux_", "bind_global_resource_identity_report"].concat();
         let global_data_report_type = ["SmithayLinux", "BindGlobalDataReport"].concat();
         let global_data_function = ["smithay_linux_", "bind_global_data_report"].concat();
+        let handler_state_report_type = ["SmithayLinux", "BindHandlerStateReport"].concat();
+        let handler_state_function = ["smithay_linux_", "bind_handler_state_report"].concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -2288,6 +2494,8 @@ mod tests {
             assert!(!source.contains(&resource_identity_function));
             assert!(!source.contains(&global_data_report_type));
             assert!(!source.contains(&global_data_function));
+            assert!(!source.contains(&handler_state_report_type));
+            assert!(!source.contains(&handler_state_function));
         }
     }
 
