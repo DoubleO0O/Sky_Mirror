@@ -5,6 +5,7 @@
 //! 本模块只记录隔离类型形状的编译审计结果和 blocker evidence。它不实现
 //! Smithay handler trait，不持有原生对象，也不进入 adapter、runtime 或核心状态。
 //! Requirement matrix 描述建立 handler 前缺少什么，不表示这些入口已部分可用。
+//! Reduction plan 只为后续隔离研究选择顺序，不提升任何 adapter capability。
 
 use super::linux_adapter::SmithayLinuxAdapterGlobalHandlerKind;
 
@@ -234,6 +235,136 @@ pub struct SmithayLinuxHandlerRequirementMatrixReport {
     pub skeleton_only: bool,
 }
 
+/// 可从 handler requirement matrix 中选择的缩减目标。
+///
+/// 每个变体只命名一个未来研究边界，不表示相应 trait、handler 或 bridge 已实现。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxHandlerReductionCandidate {
+    /// 隔离研究三类 global 共用的 bind trait 形状。
+    GlobalDispatchBindShape,
+
+    /// 隔离研究 protocol object request trait 形状。
+    DispatchRequestShape,
+
+    /// 隔离研究 compositor handler 所需的类型边界。
+    CompositorHandlerShape,
+
+    /// 隔离研究 shared-memory handler 所需的类型边界。
+    ShmHandlerShape,
+
+    /// 隔离研究 XDG shell handler 所需的类型边界。
+    XdgShellHandlerShape,
+
+    /// 规划 client 与 protocol object 的身份模型。
+    ClientIdentityModel,
+
+    /// 规划 protocol resource 的生命周期模型。
+    ProtocolResourceModel,
+
+    /// 规划 surface request 到纯数据生命周期的桥接边界。
+    SurfaceLifecycleBridge,
+
+    /// 规划 surface 到核心窗口接纳的桥接边界。
+    CoreAdmissionBridge,
+}
+
+/// Reduction candidate 可能引入的结构化风险。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxHandlerReductionRisk {
+    /// 研究目标可能暴露真实 client bind 参数或入口。
+    IntroducesClientBindEntry,
+
+    /// 研究目标可能暴露真实 protocol request dispatch 参数或入口。
+    IntroducesRequestDispatchEntry,
+
+    /// 常规集成路径可能要求 delegate 宏。
+    RequiresDelegateMacro,
+
+    /// 研究目标依赖真实 surface 生命周期。
+    RequiresSurfaceLifecycle,
+
+    /// 研究目标依赖 shared-memory buffer 生命周期。
+    RequiresBufferLifecycle,
+
+    /// 研究目标依赖 XDG object 生命周期。
+    RequiresXdgLifecycle,
+
+    /// 研究目标依赖稳定 client 身份模型。
+    RequiresClientIdentity,
+
+    /// 研究目标依赖 protocol resource 跟踪。
+    RequiresResourceTracking,
+
+    /// 研究目标依赖核心窗口接纳。
+    RequiresCoreAdmission,
+
+    /// 研究目标若接入生产路径会打开真实 protocol surface。
+    WouldOpenRealProtocolSurface,
+
+    /// 研究必须保持在 handler planning/probe 层，不能接入 adapter。
+    MustRemainIsolated,
+}
+
+/// Reduction candidate 在当前计划中的选择结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxHandlerReductionDecision {
+    /// 选为下一阶段唯一的隔离研究目标。
+    SelectedFirst,
+
+    /// 有价值但必须等待更早的 requirement 被缩减。
+    Deferred,
+
+    /// 当前安全边界明确禁止进入实现研究。
+    Blocked,
+}
+
+/// 单项 handler requirement reduction candidate 报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxHandlerReductionCandidateReport {
+    /// 被评估的稳定候选项。
+    pub candidate: SmithayLinuxHandlerReductionCandidate,
+
+    /// 当前计划对该候选项的选择结果。
+    pub decision: SmithayLinuxHandlerReductionDecision,
+
+    /// 该候选项对应的非空 requirement 集合。
+    pub related_requirements: Vec<SmithayLinuxHandlerRequirement>,
+
+    /// 在进入任何实现前必须处理的非空风险集合。
+    pub risks: Vec<SmithayLinuxHandlerReductionRisk>,
+
+    /// 不依赖运行时状态的固定选择理由。
+    pub rationale: &'static str,
+
+    /// 当前 candidate 是否仍然只属于结构规划边界。
+    pub skeleton_only: bool,
+}
+
+/// Handler requirement reduction 的稳定纯数据计划。
+///
+/// Planning-only: 该报告不进入 adapter snapshot、capability、activation gate 或
+/// runtime report。`selected_first` 只是后续隔离研究输入，不是可执行能力。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxHandlerReductionPlanReport {
+    /// 按依赖和风险固定顺序排列的候选项。
+    pub candidates: Vec<SmithayLinuxHandlerReductionCandidateReport>,
+
+    /// 唯一优先研究候选；matrix 不再满足前置条件时为 `None`。
+    pub selected_first: Option<SmithayLinuxHandlerReductionCandidate>,
+
+    /// 标记为 `SelectedFirst` 的候选数量。
+    pub selected_count: usize,
+
+    /// 标记为 `Deferred` 的候选数量。
+    pub deferred_count: usize,
+
+    /// 标记为 `Blocked` 的候选数量。
+    pub blocked_count: usize,
+
+    /// 当前计划是否仍然只属于结构规划边界。
+    pub skeleton_only: bool,
+}
+
 /// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -445,6 +576,159 @@ pub fn smithay_linux_handler_requirement_matrix_report()
     }
 }
 
+/// 根据当前 requirement matrix 生成固定顺序的 reduction plan。
+///
+/// `GlobalDispatchBindShape` 只有在三类 global handler 都仍将
+/// `GlobalDispatchBind` 标记为 `Missing` 时才会成为唯一 first target。该选择只允许
+/// 后续研究 bind 类型形状；不得接入 adapter、创建 global 或处理 request。
+pub fn smithay_linux_handler_reduction_plan_report() -> SmithayLinuxHandlerReductionPlanReport {
+    use SmithayLinuxHandlerReductionCandidate as Candidate;
+    use SmithayLinuxHandlerReductionDecision as Decision;
+    use SmithayLinuxHandlerReductionRisk as Risk;
+    use SmithayLinuxHandlerRequirement as Requirement;
+
+    let matrix = smithay_linux_handler_requirement_matrix_report();
+    let bind_shape_is_common_missing =
+        requirement_is_missing_for_all_handlers(&matrix, Requirement::GlobalDispatchBind);
+    let bind_decision = if bind_shape_is_common_missing {
+        Decision::SelectedFirst
+    } else {
+        Decision::Blocked
+    };
+    let candidates = vec![
+        reduction_candidate(
+            Candidate::GlobalDispatchBindShape,
+            bind_decision,
+            vec![Requirement::GlobalDispatchBind],
+            vec![
+                Risk::IntroducesClientBindEntry,
+                Risk::WouldOpenRealProtocolSurface,
+                Risk::MustRemainIsolated,
+            ],
+            "三类 global handler 的共同前置 requirement；只研究 bind 类型形状，不接入 adapter。",
+        ),
+        reduction_candidate(
+            Candidate::DispatchRequestShape,
+            Decision::Deferred,
+            vec![Requirement::DispatchRequest],
+            vec![
+                Risk::IntroducesRequestDispatchEntry,
+                Risk::WouldOpenRealProtocolSurface,
+                Risk::MustRemainIsolated,
+            ],
+            "Request dispatch 会建立可执行协议入口，必须晚于隔离 bind 形状研究。",
+        ),
+        reduction_candidate(
+            Candidate::CompositorHandlerShape,
+            Decision::Deferred,
+            vec![
+                Requirement::CompositorHandler,
+                Requirement::SurfaceRequestHandling,
+            ],
+            vec![
+                Risk::RequiresDelegateMacro,
+                Risk::RequiresSurfaceLifecycle,
+                Risk::WouldOpenRealProtocolSurface,
+                Risk::MustRemainIsolated,
+            ],
+            "Compositor handler 依赖 surface 回调和 dispatch 安装面，不能作为首个缩减目标。",
+        ),
+        reduction_candidate(
+            Candidate::ShmHandlerShape,
+            Decision::Deferred,
+            vec![Requirement::BufferHandler, Requirement::ShmHandler],
+            vec![
+                Risk::RequiresDelegateMacro,
+                Risk::RequiresBufferLifecycle,
+                Risk::WouldOpenRealProtocolSurface,
+                Risk::MustRemainIsolated,
+            ],
+            "SHM handler 同时依赖 buffer 生命周期和 dispatch 安装面，应在共同 bind 边界之后研究。",
+        ),
+        reduction_candidate(
+            Candidate::XdgShellHandlerShape,
+            Decision::Deferred,
+            vec![
+                Requirement::XdgShellHandler,
+                Requirement::XdgSurfaceRequestHandling,
+            ],
+            vec![
+                Risk::RequiresDelegateMacro,
+                Risk::RequiresSurfaceLifecycle,
+                Risk::RequiresXdgLifecycle,
+                Risk::WouldOpenRealProtocolSurface,
+                Risk::MustRemainIsolated,
+            ],
+            "XDG handler 依赖 shell 与 surface 生命周期，当前只能保留为后续隔离研究项。",
+        ),
+        reduction_candidate(
+            Candidate::ClientIdentityModel,
+            Decision::Deferred,
+            vec![Requirement::ClientObjectVisibility],
+            vec![Risk::RequiresClientIdentity, Risk::MustRemainIsolated],
+            "Client identity 是 bind/resource 参数建模的依赖，但本计划不接收或保存真实 client。",
+        ),
+        reduction_candidate(
+            Candidate::ProtocolResourceModel,
+            Decision::Deferred,
+            vec![Requirement::ProtocolResourceTracking],
+            vec![Risk::RequiresResourceTracking, Risk::MustRemainIsolated],
+            "Resource model 必须先定义稳定生命周期语义，不能由真实 protocol object 隐式承担。",
+        ),
+        reduction_candidate(
+            Candidate::SurfaceLifecycleBridge,
+            Decision::Blocked,
+            vec![
+                Requirement::SurfaceRequestHandling,
+                Requirement::XdgSurfaceRequestHandling,
+            ],
+            vec![
+                Risk::RequiresSurfaceLifecycle,
+                Risk::RequiresXdgLifecycle,
+                Risk::WouldOpenRealProtocolSurface,
+                Risk::MustRemainIsolated,
+            ],
+            "真实 surface request 仍被 activation 与 skeleton policy 阻止，禁止提前建立 bridge。",
+        ),
+        reduction_candidate(
+            Candidate::CoreAdmissionBridge,
+            Decision::Blocked,
+            vec![Requirement::CoreAdmissionMapping],
+            vec![
+                Risk::RequiresSurfaceLifecycle,
+                Risk::RequiresCoreAdmission,
+                Risk::MustRemainIsolated,
+            ],
+            "核心接纳依赖已验证的 surface/resource 生命周期，当前不得跨越 handler planning 边界。",
+        ),
+    ];
+    let selected_first = candidates
+        .iter()
+        .find(|report| report.decision == Decision::SelectedFirst)
+        .map(|report| report.candidate);
+    let selected_count = candidates
+        .iter()
+        .filter(|report| report.decision == Decision::SelectedFirst)
+        .count();
+    let deferred_count = candidates
+        .iter()
+        .filter(|report| report.decision == Decision::Deferred)
+        .count();
+    let blocked_count = candidates
+        .iter()
+        .filter(|report| report.decision == Decision::Blocked)
+        .count();
+
+    SmithayLinuxHandlerReductionPlanReport {
+        candidates,
+        selected_first,
+        selected_count,
+        deferred_count,
+        blocked_count,
+        skeleton_only: true,
+    }
+}
+
 fn requirement_item(
     handler: SmithayLinuxAdapterGlobalHandlerKind,
     requirement: SmithayLinuxHandlerRequirement,
@@ -465,13 +749,48 @@ fn requirement_item(
     }
 }
 
+fn reduction_candidate(
+    candidate: SmithayLinuxHandlerReductionCandidate,
+    decision: SmithayLinuxHandlerReductionDecision,
+    related_requirements: Vec<SmithayLinuxHandlerRequirement>,
+    risks: Vec<SmithayLinuxHandlerReductionRisk>,
+    rationale: &'static str,
+) -> SmithayLinuxHandlerReductionCandidateReport {
+    SmithayLinuxHandlerReductionCandidateReport {
+        candidate,
+        decision,
+        related_requirements,
+        risks,
+        rationale,
+        skeleton_only: true,
+    }
+}
+
+fn requirement_is_missing_for_all_handlers(
+    matrix: &SmithayLinuxHandlerRequirementMatrixReport,
+    requirement: SmithayLinuxHandlerRequirement,
+) -> bool {
+    use SmithayLinuxHandlerRequirementState as State;
+
+    let matching = matrix
+        .items
+        .iter()
+        .filter(|item| item.requirement == requirement)
+        .collect::<Vec<_>>();
+
+    matching.len() == 3 && matching.iter().all(|item| item.state == State::Missing)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind,
-        SmithayLinuxHandlerRequirement, SmithayLinuxHandlerRequirementEvidence,
-        SmithayLinuxHandlerRequirementState, SmithayLinuxInertHandlerProbe,
-        smithay_linux_handler_probe_report, smithay_linux_handler_requirement_matrix_report,
+        SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionDecision,
+        SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
+        SmithayLinuxHandlerRequirementEvidence, SmithayLinuxHandlerRequirementState,
+        SmithayLinuxInertHandlerProbe, smithay_linux_handler_probe_report,
+        smithay_linux_handler_reduction_plan_report,
+        smithay_linux_handler_requirement_matrix_report,
     };
     use crate::smithay_backend::{
         linux_adapter::{
@@ -715,6 +1034,140 @@ mod tests {
     }
 
     #[test]
+    fn reduction_plan_selects_only_common_bind_shape_in_stable_order() {
+        use SmithayLinuxHandlerReductionCandidate as Candidate;
+        use SmithayLinuxHandlerReductionDecision as Decision;
+        use SmithayLinuxHandlerReductionRisk as Risk;
+        use SmithayLinuxHandlerRequirement as Requirement;
+
+        let report = smithay_linux_handler_reduction_plan_report();
+        let actual_order = report
+            .candidates
+            .iter()
+            .map(|candidate| candidate.candidate)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual_order,
+            vec![
+                Candidate::GlobalDispatchBindShape,
+                Candidate::DispatchRequestShape,
+                Candidate::CompositorHandlerShape,
+                Candidate::ShmHandlerShape,
+                Candidate::XdgShellHandlerShape,
+                Candidate::ClientIdentityModel,
+                Candidate::ProtocolResourceModel,
+                Candidate::SurfaceLifecycleBridge,
+                Candidate::CoreAdmissionBridge,
+            ]
+        );
+        assert!(report.skeleton_only);
+        assert!(!report.candidates.is_empty());
+        assert_eq!(report.selected_count, 1);
+        assert_eq!(report.deferred_count, 6);
+        assert_eq!(report.blocked_count, 2);
+        assert_eq!(
+            report.selected_first,
+            Some(Candidate::GlobalDispatchBindShape)
+        );
+        assert_eq!(
+            report.selected_count + report.deferred_count + report.blocked_count,
+            report.candidates.len()
+        );
+
+        let bind = reduction_candidate_report(&report, Candidate::GlobalDispatchBindShape);
+        assert_eq!(bind.decision, Decision::SelectedFirst);
+        assert!(
+            bind.related_requirements
+                .contains(&Requirement::GlobalDispatchBind)
+        );
+        assert!(bind.risks.contains(&Risk::IntroducesClientBindEntry));
+        assert!(bind.risks.contains(&Risk::MustRemainIsolated));
+
+        let dispatch = reduction_candidate_report(&report, Candidate::DispatchRequestShape);
+        assert_ne!(dispatch.decision, Decision::SelectedFirst);
+        assert!(
+            dispatch
+                .related_requirements
+                .contains(&Requirement::DispatchRequest)
+        );
+        assert!(
+            dispatch
+                .risks
+                .contains(&Risk::IntroducesRequestDispatchEntry)
+        );
+
+        let surface = reduction_candidate_report(&report, Candidate::SurfaceLifecycleBridge);
+        assert_eq!(surface.decision, Decision::Blocked);
+        assert!(
+            surface
+                .related_requirements
+                .contains(&Requirement::SurfaceRequestHandling)
+        );
+        assert!(
+            surface
+                .related_requirements
+                .contains(&Requirement::XdgSurfaceRequestHandling)
+        );
+        assert!(surface.risks.contains(&Risk::RequiresSurfaceLifecycle));
+
+        let core = reduction_candidate_report(&report, Candidate::CoreAdmissionBridge);
+        assert_eq!(core.decision, Decision::Blocked);
+        assert!(
+            core.related_requirements
+                .contains(&Requirement::CoreAdmissionMapping)
+        );
+        assert!(core.risks.contains(&Risk::RequiresCoreAdmission));
+
+        assert!(report.candidates.iter().all(|candidate| {
+            candidate.skeleton_only
+                && !candidate.related_requirements.is_empty()
+                && !candidate.risks.is_empty()
+                && !candidate.rationale.is_empty()
+        }));
+    }
+
+    #[test]
+    fn reduction_plan_remains_aligned_with_matrix_and_probe() {
+        let plan = smithay_linux_handler_reduction_plan_report();
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        let probe = smithay_linux_handler_probe_report();
+        let selected = plan
+            .selected_first
+            .expect("reduction plan 必须选择唯一 first target");
+        let selected_report = reduction_candidate_report(&plan, selected);
+
+        assert_eq!(
+            selected,
+            SmithayLinuxHandlerReductionCandidate::GlobalDispatchBindShape
+        );
+        assert!(plan.candidates.iter().all(|candidate| {
+            candidate.related_requirements.iter().all(|requirement| {
+                matrix
+                    .items
+                    .iter()
+                    .any(|item| item.requirement == *requirement)
+            })
+        }));
+        assert!(
+            selected_report
+                .related_requirements
+                .iter()
+                .all(|requirement| matrix
+                    .items
+                    .iter()
+                    .any(|item| item.requirement == *requirement))
+        );
+        assert_eq!(matrix.ready_count, 0);
+        assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
+        assert!(!probe.compiled_trait_shape);
+        assert!(!probe.calls_create_global);
+        assert!(!probe.calls_register_global);
+        assert!(!probe.touches_adapter);
+        assert!(!probe.touches_core);
+    }
+
+    #[test]
     fn existing_adapter_boundaries_remain_blocked() {
         assert_runtime_dir();
         let socket_name = unique_socket_name("phase49c-boundary");
@@ -948,12 +1401,27 @@ mod tests {
         let probe_function = ["smithay_linux_", "handler_probe_report"].concat();
         let matrix_report_type = ["SmithayLinux", "HandlerRequirementMatrixReport"].concat();
         let matrix_function = ["smithay_linux_", "handler_requirement_matrix_report"].concat();
+        let reduction_report_type = ["SmithayLinux", "HandlerReductionPlanReport"].concat();
+        let reduction_function = ["smithay_linux_", "handler_reduction_plan_report"].concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
             assert!(!source.contains(&probe_function));
             assert!(!source.contains(&matrix_report_type));
             assert!(!source.contains(&matrix_function));
+            assert!(!source.contains(&reduction_report_type));
+            assert!(!source.contains(&reduction_function));
         }
+    }
+
+    fn reduction_candidate_report(
+        report: &super::SmithayLinuxHandlerReductionPlanReport,
+        candidate: SmithayLinuxHandlerReductionCandidate,
+    ) -> &super::SmithayLinuxHandlerReductionCandidateReport {
+        report
+            .candidates
+            .iter()
+            .find(|report| report.candidate == candidate)
+            .expect("reduction plan 必须包含指定 candidate")
     }
 }

@@ -170,10 +170,13 @@ pub use linux_adapter::{
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_handler_probe::{
     SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerProbeReport,
-    SmithayLinuxHandlerRequirement, SmithayLinuxHandlerRequirementEvidence,
-    SmithayLinuxHandlerRequirementMatrixItem, SmithayLinuxHandlerRequirementMatrixReport,
-    SmithayLinuxHandlerRequirementState, SmithayLinuxInertHandlerProbe,
-    smithay_linux_handler_probe_report, smithay_linux_handler_requirement_matrix_report,
+    SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionCandidateReport,
+    SmithayLinuxHandlerReductionDecision, SmithayLinuxHandlerReductionPlanReport,
+    SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
+    SmithayLinuxHandlerRequirementEvidence, SmithayLinuxHandlerRequirementMatrixItem,
+    SmithayLinuxHandlerRequirementMatrixReport, SmithayLinuxHandlerRequirementState,
+    SmithayLinuxInertHandlerProbe, smithay_linux_handler_probe_report,
+    smithay_linux_handler_reduction_plan_report, smithay_linux_handler_requirement_matrix_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
