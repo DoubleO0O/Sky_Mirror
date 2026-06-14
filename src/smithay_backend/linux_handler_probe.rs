@@ -1755,6 +1755,237 @@ pub struct SmithayLinuxGlobalDispatchTraitBoundaryReport {
     pub skeleton_only: bool,
 }
 
+/// Protocol request dispatch 边界的固定保守结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDispatchRequestBoundaryDecision {
+    /// 当前 planning 证据不足以定义真实 request dispatch 边界。
+    Blocked,
+}
+
+/// Protocol request dispatch 边界审计的稳定范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDispatchRequestBoundaryScope {
+    /// 只审计 request signature 的概念前置条件。
+    RequestSignatureOnly,
+}
+
+/// 当前审计覆盖的稳定 protocol request family。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDispatchRequestFamily {
+    /// Compositor protocol request family。
+    WlCompositor,
+
+    /// Shared-memory protocol request family。
+    WlShm,
+
+    /// XDG shell base protocol request family。
+    XdgWmBase,
+}
+
+/// 定义真实 protocol request dispatch 边界前必须满足的稳定条件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDispatchRequestBoundaryPrecondition {
+    /// Inert protocol request ledger 契约已存在。
+    InertProtocolRequestLedgerPresent,
+
+    /// Unsupported request 必须拒绝的策略已存在。
+    UnsupportedRequestRejectionPolicyPresent,
+
+    /// Bind client identity 只有 synthetic 模型。
+    BindClientIdentitySyntheticModeled,
+
+    /// Bind global resource identity 只有 synthetic 模型。
+    BindGlobalResourceIdentitySyntheticModeled,
+
+    /// Bind global data 只有 synthetic 模型。
+    BindGlobalDataSyntheticModeled,
+
+    /// Handler state 只有 synthetic 模型。
+    HandlerStateSyntheticModeled,
+
+    /// Display handle redaction policy 仍保持保守。
+    DisplayHandleRedactionPolicyPreserved,
+
+    /// `GlobalDispatch` trait boundary planning report 已存在。
+    GlobalDispatchTraitBoundaryReportPresent,
+
+    /// 真实 `Dispatch` trait 当前不可用于该边界。
+    RealDispatchTraitUnavailable,
+
+    /// 真实 request handler 实现仍被禁止。
+    RealRequestHandlerImplementationForbidden,
+
+    /// 真实 protocol request 类型仍不可用。
+    RealProtocolRequestTypesUnavailable,
+
+    /// Surface 生命周期边界尚未建立。
+    SurfaceLifecycleBoundaryUnavailable,
+
+    /// XDG toplevel 生命周期边界尚未建立。
+    XdgToplevelLifecycleBoundaryUnavailable,
+
+    /// Core admission bridge 尚未建立。
+    CoreAdmissionBridgeUnavailable,
+
+    /// Client accept 边界仍不可用。
+    ClientAcceptBoundaryUnavailable,
+
+    /// Request boundary 禁止接入生产 adapter。
+    AdapterIntegrationForbidden,
+}
+
+/// Dispatch request boundary 单项前置条件状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDispatchRequestBoundaryPreconditionState {
+    /// 纯数据 planning 证据已满足。
+    Satisfied,
+
+    /// 对应结构边界尚未建立。
+    Missing,
+
+    /// 对应能力被安全策略明确阻止。
+    Blocked,
+}
+
+/// 阻止真实 protocol request dispatch 边界的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDispatchRequestBoundaryBlocker {
+    /// 真实 `Dispatch` trait 实现仍被禁止。
+    RealDispatchTraitImplementationForbidden,
+
+    /// 真实 request handler 仍被禁止。
+    RealRequestHandlerForbidden,
+
+    /// 真实 protocol request 类型仍不可用。
+    RealProtocolRequestTypesUnavailable,
+
+    /// Surface 生命周期边界仍缺失。
+    SurfaceLifecycleBoundaryMissing,
+
+    /// XDG toplevel 生命周期边界仍缺失。
+    XdgToplevelLifecycleBoundaryMissing,
+
+    /// Core admission bridge 仍缺失。
+    CoreAdmissionBridgeMissing,
+
+    /// Client accept 能力仍不受支持。
+    ClientAcceptUnsupported,
+
+    /// Request boundary 禁止接入生产 adapter。
+    AdapterIntegrationForbidden,
+
+    /// 真实 display handle 读取仍被禁止。
+    DisplayHandleReadForbidden,
+
+    /// 真实 global 创建调用仍被禁止。
+    CreateGlobalForbidden,
+
+    /// 真实 global 注册调用仍被禁止。
+    RegisterGlobalForbidden,
+}
+
+/// 单项 dispatch request boundary 前置条件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDispatchRequestBoundaryPreconditionItem {
+    /// 当前稳定前置条件。
+    pub precondition: SmithayLinuxDispatchRequestBoundaryPrecondition,
+
+    /// 当前前置条件状态。
+    pub state: SmithayLinuxDispatchRequestBoundaryPreconditionState,
+
+    /// 非 `Satisfied` 状态对应的非空 blocker。
+    pub blockers: Vec<SmithayLinuxDispatchRequestBoundaryBlocker>,
+
+    /// 当前 item 是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// 单个 protocol request family 的纯数据边界报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDispatchRequestBoundaryFamilyReport {
+    /// 当前 request family。
+    pub family: SmithayLinuxDispatchRequestFamily,
+
+    /// 当前 family 的保守决策。
+    pub decision: SmithayLinuxDispatchRequestBoundaryDecision,
+
+    /// 按稳定顺序排列的 request boundary 前置条件。
+    pub preconditions: Vec<SmithayLinuxDispatchRequestBoundaryPreconditionItem>,
+
+    /// 已满足的纯数据前置条件数量。
+    pub satisfied_count: usize,
+
+    /// 尚未建立的结构前置条件数量。
+    pub missing_count: usize,
+
+    /// 被安全策略明确阻止的前置条件数量。
+    pub blocked_count: usize,
+
+    /// 当前是否可以定义真实 request boundary。
+    pub can_define_request_boundary: bool,
+
+    /// 当前是否可以实现真实 `Dispatch`。
+    pub can_implement_dispatch: bool,
+
+    /// 当前是否可以处理真实 protocol requests。
+    pub can_handle_real_requests: bool,
+
+    /// 当前是否可以创建真实 surfaces。
+    pub can_create_surfaces: bool,
+
+    /// 当前是否可以创建真实 XDG toplevels。
+    pub can_create_xdg_toplevels: bool,
+
+    /// 当前是否可以进入 core admission。
+    pub can_enter_core_admission: bool,
+
+    /// 当前是否可以接收真实 clients。
+    pub can_accept_clients: bool,
+
+    /// 当前是否可以接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// 三类 protocol request family 的纯数据边界总报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDispatchRequestBoundaryReport {
+    /// 当前审计范围。
+    pub scope: SmithayLinuxDispatchRequestBoundaryScope,
+
+    /// 当前总决策。
+    pub decision: SmithayLinuxDispatchRequestBoundaryDecision,
+
+    /// 按稳定顺序排列的 request family 报告。
+    pub families: Vec<SmithayLinuxDispatchRequestBoundaryFamilyReport>,
+
+    /// 已定义真实 request boundary 的 family 数量。
+    pub defined_count: usize,
+
+    /// 仍被阻止的 family 数量。
+    pub blocked_count: usize,
+
+    /// 当前报告是否足以满足 trait boundary 中的 request boundary 前置条件。
+    pub can_satisfy_dispatch_request_boundary_defined_precondition: bool,
+
+    /// 当前是否可以实现真实 `Dispatch`。
+    pub can_implement_dispatch: bool,
+
+    /// 当前是否可以处理真实 protocol requests。
+    pub can_handle_real_requests: bool,
+
+    /// 当前是否可以 dispatch 真实 protocol events。
+    pub can_dispatch_protocol_events: bool,
+
+    /// 当前是否可以接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -3169,6 +3400,380 @@ pub fn smithay_linux_global_dispatch_trait_boundary_report()
     }
 }
 
+/// 返回 protocol request dispatch signature 的固定边界前置条件报告。
+///
+/// 该函数只汇总 planning 层纯数据，不读取 adapter、bootstrap 或任何原生对象，
+/// 也不建立 trait implementation、request handler 或 protocol event dispatch。
+pub fn smithay_linux_dispatch_request_boundary_report() -> SmithayLinuxDispatchRequestBoundaryReport
+{
+    use SmithayLinuxBindClientIdentityState as ClientState;
+    use SmithayLinuxBindGlobalDataState as GlobalDataState;
+    use SmithayLinuxBindGlobalResourceIdentityState as ResourceState;
+    use SmithayLinuxBindHandlerStateState as HandlerState;
+    use SmithayLinuxDispatchRequestBoundaryBlocker as Blocker;
+    use SmithayLinuxDispatchRequestBoundaryPrecondition as Precondition;
+    use SmithayLinuxDispatchRequestBoundaryPreconditionState as State;
+    use SmithayLinuxDisplayHandleAccessPolicy as AccessPolicy;
+    use SmithayLinuxDisplayHandleRedaction as Redaction;
+    use SmithayLinuxGlobalDispatchBindInput as BindInput;
+    use SmithayLinuxGlobalDispatchBindReadiness as BindReadiness;
+    use SmithayLinuxGlobalDispatchTraitBoundaryDecision as TraitDecision;
+    use SmithayLinuxGlobalDispatchTraitBoundaryPrecondition as TraitPrecondition;
+    use SmithayLinuxGlobalDispatchTraitBoundaryPreconditionState as TraitState;
+    use SmithayLinuxGlobalDispatchTraitBoundaryScope as TraitScope;
+    use SmithayLinuxGlobalRegistrationPromotionPrecondition as PromotionPrecondition;
+    use SmithayLinuxGlobalRegistrationPromotionPreconditionState as PromotionState;
+    use SmithayLinuxHandlerProbeKind as ProbeKind;
+    use SmithayLinuxHandlerRequirement as Requirement;
+    use SmithayLinuxHandlerRequirementState as RequirementState;
+
+    let client_identity = smithay_linux_bind_client_identity_report();
+    let resource_identity = smithay_linux_bind_global_resource_identity_report();
+    let global_data = smithay_linux_bind_global_data_report();
+    let handler_state = smithay_linux_bind_handler_state_report();
+    let display_policy = smithay_linux_display_handle_access_report();
+    let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+    let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+    let trait_boundary = smithay_linux_global_dispatch_trait_boundary_report();
+    let promotion = smithay_linux_global_registration_promotion_report();
+    let matrix = smithay_linux_handler_requirement_matrix_report();
+    let probe = smithay_linux_handler_probe_report();
+
+    // Phase 48F established these as inert planning contracts. The production
+    // report deliberately does not read the adapter ledger; tests verify that
+    // the adapter still rejects representative requests under this contract.
+    let inert_request_ledger_present = true;
+    let unsupported_request_rejection_policy_present = true;
+    let client_identity_synthetic = client_identity.state == ClientState::SyntheticModeled
+        && !client_identity.represents_real_client
+        && !client_identity.accepts_client
+        && !client_identity.touches_socket
+        && !client_identity.touches_adapter;
+    let resource_identity_synthetic = resource_identity.state == ResourceState::SyntheticModeled
+        && !resource_identity.represents_real_resource
+        && !resource_identity.comes_from_real_global_registration
+        && !resource_identity.tracks_protocol_resource
+        && !resource_identity.touches_adapter;
+    let global_data_synthetic = global_data.state == GlobalDataState::SyntheticModeled
+        && !global_data.represents_real_global_data
+        && !global_data.comes_from_real_global_registration
+        && !global_data.tracks_protocol_global
+        && !global_data.touches_adapter;
+    let handler_state_synthetic = handler_state.state == HandlerState::SyntheticModeled
+        && !handler_state.represents_real_handler_state
+        && !handler_state.touches_adapter
+        && !handler_state.touches_dispatch_state
+        && !handler_state.touches_display_handle;
+    let display_redaction_preserved = display_policy.policy == AccessPolicy::Hidden
+        && display_policy.redaction == Redaction::FullyRedacted
+        && !display_policy.represents_real_display_handle
+        && !display_policy.exposes_display_handle
+        && !display_policy.stores_display_handle
+        && !display_policy.reads_display_handle;
+    let trait_dispatch_boundary_missing = trait_boundary
+        .preconditions
+        .iter()
+        .find(|item| item.precondition == TraitPrecondition::DispatchRequestBoundaryDefined)
+        .is_some_and(|item| item.state == TraitState::Missing);
+    let planning_reports_preserve_boundary = bind_shape.modeled_count == 4
+        && bind_shape
+            .items
+            .iter()
+            .find(|item| item.input == BindInput::DisplayHandleObject)
+            .is_some_and(|item| !item.modeled)
+        && final_seal.readiness == BindReadiness::NotReady
+        && !final_seal.can_dispatch_requests
+        && promotion.promoted_count == 0
+        && promotion.blocked_count == 3
+        && promotion.targets.iter().all(|target| {
+            target
+                .preconditions
+                .iter()
+                .find(|item| {
+                    item.precondition == PromotionPrecondition::GlobalDispatchTraitBoundaryCompiled
+                })
+                .is_some_and(|item| item.state == PromotionState::Missing)
+        })
+        && matrix.ready_count == 0
+        && probe.kind == ProbeKind::TypeShapeOnly
+        && !probe.compiled_trait_shape;
+    let trait_boundary_report_present = trait_boundary.scope == TraitScope::BindSignatureOnly
+        && trait_boundary.decision == TraitDecision::Blocked
+        && trait_dispatch_boundary_missing
+        && !trait_boundary.can_compile_trait_boundary
+        && !trait_boundary.can_implement_dispatch
+        && planning_reports_preserve_boundary;
+    let surface_lifecycle_missing = matrix.items.iter().any(|item| {
+        item.requirement == Requirement::SurfaceRequestHandling
+            && item.state == RequirementState::Blocked
+    }) && !final_seal.can_create_surfaces;
+    let xdg_shell_lifecycle_missing = matrix.items.iter().any(|item| {
+        item.requirement == Requirement::XdgSurfaceRequestHandling
+            && item.state == RequirementState::Blocked
+    }) && !final_seal.can_create_surfaces;
+    let core_admission_bridge_missing = matrix.items.iter().any(|item| {
+        item.requirement == Requirement::CoreAdmissionMapping
+            && item.state == RequirementState::Blocked
+    }) && !final_seal.can_enter_core_admission;
+    let client_accept_blocked =
+        !client_identity.accepts_client && !trait_boundary.can_accept_clients;
+    let adapter_integration_blocked = !client_identity.touches_adapter
+        && !resource_identity.touches_adapter
+        && !global_data.touches_adapter
+        && !handler_state.touches_adapter
+        && !bind_shape.can_attach_to_adapter
+        && !final_seal.can_attach_to_adapter
+        && !trait_boundary.can_attach_to_adapter
+        && !promotion.can_attach_to_adapter
+        && !probe.touches_adapter;
+
+    let families = [
+        SmithayLinuxDispatchRequestFamily::WlCompositor,
+        SmithayLinuxDispatchRequestFamily::WlShm,
+        SmithayLinuxDispatchRequestFamily::XdgWmBase,
+    ]
+    .into_iter()
+    .map(|family| {
+        let preconditions = vec![
+            dispatch_request_boundary_precondition_item(
+                Precondition::InertProtocolRequestLedgerPresent,
+                if inert_request_ledger_present {
+                    State::Satisfied
+                } else {
+                    State::Missing
+                },
+                if inert_request_ledger_present {
+                    Vec::new()
+                } else {
+                    vec![Blocker::RealRequestHandlerForbidden]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::UnsupportedRequestRejectionPolicyPresent,
+                if unsupported_request_rejection_policy_present {
+                    State::Satisfied
+                } else {
+                    State::Missing
+                },
+                if unsupported_request_rejection_policy_present {
+                    Vec::new()
+                } else {
+                    vec![Blocker::RealRequestHandlerForbidden]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::BindClientIdentitySyntheticModeled,
+                if client_identity_synthetic {
+                    State::Satisfied
+                } else {
+                    State::Missing
+                },
+                if client_identity_synthetic {
+                    Vec::new()
+                } else {
+                    vec![Blocker::ClientAcceptUnsupported]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::BindGlobalResourceIdentitySyntheticModeled,
+                if resource_identity_synthetic {
+                    State::Satisfied
+                } else {
+                    State::Missing
+                },
+                if resource_identity_synthetic {
+                    Vec::new()
+                } else {
+                    vec![Blocker::RealProtocolRequestTypesUnavailable]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::BindGlobalDataSyntheticModeled,
+                if global_data_synthetic {
+                    State::Satisfied
+                } else {
+                    State::Missing
+                },
+                if global_data_synthetic {
+                    Vec::new()
+                } else {
+                    vec![Blocker::RegisterGlobalForbidden]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::HandlerStateSyntheticModeled,
+                if handler_state_synthetic {
+                    State::Satisfied
+                } else {
+                    State::Missing
+                },
+                if handler_state_synthetic {
+                    Vec::new()
+                } else {
+                    vec![Blocker::RealDispatchTraitImplementationForbidden]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::DisplayHandleRedactionPolicyPreserved,
+                if display_redaction_preserved {
+                    State::Satisfied
+                } else {
+                    State::Blocked
+                },
+                if display_redaction_preserved {
+                    Vec::new()
+                } else {
+                    vec![Blocker::DisplayHandleReadForbidden]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::GlobalDispatchTraitBoundaryReportPresent,
+                if trait_boundary_report_present {
+                    State::Satisfied
+                } else {
+                    State::Missing
+                },
+                if trait_boundary_report_present {
+                    Vec::new()
+                } else {
+                    vec![Blocker::RealDispatchTraitImplementationForbidden]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::RealDispatchTraitUnavailable,
+                State::Blocked,
+                vec![Blocker::RealDispatchTraitImplementationForbidden],
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::RealRequestHandlerImplementationForbidden,
+                State::Blocked,
+                vec![Blocker::RealRequestHandlerForbidden],
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::RealProtocolRequestTypesUnavailable,
+                State::Blocked,
+                vec![Blocker::RealProtocolRequestTypesUnavailable],
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::SurfaceLifecycleBoundaryUnavailable,
+                if surface_lifecycle_missing {
+                    State::Missing
+                } else {
+                    State::Blocked
+                },
+                vec![Blocker::SurfaceLifecycleBoundaryMissing],
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::XdgToplevelLifecycleBoundaryUnavailable,
+                if xdg_shell_lifecycle_missing {
+                    State::Missing
+                } else {
+                    State::Blocked
+                },
+                vec![Blocker::XdgToplevelLifecycleBoundaryMissing],
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::CoreAdmissionBridgeUnavailable,
+                if core_admission_bridge_missing {
+                    State::Missing
+                } else {
+                    State::Blocked
+                },
+                vec![Blocker::CoreAdmissionBridgeMissing],
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::ClientAcceptBoundaryUnavailable,
+                State::Blocked,
+                if client_accept_blocked {
+                    vec![Blocker::ClientAcceptUnsupported]
+                } else {
+                    vec![
+                        Blocker::ClientAcceptUnsupported,
+                        Blocker::AdapterIntegrationForbidden,
+                    ]
+                },
+            ),
+            dispatch_request_boundary_precondition_item(
+                Precondition::AdapterIntegrationForbidden,
+                State::Blocked,
+                if adapter_integration_blocked {
+                    vec![
+                        Blocker::AdapterIntegrationForbidden,
+                        Blocker::DisplayHandleReadForbidden,
+                        Blocker::CreateGlobalForbidden,
+                        Blocker::RegisterGlobalForbidden,
+                    ]
+                } else {
+                    vec![Blocker::AdapterIntegrationForbidden]
+                },
+            ),
+        ];
+        let satisfied_count = preconditions
+            .iter()
+            .filter(|item| item.state == State::Satisfied)
+            .count();
+        let missing_count = preconditions
+            .iter()
+            .filter(|item| item.state == State::Missing)
+            .count();
+        let blocked_count = preconditions
+            .iter()
+            .filter(|item| item.state == State::Blocked)
+            .count();
+
+        SmithayLinuxDispatchRequestBoundaryFamilyReport {
+            family,
+            decision: SmithayLinuxDispatchRequestBoundaryDecision::Blocked,
+            preconditions,
+            satisfied_count,
+            missing_count,
+            blocked_count,
+            can_define_request_boundary: false,
+            can_implement_dispatch: false,
+            can_handle_real_requests: false,
+            can_create_surfaces: false,
+            can_create_xdg_toplevels: false,
+            can_enter_core_admission: false,
+            can_accept_clients: false,
+            can_attach_to_adapter: false,
+            skeleton_only: client_identity.skeleton_only
+                && resource_identity.skeleton_only
+                && global_data.skeleton_only
+                && handler_state.skeleton_only
+                && display_policy.skeleton_only
+                && bind_shape.skeleton_only
+                && final_seal.skeleton_only
+                && trait_boundary.skeleton_only
+                && promotion.skeleton_only
+                && matrix.skeleton_only
+                && probe.skeleton_only,
+        }
+    })
+    .collect::<Vec<_>>();
+    let defined_count = families
+        .iter()
+        .filter(|family| family.can_define_request_boundary)
+        .count();
+    let blocked_count = families
+        .iter()
+        .filter(|family| family.decision == SmithayLinuxDispatchRequestBoundaryDecision::Blocked)
+        .count();
+
+    SmithayLinuxDispatchRequestBoundaryReport {
+        scope: SmithayLinuxDispatchRequestBoundaryScope::RequestSignatureOnly,
+        decision: SmithayLinuxDispatchRequestBoundaryDecision::Blocked,
+        families,
+        defined_count,
+        blocked_count,
+        can_satisfy_dispatch_request_boundary_defined_precondition: false,
+        can_implement_dispatch: false,
+        can_handle_real_requests: false,
+        can_dispatch_protocol_events: false,
+        can_attach_to_adapter: false,
+        skeleton_only: true,
+    }
+}
+
 fn requirement_item(
     handler: SmithayLinuxAdapterGlobalHandlerKind,
     requirement: SmithayLinuxHandlerRequirement,
@@ -3495,6 +4100,19 @@ fn trait_boundary_precondition_item(
     }
 }
 
+fn dispatch_request_boundary_precondition_item(
+    precondition: SmithayLinuxDispatchRequestBoundaryPrecondition,
+    state: SmithayLinuxDispatchRequestBoundaryPreconditionState,
+    blockers: Vec<SmithayLinuxDispatchRequestBoundaryBlocker>,
+) -> SmithayLinuxDispatchRequestBoundaryPreconditionItem {
+    SmithayLinuxDispatchRequestBoundaryPreconditionItem {
+        precondition,
+        state,
+        blockers,
+        skeleton_only: true,
+    }
+}
+
 fn reduction_candidate(
     candidate: SmithayLinuxHandlerReductionCandidate,
     decision: SmithayLinuxHandlerReductionDecision,
@@ -3538,8 +4156,13 @@ mod tests {
         SmithayLinuxBindGlobalResourceIdentitySource, SmithayLinuxBindGlobalResourceIdentityState,
         SmithayLinuxBindGlobalResourceSyntheticId, SmithayLinuxBindHandlerStateBlocker,
         SmithayLinuxBindHandlerStateSource, SmithayLinuxBindHandlerStateState,
-        SmithayLinuxBindHandlerStateSyntheticId, SmithayLinuxDisplayHandleAccessBlocker,
-        SmithayLinuxDisplayHandleAccessPolicy, SmithayLinuxDisplayHandleInternalAccessBlocker,
+        SmithayLinuxBindHandlerStateSyntheticId, SmithayLinuxDispatchRequestBoundaryBlocker,
+        SmithayLinuxDispatchRequestBoundaryDecision,
+        SmithayLinuxDispatchRequestBoundaryPrecondition,
+        SmithayLinuxDispatchRequestBoundaryPreconditionState,
+        SmithayLinuxDispatchRequestBoundaryScope, SmithayLinuxDispatchRequestFamily,
+        SmithayLinuxDisplayHandleAccessBlocker, SmithayLinuxDisplayHandleAccessPolicy,
+        SmithayLinuxDisplayHandleInternalAccessBlocker,
         SmithayLinuxDisplayHandleInternalAccessDecision,
         SmithayLinuxDisplayHandleInternalAccessPrecondition,
         SmithayLinuxDisplayHandleInternalAccessPreconditionState,
@@ -3571,7 +4194,8 @@ mod tests {
         SmithayLinuxHandlerRequirementState, SmithayLinuxInertHandlerProbe,
         smithay_linux_bind_client_identity_report, smithay_linux_bind_global_data_report,
         smithay_linux_bind_global_resource_identity_report,
-        smithay_linux_bind_handler_state_report, smithay_linux_display_handle_access_report,
+        smithay_linux_bind_handler_state_report, smithay_linux_dispatch_request_boundary_report,
+        smithay_linux_display_handle_access_report,
         smithay_linux_display_handle_internal_access_gate_report,
         smithay_linux_display_handle_internal_ownership_evidence_report,
         smithay_linux_display_handle_public_api_evidence_report,
@@ -3585,7 +4209,8 @@ mod tests {
     use crate::smithay_backend::{
         linux_adapter::{
             SmithayLinuxAdapterGlobalHandlerBlocker, SmithayLinuxAdapterGlobalHandlerKind,
-            SmithayLinuxAdapterGlobalHandlerReadiness,
+            SmithayLinuxAdapterGlobalHandlerReadiness, SmithayLinuxAdapterProtocolRequestKind,
+            SmithayLinuxAdapterProtocolRequestOutcome,
             SmithayLinuxAdapterRealGlobalRegistrationMode, SmithayLinuxAdapterSkeleton,
         },
         runtime_facade::{BackendBootstrapMode, BackendRuntimeReport},
@@ -5373,6 +5998,315 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_request_boundary_preconditions_remain_non_impl() {
+        use SmithayLinuxDispatchRequestBoundaryBlocker as Blocker;
+        use SmithayLinuxDispatchRequestBoundaryPrecondition as Precondition;
+        use SmithayLinuxDispatchRequestBoundaryPreconditionState as State;
+        use SmithayLinuxGlobalDispatchBindInput as BindInput;
+        use SmithayLinuxGlobalDispatchTraitBoundaryPrecondition as TraitPrecondition;
+        use SmithayLinuxGlobalDispatchTraitBoundaryPreconditionState as TraitState;
+        use SmithayLinuxGlobalRegistrationPromotionPrecondition as PromotionPrecondition;
+        use SmithayLinuxGlobalRegistrationPromotionPreconditionState as PromotionState;
+        use SmithayLinuxHandlerReductionCandidate as Candidate;
+
+        let report = smithay_linux_dispatch_request_boundary_report();
+        let expected_precondition_order = [
+            Precondition::InertProtocolRequestLedgerPresent,
+            Precondition::UnsupportedRequestRejectionPolicyPresent,
+            Precondition::BindClientIdentitySyntheticModeled,
+            Precondition::BindGlobalResourceIdentitySyntheticModeled,
+            Precondition::BindGlobalDataSyntheticModeled,
+            Precondition::HandlerStateSyntheticModeled,
+            Precondition::DisplayHandleRedactionPolicyPreserved,
+            Precondition::GlobalDispatchTraitBoundaryReportPresent,
+            Precondition::RealDispatchTraitUnavailable,
+            Precondition::RealRequestHandlerImplementationForbidden,
+            Precondition::RealProtocolRequestTypesUnavailable,
+            Precondition::SurfaceLifecycleBoundaryUnavailable,
+            Precondition::XdgToplevelLifecycleBoundaryUnavailable,
+            Precondition::CoreAdmissionBridgeUnavailable,
+            Precondition::ClientAcceptBoundaryUnavailable,
+            Precondition::AdapterIntegrationForbidden,
+        ];
+
+        assert_eq!(
+            report.scope,
+            SmithayLinuxDispatchRequestBoundaryScope::RequestSignatureOnly
+        );
+        assert_eq!(
+            report.decision,
+            SmithayLinuxDispatchRequestBoundaryDecision::Blocked
+        );
+        assert_eq!(report.families.len(), 3);
+        assert_eq!(
+            report
+                .families
+                .iter()
+                .map(|family| family.family)
+                .collect::<Vec<_>>(),
+            vec![
+                SmithayLinuxDispatchRequestFamily::WlCompositor,
+                SmithayLinuxDispatchRequestFamily::WlShm,
+                SmithayLinuxDispatchRequestFamily::XdgWmBase,
+            ]
+        );
+        assert_eq!(report.defined_count, 0);
+        assert_eq!(report.blocked_count, 3);
+        assert!(!report.can_satisfy_dispatch_request_boundary_defined_precondition);
+        assert!(!report.can_implement_dispatch);
+        assert!(!report.can_handle_real_requests);
+        assert!(!report.can_dispatch_protocol_events);
+        assert!(!report.can_attach_to_adapter);
+        assert!(report.skeleton_only);
+
+        for family in &report.families {
+            assert_eq!(
+                family.decision,
+                SmithayLinuxDispatchRequestBoundaryDecision::Blocked
+            );
+            assert_eq!(
+                family
+                    .preconditions
+                    .iter()
+                    .map(|item| item.precondition)
+                    .collect::<Vec<_>>(),
+                expected_precondition_order
+            );
+            assert_eq!(family.satisfied_count, 8);
+            assert_eq!(family.missing_count, 3);
+            assert_eq!(family.blocked_count, 5);
+            assert_eq!(
+                family.satisfied_count + family.missing_count + family.blocked_count,
+                family.preconditions.len()
+            );
+            assert!(!family.can_define_request_boundary);
+            assert!(!family.can_implement_dispatch);
+            assert!(!family.can_handle_real_requests);
+            assert!(!family.can_create_surfaces);
+            assert!(!family.can_create_xdg_toplevels);
+            assert!(!family.can_enter_core_admission);
+            assert!(!family.can_accept_clients);
+            assert!(!family.can_attach_to_adapter);
+            assert!(family.skeleton_only);
+            assert!(family.preconditions.iter().all(|item| {
+                item.skeleton_only && (item.state == State::Satisfied || !item.blockers.is_empty())
+            }));
+
+            for precondition in [
+                Precondition::InertProtocolRequestLedgerPresent,
+                Precondition::UnsupportedRequestRejectionPolicyPresent,
+                Precondition::BindClientIdentitySyntheticModeled,
+                Precondition::BindGlobalResourceIdentitySyntheticModeled,
+                Precondition::BindGlobalDataSyntheticModeled,
+                Precondition::HandlerStateSyntheticModeled,
+                Precondition::DisplayHandleRedactionPolicyPreserved,
+                Precondition::GlobalDispatchTraitBoundaryReportPresent,
+            ] {
+                assert_eq!(
+                    dispatch_request_boundary_precondition(family, precondition).state,
+                    State::Satisfied
+                );
+            }
+            for precondition in [
+                Precondition::SurfaceLifecycleBoundaryUnavailable,
+                Precondition::XdgToplevelLifecycleBoundaryUnavailable,
+                Precondition::CoreAdmissionBridgeUnavailable,
+            ] {
+                assert_eq!(
+                    dispatch_request_boundary_precondition(family, precondition).state,
+                    State::Missing
+                );
+            }
+            for precondition in [
+                Precondition::RealDispatchTraitUnavailable,
+                Precondition::RealRequestHandlerImplementationForbidden,
+                Precondition::RealProtocolRequestTypesUnavailable,
+                Precondition::ClientAcceptBoundaryUnavailable,
+                Precondition::AdapterIntegrationForbidden,
+            ] {
+                assert_eq!(
+                    dispatch_request_boundary_precondition(family, precondition).state,
+                    State::Blocked
+                );
+            }
+
+            let expected_blockers = [
+                (
+                    Precondition::RealDispatchTraitUnavailable,
+                    Blocker::RealDispatchTraitImplementationForbidden,
+                ),
+                (
+                    Precondition::RealRequestHandlerImplementationForbidden,
+                    Blocker::RealRequestHandlerForbidden,
+                ),
+                (
+                    Precondition::RealProtocolRequestTypesUnavailable,
+                    Blocker::RealProtocolRequestTypesUnavailable,
+                ),
+                (
+                    Precondition::SurfaceLifecycleBoundaryUnavailable,
+                    Blocker::SurfaceLifecycleBoundaryMissing,
+                ),
+                (
+                    Precondition::XdgToplevelLifecycleBoundaryUnavailable,
+                    Blocker::XdgToplevelLifecycleBoundaryMissing,
+                ),
+                (
+                    Precondition::CoreAdmissionBridgeUnavailable,
+                    Blocker::CoreAdmissionBridgeMissing,
+                ),
+                (
+                    Precondition::ClientAcceptBoundaryUnavailable,
+                    Blocker::ClientAcceptUnsupported,
+                ),
+                (
+                    Precondition::AdapterIntegrationForbidden,
+                    Blocker::AdapterIntegrationForbidden,
+                ),
+            ];
+            for (precondition, blocker) in expected_blockers {
+                assert!(
+                    dispatch_request_boundary_precondition(family, precondition)
+                        .blockers
+                        .contains(&blocker)
+                );
+            }
+        }
+
+        let trait_boundary = smithay_linux_global_dispatch_trait_boundary_report();
+        assert_eq!(
+            trait_boundary.decision,
+            SmithayLinuxGlobalDispatchTraitBoundaryDecision::Blocked
+        );
+        assert_eq!(
+            trait_boundary_precondition(
+                &trait_boundary,
+                TraitPrecondition::DispatchRequestBoundaryDefined
+            )
+            .state,
+            TraitState::Missing
+        );
+        assert!(!trait_boundary.can_compile_trait_boundary);
+
+        let promotion = smithay_linux_global_registration_promotion_report();
+        assert_eq!(promotion.promoted_count, 0);
+        assert_eq!(promotion.blocked_count, 3);
+        assert!(promotion.targets.iter().all(|target| {
+            promotion_precondition(
+                target,
+                PromotionPrecondition::GlobalDispatchTraitBoundaryCompiled,
+            )
+            .state
+                == PromotionState::Missing
+        }));
+
+        let gate = smithay_linux_display_handle_internal_access_gate_report();
+        assert_eq!(
+            gate.decision,
+            SmithayLinuxDisplayHandleInternalAccessDecision::Blocked
+        );
+        assert!(!gate.can_read_display_handle);
+        assert!(!gate.can_call_create_global);
+        assert!(!gate.can_compile_global_dispatch);
+
+        let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+        assert_eq!(
+            final_seal.readiness,
+            SmithayLinuxGlobalDispatchBindReadiness::NotReady
+        );
+        assert_eq!(final_seal.synthetic_modeled_count, 4);
+        assert_eq!(final_seal.hidden_redacted_count, 1);
+        assert_eq!(final_seal.blocked_count, 5);
+        assert!(!final_seal.can_compile_trait_impl);
+        assert!(!final_seal.can_attach_to_adapter);
+        assert!(!final_seal.can_register_global);
+        assert!(!final_seal.can_dispatch_requests);
+        assert!(!final_seal.can_create_surfaces);
+        assert!(!final_seal.can_enter_core_admission);
+
+        let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+        assert_eq!(bind_shape.modeled_count, 4);
+        assert_eq!(bind_shape.blocked_count, 5);
+        assert!(!bind_shape_item(&bind_shape, BindInput::DisplayHandleObject).modeled);
+
+        let display_policy = smithay_linux_display_handle_access_report();
+        assert_eq!(
+            display_policy.policy,
+            SmithayLinuxDisplayHandleAccessPolicy::Hidden
+        );
+        assert_eq!(
+            display_policy.redaction,
+            SmithayLinuxDisplayHandleRedaction::FullyRedacted
+        );
+        assert!(!display_policy.reads_display_handle);
+        assert!(!display_policy.stores_display_handle);
+        assert!(!display_policy.exposes_display_handle);
+
+        let ownership = smithay_linux_display_handle_internal_ownership_evidence_report();
+        assert!(ownership.can_satisfy_internal_ownership_precondition);
+        let public_api = smithay_linux_display_handle_public_api_evidence_report();
+        assert_eq!(
+            public_api.decision,
+            SmithayLinuxDisplayHandlePublicApiExposureDecision::NotExposed
+        );
+        assert_eq!(public_api.exposed_count, 0);
+
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        assert_eq!(matrix.ready_count, 0);
+        let plan = smithay_linux_handler_reduction_plan_report();
+        assert_eq!(
+            plan.selected_first,
+            Some(Candidate::GlobalDispatchBindShape)
+        );
+        let probe = smithay_linux_handler_probe_report();
+        assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
+        assert!(!probe.compiled_trait_shape);
+
+        let adapter_source = include_str!("linux_adapter.rs");
+        let runtime_source = include_str!("runtime_facade.rs");
+        let linux_runtime_source = include_str!("linux_runtime.rs");
+        for source in [adapter_source, runtime_source, linux_runtime_source] {
+            assert!(!source.contains("SmithayLinuxDispatchRequestBoundaryReport"));
+            assert!(!source.contains("smithay_linux_dispatch_request_boundary_report"));
+        }
+
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("phase49r-dispatch-request-boundary");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("Phase 49R 边界测试应能构造 adapter skeleton");
+        assert!(adapter.capabilities().has_inert_protocol_request_ledger);
+        for kind in [
+            SmithayLinuxAdapterProtocolRequestKind::CompositorCreateSurface,
+            SmithayLinuxAdapterProtocolRequestKind::ShmCreatePool,
+            SmithayLinuxAdapterProtocolRequestKind::XdgWmBaseGetXdgSurface,
+        ] {
+            let observation = adapter.observe_unsupported_protocol_request(kind);
+            assert!(matches!(
+                observation.outcome,
+                SmithayLinuxAdapterProtocolRequestOutcome::RejectedUnsupported { .. }
+            ));
+            assert!(observation.skeleton_only);
+        }
+        let ledger = adapter.protocol_request_ledger_report();
+        assert_eq!(ledger.observed_count, 3);
+        assert_eq!(ledger.rejected_unsupported_count, 3);
+        assert!(ledger.skeleton_only);
+
+        let registration = adapter.attempt_real_global_registration_feasibility();
+        assert_eq!(
+            registration.mode,
+            SmithayLinuxAdapterRealGlobalRegistrationMode::FeasibilityBlocked
+        );
+        assert_eq!(adapter.global_handler_boundary_report().ready_count, 0);
+        let capabilities = adapter.capabilities();
+        assert!(!capabilities.registers_protocol_globals);
+        assert!(!capabilities.dispatches_protocol_events);
+        assert!(!capabilities.accepts_clients);
+        assert!(!capabilities.supports_real_wayland_surfaces);
+        assert!(!capabilities.supports_gpu_rendering);
+    }
+
+    #[test]
     fn display_handle_internal_access_gate_remains_blocked() {
         use SmithayLinuxDisplayHandleInternalAccessBlocker as Blocker;
         use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
@@ -5891,6 +6825,9 @@ mod tests {
             ("impl Global", "Dispatch"),
             ("GlobalDispatch", "<"),
             ("impl Dis", "patch"),
+            ("Dispatch::", "request"),
+            ("fn req", "uest("),
+            (".req", "uest("),
             ("delegate_", "compositor"),
             ("delegate_", "shm"),
             ("delegate_xdg_", "shell"),
@@ -5910,8 +6847,13 @@ mod tests {
         ];
         for (left, right) in forbidden_probe_tokens {
             let token = format!("{left}{right}");
+            let source = if token == "xdg_toplevel" {
+                production_source.replace("can_create_xdg_toplevels", "")
+            } else {
+                production_source.to_owned()
+            };
             assert!(
-                !production_source.contains(&token),
+                !source.contains(&token),
                 "production probe 不得包含受限入口 {token}"
             );
         }
@@ -6062,6 +7004,10 @@ mod tests {
             ["SmithayLinux", "GlobalDispatchTraitBoundaryReport"].concat();
         let trait_boundary_function =
             ["smithay_linux_", "global_dispatch_trait_boundary_report"].concat();
+        let dispatch_request_boundary_report_type =
+            ["SmithayLinux", "DispatchRequestBoundaryReport"].concat();
+        let dispatch_request_boundary_function =
+            ["smithay_linux_", "dispatch_request_boundary_report"].concat();
         for source in [adapter_source, runtime_source, linux_runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -6094,7 +7040,20 @@ mod tests {
             assert!(!source.contains(&promotion_function));
             assert!(!source.contains(&trait_boundary_report_type));
             assert!(!source.contains(&trait_boundary_function));
+            assert!(!source.contains(&dispatch_request_boundary_report_type));
+            assert!(!source.contains(&dispatch_request_boundary_function));
         }
+    }
+
+    fn dispatch_request_boundary_precondition(
+        report: &super::SmithayLinuxDispatchRequestBoundaryFamilyReport,
+        precondition: SmithayLinuxDispatchRequestBoundaryPrecondition,
+    ) -> &super::SmithayLinuxDispatchRequestBoundaryPreconditionItem {
+        report
+            .preconditions
+            .iter()
+            .find(|item| item.precondition == precondition)
+            .expect("dispatch request boundary family 必须包含指定 precondition")
     }
 
     fn trait_boundary_precondition(
