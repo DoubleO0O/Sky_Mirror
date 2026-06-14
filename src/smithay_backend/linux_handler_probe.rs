@@ -974,6 +974,163 @@ pub struct SmithayLinuxGlobalDispatchBindFinalSealReport {
     pub skeleton_only: bool,
 }
 
+/// Display handle internal-only access gate 的稳定决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalAccessDecision {
+    /// 当前前置条件不足，禁止任何真实 handle 访问。
+    Blocked,
+}
+
+/// Internal access gate 评估的未来目标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalAccessTarget {
+    /// 未来真实 protocol global 注册路径。
+    FutureGlobalRegistration,
+
+    /// 未来 `GlobalDispatch` bind 路径。
+    FutureGlobalDispatchBind,
+}
+
+/// 未来 internal-only handle 访问必须满足的稳定前置条件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalAccessPrecondition {
+    /// Adapter 在私有实现边界中持有 handle。
+    AdapterOwnsDisplayHandleInternally,
+
+    /// Adapter public API 不暴露 handle。
+    AdapterDoesNotExposeDisplayHandlePublicly,
+
+    /// Activation gate 允许真实 protocol global 注册。
+    ActivationGateAllowsRealProtocolGlobalRegistration,
+
+    /// Global registration plan 已脱离 skeleton。
+    GlobalRegistrationPlanPromotedFromSkeleton,
+
+    /// `GlobalDispatch` trait 边界已经编译。
+    GlobalDispatchTraitBoundaryCompiled,
+
+    /// Protocol request dispatch 边界已经定义。
+    DispatchRequestBoundaryDefined,
+
+    /// Handler state 已在私有实现边界中集成。
+    HandlerStateIntegratedInternally,
+
+    /// Display handle 脱敏策略继续保持。
+    DisplayHandleRedactionPolicyPreserved,
+}
+
+/// Internal access gate 单项前置条件的稳定状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalAccessPreconditionState {
+    /// 纯策略前置条件已经满足。
+    Satisfied,
+
+    /// 所需结构边界尚未建立。
+    Missing,
+
+    /// 当前安全策略明确阻止该前置条件。
+    Blocked,
+}
+
+/// 阻止 internal-only handle 访问的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalAccessBlocker {
+    /// 当前阶段禁止访问真实 handle。
+    RealDisplayHandleAccessForbidden,
+
+    /// 当前阶段禁止读取真实 handle。
+    DisplayHandleReadForbidden,
+
+    /// 当前阶段禁止存储真实 handle。
+    DisplayHandleStorageForbidden,
+
+    /// 当前阶段禁止通过 public API 暴露 handle。
+    PublicExposureForbidden,
+
+    /// Activation gate 仍阻止真实能力。
+    ActivationGateBlocked,
+
+    /// 真实 protocol global 注册仍禁止。
+    GlobalRegistrationForbidden,
+
+    /// `GlobalDispatch` trait 边界仍缺失。
+    GlobalDispatchTraitMissing,
+
+    /// Protocol request dispatch 边界仍缺失。
+    DispatchRequestBoundaryMissing,
+
+    /// Handler state 当前只有 synthetic 模型。
+    HandlerStateOnlySynthetic,
+
+    /// 生产 adapter 集成仍禁止。
+    AdapterIntegrationForbidden,
+}
+
+/// Internal access gate 的单项纯数据前置条件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDisplayHandleInternalAccessPreconditionItem {
+    /// 被评估的稳定前置条件。
+    pub precondition: SmithayLinuxDisplayHandleInternalAccessPrecondition,
+
+    /// 当前稳定状态。
+    pub state: SmithayLinuxDisplayHandleInternalAccessPreconditionState,
+
+    /// 阻止非满足状态进入真实路径的原因。
+    pub blockers: Vec<SmithayLinuxDisplayHandleInternalAccessBlocker>,
+
+    /// 当前 item 是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// Display handle internal-only access gate 的纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDisplayHandleInternalAccessGateReport {
+    /// 当前评估的未来目标。
+    pub target: SmithayLinuxDisplayHandleInternalAccessTarget,
+
+    /// 当前 gate 决策。
+    pub decision: SmithayLinuxDisplayHandleInternalAccessDecision,
+
+    /// 按稳定顺序排列的前置条件。
+    pub preconditions: Vec<SmithayLinuxDisplayHandleInternalAccessPreconditionItem>,
+
+    /// 已满足的纯策略前置条件数量。
+    pub satisfied_count: usize,
+
+    /// 尚未建立的结构前置条件数量。
+    pub missing_count: usize,
+
+    /// 被安全策略明确阻止的前置条件数量。
+    pub blocked_count: usize,
+
+    /// 当前 gate 是否允许读取真实 handle。
+    pub can_read_display_handle: bool,
+
+    /// 当前 gate 是否允许存储真实 handle。
+    pub can_store_display_handle: bool,
+
+    /// 当前 gate 是否允许暴露真实 handle。
+    pub can_expose_display_handle: bool,
+
+    /// 当前 gate 是否允许调用真实 global 创建入口。
+    pub can_call_create_global: bool,
+
+    /// 当前 gate 是否允许调用真实 global 注册入口。
+    pub can_call_register_global: bool,
+
+    /// 当前 gate 是否允许编译真实 `GlobalDispatch`。
+    pub can_compile_global_dispatch: bool,
+
+    /// 当前 gate 是否允许进入 protocol request dispatch。
+    pub can_dispatch_requests: bool,
+
+    /// 当前 gate 是否允许接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -1606,6 +1763,163 @@ pub fn smithay_linux_global_dispatch_bind_final_seal_report()
     }
 }
 
+/// 返回 display handle internal-only access gate 的固定保守报告。
+///
+/// 该函数只汇总 planning 层纯数据，不读取 adapter、bootstrap 或任何真实 handle。
+pub fn smithay_linux_display_handle_internal_access_gate_report()
+-> SmithayLinuxDisplayHandleInternalAccessGateReport {
+    use SmithayLinuxDisplayHandleAccessPolicy as AccessPolicy;
+    use SmithayLinuxDisplayHandleInternalAccessBlocker as Blocker;
+    use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
+    use SmithayLinuxDisplayHandleInternalAccessPreconditionState as State;
+    use SmithayLinuxDisplayHandleRedaction as Redaction;
+    use SmithayLinuxGlobalDispatchBindInput as Input;
+    use SmithayLinuxGlobalDispatchBindReadiness as Readiness;
+    use SmithayLinuxHandlerReductionCandidate as Candidate;
+
+    let display_policy = smithay_linux_display_handle_access_report();
+    let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+    let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+    let reduction_plan = smithay_linux_handler_reduction_plan_report();
+    let matrix = smithay_linux_handler_requirement_matrix_report();
+    let probe = smithay_linux_handler_probe_report();
+
+    let public_exposure_is_blocked = display_policy.policy == AccessPolicy::Hidden
+        && !display_policy.exposes_display_handle
+        && !display_policy.touches_adapter_public_api;
+    let redaction_is_preserved = display_policy.redaction == Redaction::FullyRedacted
+        && !display_policy.represents_real_display_handle
+        && !display_policy.reads_display_handle
+        && !display_policy.stores_display_handle;
+    let registration_is_blocked = final_seal.readiness == Readiness::NotReady
+        && !final_seal.can_register_global
+        && matrix.ready_count == 0;
+    let trait_boundary_is_missing = !probe.compiled_trait_shape
+        && !final_seal.can_compile_trait_impl
+        && reduction_plan.selected_first == Some(Candidate::GlobalDispatchBindShape);
+    let handler_state_is_synthetic = bind_shape
+        .items
+        .iter()
+        .find(|item| item.input == Input::HandlerState)
+        .is_some_and(|item| item.modeled && bind_shape.can_attach_to_adapter == false);
+
+    let preconditions = vec![
+        internal_access_precondition_item(
+            Precondition::AdapterOwnsDisplayHandleInternally,
+            State::Blocked,
+            vec![
+                Blocker::RealDisplayHandleAccessForbidden,
+                Blocker::DisplayHandleReadForbidden,
+                Blocker::DisplayHandleStorageForbidden,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+        internal_access_precondition_item(
+            Precondition::AdapterDoesNotExposeDisplayHandlePublicly,
+            if public_exposure_is_blocked {
+                State::Missing
+            } else {
+                State::Blocked
+            },
+            vec![
+                Blocker::PublicExposureForbidden,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+        internal_access_precondition_item(
+            Precondition::ActivationGateAllowsRealProtocolGlobalRegistration,
+            State::Blocked,
+            vec![
+                Blocker::ActivationGateBlocked,
+                Blocker::GlobalRegistrationForbidden,
+            ],
+        ),
+        internal_access_precondition_item(
+            Precondition::GlobalRegistrationPlanPromotedFromSkeleton,
+            if registration_is_blocked {
+                State::Missing
+            } else {
+                State::Blocked
+            },
+            vec![Blocker::GlobalRegistrationForbidden],
+        ),
+        internal_access_precondition_item(
+            Precondition::GlobalDispatchTraitBoundaryCompiled,
+            if trait_boundary_is_missing {
+                State::Missing
+            } else {
+                State::Blocked
+            },
+            vec![Blocker::GlobalDispatchTraitMissing],
+        ),
+        internal_access_precondition_item(
+            Precondition::DispatchRequestBoundaryDefined,
+            State::Missing,
+            vec![Blocker::DispatchRequestBoundaryMissing],
+        ),
+        internal_access_precondition_item(
+            Precondition::HandlerStateIntegratedInternally,
+            if handler_state_is_synthetic {
+                State::Missing
+            } else {
+                State::Blocked
+            },
+            vec![
+                Blocker::HandlerStateOnlySynthetic,
+                Blocker::AdapterIntegrationForbidden,
+            ],
+        ),
+        internal_access_precondition_item(
+            Precondition::DisplayHandleRedactionPolicyPreserved,
+            if redaction_is_preserved {
+                State::Satisfied
+            } else {
+                State::Blocked
+            },
+            if redaction_is_preserved {
+                Vec::new()
+            } else {
+                vec![Blocker::PublicExposureForbidden]
+            },
+        ),
+    ];
+    let satisfied_count = preconditions
+        .iter()
+        .filter(|item| item.state == State::Satisfied)
+        .count();
+    let missing_count = preconditions
+        .iter()
+        .filter(|item| item.state == State::Missing)
+        .count();
+    let blocked_count = preconditions
+        .iter()
+        .filter(|item| item.state == State::Blocked)
+        .count();
+
+    SmithayLinuxDisplayHandleInternalAccessGateReport {
+        target: SmithayLinuxDisplayHandleInternalAccessTarget::FutureGlobalRegistration,
+        decision: SmithayLinuxDisplayHandleInternalAccessDecision::Blocked,
+        preconditions,
+        satisfied_count,
+        missing_count,
+        blocked_count,
+        can_read_display_handle: false,
+        can_store_display_handle: false,
+        can_expose_display_handle: false,
+        can_call_create_global: false,
+        can_call_register_global: false,
+        can_compile_global_dispatch: false,
+        can_dispatch_requests: false,
+        can_attach_to_adapter: false,
+        skeleton_only: display_policy.skeleton_only
+            && final_seal.skeleton_only
+            && bind_shape.skeleton_only
+            && reduction_plan.skeleton_only
+            && matrix.skeleton_only
+            && probe.skeleton_only,
+    }
+}
+
 fn requirement_item(
     handler: SmithayLinuxAdapterGlobalHandlerKind,
     requirement: SmithayLinuxHandlerRequirement,
@@ -1686,6 +2000,19 @@ fn push_unique_final_blocker(
     }
 }
 
+fn internal_access_precondition_item(
+    precondition: SmithayLinuxDisplayHandleInternalAccessPrecondition,
+    state: SmithayLinuxDisplayHandleInternalAccessPreconditionState,
+    blockers: Vec<SmithayLinuxDisplayHandleInternalAccessBlocker>,
+) -> SmithayLinuxDisplayHandleInternalAccessPreconditionItem {
+    SmithayLinuxDisplayHandleInternalAccessPreconditionItem {
+        precondition,
+        state,
+        blockers,
+        skeleton_only: true,
+    }
+}
+
 fn reduction_candidate(
     candidate: SmithayLinuxHandlerReductionCandidate,
     decision: SmithayLinuxHandlerReductionDecision,
@@ -1730,7 +2057,11 @@ mod tests {
         SmithayLinuxBindGlobalResourceSyntheticId, SmithayLinuxBindHandlerStateBlocker,
         SmithayLinuxBindHandlerStateSource, SmithayLinuxBindHandlerStateState,
         SmithayLinuxBindHandlerStateSyntheticId, SmithayLinuxDisplayHandleAccessBlocker,
-        SmithayLinuxDisplayHandleAccessPolicy, SmithayLinuxDisplayHandleRedaction,
+        SmithayLinuxDisplayHandleAccessPolicy, SmithayLinuxDisplayHandleInternalAccessBlocker,
+        SmithayLinuxDisplayHandleInternalAccessDecision,
+        SmithayLinuxDisplayHandleInternalAccessPrecondition,
+        SmithayLinuxDisplayHandleInternalAccessPreconditionState,
+        SmithayLinuxDisplayHandleInternalAccessTarget, SmithayLinuxDisplayHandleRedaction,
         SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindFinalBlocker,
         SmithayLinuxGlobalDispatchBindInput, SmithayLinuxGlobalDispatchBindReadiness,
         SmithayLinuxGlobalDispatchBindSealedInputState, SmithayLinuxHandlerProbeBlocker,
@@ -1741,6 +2072,7 @@ mod tests {
         smithay_linux_bind_client_identity_report, smithay_linux_bind_global_data_report,
         smithay_linux_bind_global_resource_identity_report,
         smithay_linux_bind_handler_state_report, smithay_linux_display_handle_access_report,
+        smithay_linux_display_handle_internal_access_gate_report,
         smithay_linux_global_dispatch_bind_final_seal_report,
         smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
         smithay_linux_handler_reduction_plan_report,
@@ -2665,6 +2997,198 @@ mod tests {
     }
 
     #[test]
+    fn display_handle_internal_access_gate_remains_blocked() {
+        use SmithayLinuxDisplayHandleInternalAccessBlocker as Blocker;
+        use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
+        use SmithayLinuxDisplayHandleInternalAccessPreconditionState as State;
+        use SmithayLinuxGlobalDispatchBindInput as Input;
+        use SmithayLinuxHandlerReductionCandidate as Candidate;
+        use SmithayLinuxHandlerReductionDecision as Decision;
+        use SmithayLinuxHandlerReductionRisk as Risk;
+
+        let gate = smithay_linux_display_handle_internal_access_gate_report();
+        let actual_order = gate
+            .preconditions
+            .iter()
+            .map(|item| item.precondition)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            gate.target,
+            SmithayLinuxDisplayHandleInternalAccessTarget::FutureGlobalRegistration
+        );
+        assert_eq!(
+            gate.decision,
+            SmithayLinuxDisplayHandleInternalAccessDecision::Blocked
+        );
+        assert_eq!(
+            actual_order,
+            vec![
+                Precondition::AdapterOwnsDisplayHandleInternally,
+                Precondition::AdapterDoesNotExposeDisplayHandlePublicly,
+                Precondition::ActivationGateAllowsRealProtocolGlobalRegistration,
+                Precondition::GlobalRegistrationPlanPromotedFromSkeleton,
+                Precondition::GlobalDispatchTraitBoundaryCompiled,
+                Precondition::DispatchRequestBoundaryDefined,
+                Precondition::HandlerStateIntegratedInternally,
+                Precondition::DisplayHandleRedactionPolicyPreserved,
+            ]
+        );
+        assert!(!gate.preconditions.is_empty());
+        assert_eq!(gate.satisfied_count, 1);
+        assert_eq!(gate.missing_count, 5);
+        assert_eq!(gate.blocked_count, 2);
+        assert_eq!(
+            gate.satisfied_count + gate.missing_count + gate.blocked_count,
+            gate.preconditions.len()
+        );
+        assert!(!gate.can_read_display_handle);
+        assert!(!gate.can_store_display_handle);
+        assert!(!gate.can_expose_display_handle);
+        assert!(!gate.can_call_create_global);
+        assert!(!gate.can_call_register_global);
+        assert!(!gate.can_compile_global_dispatch);
+        assert!(!gate.can_dispatch_requests);
+        assert!(!gate.can_attach_to_adapter);
+        assert!(gate.skeleton_only);
+        assert!(gate.preconditions.iter().all(|item| {
+            item.skeleton_only && (item.state == State::Satisfied || !item.blockers.is_empty())
+        }));
+        assert_ne!(
+            internal_access_precondition(&gate, Precondition::AdapterOwnsDisplayHandleInternally)
+                .state,
+            State::Satisfied
+        );
+        assert_ne!(
+            internal_access_precondition(
+                &gate,
+                Precondition::AdapterDoesNotExposeDisplayHandlePublicly
+            )
+            .state,
+            State::Satisfied
+        );
+        for precondition in [
+            Precondition::ActivationGateAllowsRealProtocolGlobalRegistration,
+            Precondition::GlobalRegistrationPlanPromotedFromSkeleton,
+            Precondition::GlobalDispatchTraitBoundaryCompiled,
+            Precondition::DispatchRequestBoundaryDefined,
+            Precondition::HandlerStateIntegratedInternally,
+        ] {
+            assert_ne!(
+                internal_access_precondition(&gate, precondition).state,
+                State::Satisfied
+            );
+        }
+        assert_eq!(
+            internal_access_precondition(
+                &gate,
+                Precondition::DisplayHandleRedactionPolicyPreserved
+            )
+            .state,
+            State::Satisfied
+        );
+        let all_blockers = gate
+            .preconditions
+            .iter()
+            .flat_map(|item| item.blockers.iter().copied())
+            .collect::<Vec<_>>();
+        for blocker in [
+            Blocker::RealDisplayHandleAccessForbidden,
+            Blocker::DisplayHandleReadForbidden,
+            Blocker::DisplayHandleStorageForbidden,
+            Blocker::ActivationGateBlocked,
+            Blocker::GlobalRegistrationForbidden,
+            Blocker::GlobalDispatchTraitMissing,
+            Blocker::DispatchRequestBoundaryMissing,
+            Blocker::HandlerStateOnlySynthetic,
+            Blocker::AdapterIntegrationForbidden,
+        ] {
+            assert!(all_blockers.contains(&blocker));
+        }
+
+        let display_policy = smithay_linux_display_handle_access_report();
+        assert_eq!(
+            display_policy.policy,
+            SmithayLinuxDisplayHandleAccessPolicy::Hidden
+        );
+        assert_eq!(
+            display_policy.redaction,
+            SmithayLinuxDisplayHandleRedaction::FullyRedacted
+        );
+        assert!(!display_policy.represents_real_display_handle);
+        assert!(!display_policy.exposes_display_handle);
+        assert!(!display_policy.stores_display_handle);
+        assert!(!display_policy.reads_display_handle);
+        assert!(!display_policy.can_call_create_global);
+        assert!(!display_policy.can_call_register_global);
+
+        let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+        assert_eq!(
+            final_seal.readiness,
+            SmithayLinuxGlobalDispatchBindReadiness::NotReady
+        );
+        assert_eq!(
+            final_seal.next_safe_target,
+            Some("DisplayHandleInternalAccessGatePolicy")
+        );
+        assert!(!final_seal.can_compile_trait_impl);
+        assert!(!final_seal.can_register_global);
+        assert!(!final_seal.can_attach_to_adapter);
+
+        let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+        assert_eq!(bind_shape.modeled_count, 4);
+        assert_eq!(bind_shape.blocked_count, 5);
+        assert!(!bind_shape_item(&bind_shape, Input::DisplayHandleObject).modeled);
+
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        assert_eq!(matrix.ready_count, 0);
+        assert!(matrix.items.iter().any(|item| {
+            item.requirement == SmithayLinuxHandlerRequirement::GlobalDispatchBind
+        }));
+
+        let plan = smithay_linux_handler_reduction_plan_report();
+        assert_eq!(
+            plan.selected_first,
+            Some(Candidate::GlobalDispatchBindShape)
+        );
+        assert!(
+            reduction_candidate_report(&plan, Candidate::GlobalDispatchBindShape)
+                .risks
+                .contains(&Risk::IntroducesClientBindEntry)
+        );
+        assert_eq!(
+            reduction_candidate_report(&plan, Candidate::SurfaceLifecycleBridge).decision,
+            Decision::Blocked
+        );
+        assert_eq!(
+            reduction_candidate_report(&plan, Candidate::CoreAdmissionBridge).decision,
+            Decision::Blocked
+        );
+
+        let probe = smithay_linux_handler_probe_report();
+        assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
+        assert!(!probe.compiled_trait_shape);
+
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("phase49m-internal-gate");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("Phase 49M 边界测试应能构造 adapter skeleton");
+        let registration = adapter.attempt_real_global_registration_feasibility();
+        assert_eq!(
+            registration.mode,
+            SmithayLinuxAdapterRealGlobalRegistrationMode::FeasibilityBlocked
+        );
+        let handler_boundary = adapter.global_handler_boundary_report();
+        assert_eq!(handler_boundary.ready_count, 0);
+        let capabilities = adapter.capabilities();
+        assert!(!capabilities.registers_protocol_globals);
+        assert!(!capabilities.dispatches_protocol_events);
+        assert!(!capabilities.accepts_clients);
+        assert!(!capabilities.supports_real_wayland_surfaces);
+        assert!(!capabilities.supports_gpu_rendering);
+    }
+
+    #[test]
     fn global_dispatch_bind_shape_aligns_with_reduction_matrix_and_probe() {
         use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
         use SmithayLinuxGlobalDispatchBindInput as Input;
@@ -3024,7 +3548,14 @@ mod tests {
             .replace("exposes_display_handle", "")
             .replace("stores_display_handle", "")
             .replace("reads_display_handle", "")
-            .replace("smithay_linux_display_handle_access_report", "");
+            .replace("can_read_display_handle", "")
+            .replace("can_store_display_handle", "")
+            .replace("can_expose_display_handle", "")
+            .replace("smithay_linux_display_handle_access_report", "")
+            .replace(
+                "smithay_linux_display_handle_internal_access_gate_report",
+                "",
+            );
         assert!(
             !production_without_synthetic_display_flag.contains(&display_handle_api_token),
             "production probe 除纯数据布尔字段外不得读取原生 display handle"
@@ -3043,7 +3574,25 @@ mod tests {
             .replace("DisplayHandleStorageForbidden", "")
             .replace("DisplayHandleHidden", "")
             .replace("RealDisplayHandleUnavailable", "")
-            .replace("DisplayHandleInternalAccessGatePolicy", "");
+            .replace("DisplayHandleInternalAccessGatePolicy", "")
+            .replace("SmithayLinuxDisplayHandleInternalAccessDecision", "")
+            .replace("SmithayLinuxDisplayHandleInternalAccessTarget", "")
+            .replace("SmithayLinuxDisplayHandleInternalAccessPrecondition", "")
+            .replace(
+                "SmithayLinuxDisplayHandleInternalAccessPreconditionState",
+                "",
+            )
+            .replace("SmithayLinuxDisplayHandleInternalAccessBlocker", "")
+            .replace(
+                "SmithayLinuxDisplayHandleInternalAccessPreconditionItem",
+                "",
+            )
+            .replace("SmithayLinuxDisplayHandleInternalAccessGateReport", "")
+            .replace("AdapterOwnsDisplayHandleInternally", "")
+            .replace("AdapterDoesNotExposeDisplayHandlePublicly", "")
+            .replace("DisplayHandleRedactionPolicyPreserved", "")
+            .replace("RealDisplayHandleAccessForbidden", "")
+            .replace("DisplayHandleReadForbidden", "");
         assert!(
             !production_without_bind_diagnostics.contains(&display_handle_token),
             "production probe 除固定诊断名称外不得暴露原生 display handle"
@@ -3073,6 +3622,13 @@ mod tests {
         let final_seal_report_type = ["SmithayLinux", "GlobalDispatchBindFinalSealReport"].concat();
         let final_seal_function =
             ["smithay_linux_", "global_dispatch_bind_final_seal_report"].concat();
+        let internal_gate_report_type =
+            ["SmithayLinux", "DisplayHandleInternalAccessGateReport"].concat();
+        let internal_gate_function = [
+            "smithay_linux_",
+            "display_handle_internal_access_gate_report",
+        ]
+        .concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -3095,7 +3651,20 @@ mod tests {
             assert!(!source.contains(&display_access_function));
             assert!(!source.contains(&final_seal_report_type));
             assert!(!source.contains(&final_seal_function));
+            assert!(!source.contains(&internal_gate_report_type));
+            assert!(!source.contains(&internal_gate_function));
         }
+    }
+
+    fn internal_access_precondition(
+        report: &super::SmithayLinuxDisplayHandleInternalAccessGateReport,
+        precondition: SmithayLinuxDisplayHandleInternalAccessPrecondition,
+    ) -> &super::SmithayLinuxDisplayHandleInternalAccessPreconditionItem {
+        report
+            .preconditions
+            .iter()
+            .find(|item| item.precondition == precondition)
+            .expect("internal access gate 必须包含指定 precondition")
     }
 
     fn final_seal_input(
