@@ -1263,6 +1263,132 @@ pub struct SmithayLinuxDisplayHandlePublicApiEvidenceReport {
     pub skeleton_only: bool,
 }
 
+/// Adapter internal display handle ownership 的静态证据结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalOwnershipDecision {
+    /// 静态源码边界足以证明 adapter 私有持有链存在。
+    StaticPrivateOwnershipEvidencePresent,
+
+    /// 当前静态源码边界不足以证明 adapter 私有持有链。
+    StaticEvidenceInsufficient,
+}
+
+/// Internal ownership 静态证据的稳定来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalOwnershipEvidenceSource {
+    /// Bootstrap 内部持有 Wayland display 边界。
+    BootstrapBoundary,
+
+    /// Linux runtime 私有持有 bootstrap 边界。
+    LinuxRuntimeBoundary,
+
+    /// Linux adapter public API non-exposure 审计。
+    LinuxAdapterPublicApiAudit,
+}
+
+/// Internal ownership 单项静态证据状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalOwnershipEvidenceState {
+    /// 对应边界存在私有持有关系。
+    PresentPrivate,
+
+    /// 对应 adapter public API surface 不存在。
+    AbsentPublic,
+
+    /// 对应 capability 明确保持保守 false。
+    ConservativeFalse,
+
+    /// 对应静态证据尚未建立。
+    Missing,
+}
+
+/// Internal ownership 静态证据不能证明或允许的稳定限制。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleInternalOwnershipLimitation {
+    /// 证据只描述当前静态源码边界。
+    StaticEvidenceOnly,
+
+    /// 证据不读取真实 display handle。
+    DoesNotReadDisplayHandle,
+
+    /// 证据不证明真实 handle access safety。
+    DoesNotProveAccessSafety,
+
+    /// 证据不允许真实 protocol global 注册。
+    DoesNotPermitGlobalRegistration,
+
+    /// 证据不允许实现真实 dispatch trait。
+    DoesNotPermitTraitImplementation,
+
+    /// 证据不允许接入生产 adapter。
+    DoesNotPermitAdapterIntegration,
+}
+
+/// Internal ownership 的单项纯数据静态证据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDisplayHandleInternalOwnershipEvidenceItem {
+    /// 当前证据的稳定来源。
+    pub source: SmithayLinuxDisplayHandleInternalOwnershipEvidenceSource,
+
+    /// 当前静态证据状态。
+    pub state: SmithayLinuxDisplayHandleInternalOwnershipEvidenceState,
+
+    /// 当前证据不能证明或允许的非空限制。
+    pub limitations: Vec<SmithayLinuxDisplayHandleInternalOwnershipLimitation>,
+
+    /// 当前 item 是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// Adapter internal display handle ownership 的纯数据静态证据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDisplayHandleInternalOwnershipEvidenceReport {
+    /// 当前稳定 internal ownership 结论。
+    pub decision: SmithayLinuxDisplayHandleInternalOwnershipDecision,
+
+    /// 按稳定顺序排列的 ownership 证据。
+    pub items: Vec<SmithayLinuxDisplayHandleInternalOwnershipEvidenceItem>,
+
+    /// 存在私有持有关系的证据数量。
+    pub present_private_count: usize,
+
+    /// Adapter public API 不存在受限 surface 的证据数量。
+    pub absent_public_count: usize,
+
+    /// 明确保持保守 false 的证据数量。
+    pub conservative_false_count: usize,
+
+    /// 尚未建立的证据数量。
+    pub missing_count: usize,
+
+    /// 当前静态证据是否足以满足 internal ownership 前置条件。
+    pub can_satisfy_internal_ownership_precondition: bool,
+
+    /// 当前证据是否允许读取真实 handle。
+    pub can_read_display_handle: bool,
+
+    /// 当前证据是否允许存储真实 handle。
+    pub can_store_display_handle: bool,
+
+    /// 当前证据是否允许暴露真实 handle。
+    pub can_expose_display_handle: bool,
+
+    /// 当前证据是否允许调用真实 global 创建入口。
+    pub can_call_create_global: bool,
+
+    /// 当前证据是否允许调用真实 global 注册入口。
+    pub can_call_register_global: bool,
+
+    /// 当前证据是否允许编译真实 `GlobalDispatch`。
+    pub can_compile_global_dispatch: bool,
+
+    /// 当前证据是否允许接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -1973,6 +2099,106 @@ pub fn smithay_linux_display_handle_public_api_evidence_report()
     }
 }
 
+/// 返回 adapter internal display handle ownership 的固定静态证据报告。
+///
+/// 该函数只汇总 planning 层纯数据，不读取 adapter、bootstrap 或任何真实 handle。
+pub fn smithay_linux_display_handle_internal_ownership_evidence_report()
+-> SmithayLinuxDisplayHandleInternalOwnershipEvidenceReport {
+    use SmithayLinuxDisplayHandleAccessPolicy as AccessPolicy;
+    use SmithayLinuxDisplayHandleInternalOwnershipDecision as Decision;
+    use SmithayLinuxDisplayHandleInternalOwnershipEvidenceSource as Source;
+    use SmithayLinuxDisplayHandleInternalOwnershipEvidenceState as State;
+    use SmithayLinuxDisplayHandlePublicApiExposureDecision as ExposureDecision;
+    use SmithayLinuxDisplayHandleRedaction as Redaction;
+    use SmithayLinuxGlobalDispatchBindInput as Input;
+    use SmithayLinuxGlobalDispatchBindReadiness as Readiness;
+    use SmithayLinuxHandlerReductionCandidate as Candidate;
+
+    let display_policy = smithay_linux_display_handle_access_report();
+    let public_api_evidence = smithay_linux_display_handle_public_api_evidence_report();
+    let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+    let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+    let reduction_plan = smithay_linux_handler_reduction_plan_report();
+    let matrix = smithay_linux_handler_requirement_matrix_report();
+    let probe = smithay_linux_handler_probe_report();
+
+    let items = vec![
+        internal_ownership_evidence_item(Source::BootstrapBoundary, State::PresentPrivate),
+        internal_ownership_evidence_item(Source::LinuxRuntimeBoundary, State::PresentPrivate),
+        internal_ownership_evidence_item(Source::LinuxAdapterPublicApiAudit, State::AbsentPublic),
+    ];
+    let present_private_count = items
+        .iter()
+        .filter(|item| item.state == State::PresentPrivate)
+        .count();
+    let absent_public_count = items
+        .iter()
+        .filter(|item| item.state == State::AbsentPublic)
+        .count();
+    let conservative_false_count = items
+        .iter()
+        .filter(|item| item.state == State::ConservativeFalse)
+        .count();
+    let missing_count = items
+        .iter()
+        .filter(|item| item.state == State::Missing)
+        .count();
+    let static_private_ownership_evidence_is_present = present_private_count == 2
+        && absent_public_count == 1
+        && conservative_false_count == 0
+        && missing_count == 0
+        && public_api_evidence.decision == ExposureDecision::NotExposed
+        && public_api_evidence.exposed_count == 0
+        && public_api_evidence.conservative_false_count == 1
+        && public_api_evidence.can_satisfy_public_non_exposure_precondition
+        && display_policy.policy == AccessPolicy::Hidden
+        && display_policy.redaction == Redaction::FullyRedacted
+        && !display_policy.represents_real_display_handle
+        && !display_policy.reads_display_handle
+        && !display_policy.stores_display_handle
+        && !display_policy.exposes_display_handle
+        && final_seal.readiness == Readiness::NotReady
+        && !final_seal.can_compile_trait_impl
+        && !final_seal.can_attach_to_adapter
+        && !final_seal.can_register_global
+        && bind_shape
+            .items
+            .iter()
+            .find(|item| item.input == Input::DisplayHandleObject)
+            .is_some_and(|item| !item.modeled)
+        && reduction_plan.selected_first == Some(Candidate::GlobalDispatchBindShape)
+        && matrix.ready_count == 0
+        && !probe.compiled_trait_shape;
+
+    SmithayLinuxDisplayHandleInternalOwnershipEvidenceReport {
+        decision: if static_private_ownership_evidence_is_present {
+            Decision::StaticPrivateOwnershipEvidencePresent
+        } else {
+            Decision::StaticEvidenceInsufficient
+        },
+        items,
+        present_private_count,
+        absent_public_count,
+        conservative_false_count,
+        missing_count,
+        can_satisfy_internal_ownership_precondition: static_private_ownership_evidence_is_present,
+        can_read_display_handle: false,
+        can_store_display_handle: false,
+        can_expose_display_handle: false,
+        can_call_create_global: false,
+        can_call_register_global: false,
+        can_compile_global_dispatch: false,
+        can_attach_to_adapter: false,
+        skeleton_only: display_policy.skeleton_only
+            && public_api_evidence.skeleton_only
+            && final_seal.skeleton_only
+            && bind_shape.skeleton_only
+            && reduction_plan.skeleton_only
+            && matrix.skeleton_only
+            && probe.skeleton_only,
+    }
+}
+
 /// 返回 display handle internal-only access gate 的固定保守报告。
 ///
 /// 该函数只汇总 planning 层纯数据，不读取 adapter、bootstrap 或任何真实 handle。
@@ -1993,9 +2219,13 @@ pub fn smithay_linux_display_handle_internal_access_gate_report()
     let matrix = smithay_linux_handler_requirement_matrix_report();
     let probe = smithay_linux_handler_probe_report();
     let public_api_evidence = smithay_linux_display_handle_public_api_evidence_report();
+    let internal_ownership_evidence =
+        smithay_linux_display_handle_internal_ownership_evidence_report();
 
     let public_non_exposure_is_proven =
         public_api_evidence.can_satisfy_public_non_exposure_precondition;
+    let internal_ownership_is_proven =
+        internal_ownership_evidence.can_satisfy_internal_ownership_precondition;
     let redaction_is_preserved = display_policy.redaction == Redaction::FullyRedacted
         && !display_policy.represents_real_display_handle
         && !display_policy.reads_display_handle
@@ -2015,13 +2245,21 @@ pub fn smithay_linux_display_handle_internal_access_gate_report()
     let preconditions = vec![
         internal_access_precondition_item(
             Precondition::AdapterOwnsDisplayHandleInternally,
-            State::Blocked,
-            vec![
-                Blocker::RealDisplayHandleAccessForbidden,
-                Blocker::DisplayHandleReadForbidden,
-                Blocker::DisplayHandleStorageForbidden,
-                Blocker::AdapterIntegrationForbidden,
-            ],
+            if internal_ownership_is_proven {
+                State::Satisfied
+            } else {
+                State::Blocked
+            },
+            if internal_ownership_is_proven {
+                Vec::new()
+            } else {
+                vec![
+                    Blocker::RealDisplayHandleAccessForbidden,
+                    Blocker::DisplayHandleReadForbidden,
+                    Blocker::DisplayHandleStorageForbidden,
+                    Blocker::AdapterIntegrationForbidden,
+                ]
+            },
         ),
         internal_access_precondition_item(
             Precondition::AdapterDoesNotExposeDisplayHandlePublicly,
@@ -2050,9 +2288,9 @@ pub fn smithay_linux_display_handle_internal_access_gate_report()
         internal_access_precondition_item(
             Precondition::GlobalRegistrationPlanPromotedFromSkeleton,
             if registration_is_blocked {
-                State::Missing
-            } else {
                 State::Blocked
+            } else {
+                State::Missing
             },
             vec![Blocker::GlobalRegistrationForbidden],
         ),
@@ -2130,7 +2368,8 @@ pub fn smithay_linux_display_handle_internal_access_gate_report()
             && reduction_plan.skeleton_only
             && matrix.skeleton_only
             && probe.skeleton_only
-            && public_api_evidence.skeleton_only,
+            && public_api_evidence.skeleton_only
+            && internal_ownership_evidence.skeleton_only,
     }
 }
 
@@ -2235,6 +2474,27 @@ fn public_api_evidence_item(
     }
 }
 
+fn internal_ownership_evidence_item(
+    source: SmithayLinuxDisplayHandleInternalOwnershipEvidenceSource,
+    state: SmithayLinuxDisplayHandleInternalOwnershipEvidenceState,
+) -> SmithayLinuxDisplayHandleInternalOwnershipEvidenceItem {
+    use SmithayLinuxDisplayHandleInternalOwnershipLimitation as Limitation;
+
+    SmithayLinuxDisplayHandleInternalOwnershipEvidenceItem {
+        source,
+        state,
+        limitations: vec![
+            Limitation::StaticEvidenceOnly,
+            Limitation::DoesNotReadDisplayHandle,
+            Limitation::DoesNotProveAccessSafety,
+            Limitation::DoesNotPermitGlobalRegistration,
+            Limitation::DoesNotPermitTraitImplementation,
+            Limitation::DoesNotPermitAdapterIntegration,
+        ],
+        skeleton_only: true,
+    }
+}
+
 fn internal_access_precondition_item(
     precondition: SmithayLinuxDisplayHandleInternalAccessPrecondition,
     state: SmithayLinuxDisplayHandleInternalAccessPreconditionState,
@@ -2297,6 +2557,10 @@ mod tests {
         SmithayLinuxDisplayHandleInternalAccessPrecondition,
         SmithayLinuxDisplayHandleInternalAccessPreconditionState,
         SmithayLinuxDisplayHandleInternalAccessTarget,
+        SmithayLinuxDisplayHandleInternalOwnershipDecision,
+        SmithayLinuxDisplayHandleInternalOwnershipEvidenceSource,
+        SmithayLinuxDisplayHandleInternalOwnershipEvidenceState,
+        SmithayLinuxDisplayHandleInternalOwnershipLimitation,
         SmithayLinuxDisplayHandlePublicApiEvidenceLimitation,
         SmithayLinuxDisplayHandlePublicApiEvidenceState,
         SmithayLinuxDisplayHandlePublicApiExposureDecision,
@@ -2312,6 +2576,7 @@ mod tests {
         smithay_linux_bind_global_resource_identity_report,
         smithay_linux_bind_handler_state_report, smithay_linux_display_handle_access_report,
         smithay_linux_display_handle_internal_access_gate_report,
+        smithay_linux_display_handle_internal_ownership_evidence_report,
         smithay_linux_display_handle_public_api_evidence_report,
         smithay_linux_global_dispatch_bind_final_seal_report,
         smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
@@ -3329,8 +3594,8 @@ mod tests {
             gate.decision,
             SmithayLinuxDisplayHandleInternalAccessDecision::Blocked
         );
-        assert_eq!(gate.satisfied_count, 2);
-        assert_eq!(gate.missing_count, 4);
+        assert_eq!(gate.satisfied_count, 3);
+        assert_eq!(gate.missing_count, 3);
         assert_eq!(gate.blocked_count, 2);
         assert_eq!(
             internal_access_precondition(
@@ -3435,6 +3700,218 @@ mod tests {
     }
 
     #[test]
+    fn display_handle_internal_ownership_evidence_proves_private_holder_only() {
+        use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
+        use SmithayLinuxDisplayHandleInternalAccessPreconditionState as PreconditionState;
+        use SmithayLinuxDisplayHandleInternalOwnershipEvidenceSource as Source;
+        use SmithayLinuxDisplayHandleInternalOwnershipEvidenceState as EvidenceState;
+        use SmithayLinuxDisplayHandleInternalOwnershipLimitation as Limitation;
+        use SmithayLinuxGlobalDispatchBindInput as Input;
+        use SmithayLinuxHandlerReductionCandidate as Candidate;
+
+        let evidence = smithay_linux_display_handle_internal_ownership_evidence_report();
+        let actual_order = evidence
+            .items
+            .iter()
+            .map(|item| item.source)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            evidence.decision,
+            SmithayLinuxDisplayHandleInternalOwnershipDecision::
+                StaticPrivateOwnershipEvidencePresent
+        );
+        assert_eq!(
+            actual_order,
+            vec![
+                Source::BootstrapBoundary,
+                Source::LinuxRuntimeBoundary,
+                Source::LinuxAdapterPublicApiAudit,
+            ]
+        );
+        assert_eq!(evidence.items.len(), 3);
+        assert_eq!(evidence.present_private_count, 2);
+        assert_eq!(evidence.absent_public_count, 1);
+        assert_eq!(evidence.conservative_false_count, 0);
+        assert_eq!(evidence.missing_count, 0);
+        match evidence.decision {
+            SmithayLinuxDisplayHandleInternalOwnershipDecision::
+                StaticPrivateOwnershipEvidencePresent => {
+                    assert!(evidence.can_satisfy_internal_ownership_precondition);
+                }
+            SmithayLinuxDisplayHandleInternalOwnershipDecision::StaticEvidenceInsufficient => {
+                assert!(!evidence.can_satisfy_internal_ownership_precondition);
+            }
+        }
+        assert!(!evidence.can_read_display_handle);
+        assert!(!evidence.can_store_display_handle);
+        assert!(!evidence.can_expose_display_handle);
+        assert!(!evidence.can_call_create_global);
+        assert!(!evidence.can_call_register_global);
+        assert!(!evidence.can_compile_global_dispatch);
+        assert!(!evidence.can_attach_to_adapter);
+        assert!(evidence.skeleton_only);
+        assert_eq!(
+            internal_ownership_evidence_item_by_source(&evidence, Source::BootstrapBoundary).state,
+            EvidenceState::PresentPrivate
+        );
+        assert_eq!(
+            internal_ownership_evidence_item_by_source(&evidence, Source::LinuxRuntimeBoundary)
+                .state,
+            EvidenceState::PresentPrivate
+        );
+        assert_eq!(
+            internal_ownership_evidence_item_by_source(
+                &evidence,
+                Source::LinuxAdapterPublicApiAudit
+            )
+            .state,
+            EvidenceState::AbsentPublic
+        );
+        for limitation in [
+            Limitation::StaticEvidenceOnly,
+            Limitation::DoesNotReadDisplayHandle,
+            Limitation::DoesNotProveAccessSafety,
+            Limitation::DoesNotPermitGlobalRegistration,
+            Limitation::DoesNotPermitTraitImplementation,
+            Limitation::DoesNotPermitAdapterIntegration,
+        ] {
+            assert!(
+                evidence
+                    .items
+                    .iter()
+                    .all(|item| item.limitations.contains(&limitation) && item.skeleton_only)
+            );
+        }
+
+        let bootstrap_source = include_str!("bootstrap.rs");
+        let bootstrap_production = bootstrap_source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("bootstrap source 应包含生产代码");
+        assert!(bootstrap_production.contains("display: SmithayWaylandDisplayProbe"));
+        assert!(!bootstrap_production.contains("pub display: SmithayWaylandDisplayProbe"));
+        assert!(bootstrap_production.contains("pub fn display_handle"));
+
+        let runtime_source = include_str!("linux_runtime.rs");
+        let runtime_production = runtime_source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("linux runtime source 应包含生产代码");
+        assert!(runtime_production.contains("bootstrap: SmithayBootstrapProbe"));
+        assert!(!runtime_production.contains("pub bootstrap: SmithayBootstrapProbe"));
+        assert!(!runtime_production.contains("pub fn bootstrap(&"));
+        assert!(!runtime_production.contains("pub fn bootstrap_mut"));
+
+        let adapter_source = include_str!("linux_adapter.rs");
+        let adapter_production = adapter_source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("adapter source 应包含生产代码");
+        assert!(adapter_production.contains("bootstrap: SmithayBootstrapProbe"));
+        assert!(!adapter_production.contains("pub bootstrap: SmithayBootstrapProbe"));
+        for forbidden_public_surface in [
+            "pub fn display_handle",
+            "pub fn display(",
+            "-> DisplayHandle",
+            ": DisplayHandle",
+            "-> Display<",
+            ": Display<",
+            "pub fn bootstrap(",
+            "pub fn bootstrap_mut",
+            "-> &mut SmithayBootstrapProbe",
+            ": &mut SmithayBootstrapProbe",
+            "pub fn create_global",
+            "pub fn register_global",
+        ] {
+            assert!(
+                !adapter_production.contains(forbidden_public_surface),
+                "adapter production public API 不得暴露 {forbidden_public_surface}"
+            );
+        }
+
+        let public_api_evidence = smithay_linux_display_handle_public_api_evidence_report();
+        assert_eq!(
+            public_api_evidence.decision,
+            SmithayLinuxDisplayHandlePublicApiExposureDecision::NotExposed
+        );
+        assert_eq!(public_api_evidence.exposed_count, 0);
+        assert_eq!(public_api_evidence.conservative_false_count, 1);
+        assert!(public_api_evidence.can_satisfy_public_non_exposure_precondition);
+
+        let gate = smithay_linux_display_handle_internal_access_gate_report();
+        assert_eq!(
+            gate.decision,
+            SmithayLinuxDisplayHandleInternalAccessDecision::Blocked
+        );
+        assert_eq!(gate.satisfied_count, 3);
+        assert_eq!(gate.missing_count, 3);
+        assert_eq!(gate.blocked_count, 2);
+        assert_eq!(
+            internal_access_precondition(&gate, Precondition::AdapterOwnsDisplayHandleInternally)
+                .state,
+            PreconditionState::Satisfied
+        );
+        assert!(!gate.can_read_display_handle);
+        assert!(!gate.can_store_display_handle);
+        assert!(!gate.can_expose_display_handle);
+        assert!(!gate.can_call_create_global);
+        assert!(!gate.can_call_register_global);
+        assert!(!gate.can_compile_global_dispatch);
+        assert!(!gate.can_dispatch_requests);
+        assert!(!gate.can_attach_to_adapter);
+        assert!(gate.skeleton_only);
+
+        let display_policy = smithay_linux_display_handle_access_report();
+        assert_eq!(
+            display_policy.policy,
+            SmithayLinuxDisplayHandleAccessPolicy::Hidden
+        );
+        assert_eq!(
+            display_policy.redaction,
+            SmithayLinuxDisplayHandleRedaction::FullyRedacted
+        );
+        let final_seal = smithay_linux_global_dispatch_bind_final_seal_report();
+        assert_eq!(
+            final_seal.readiness,
+            SmithayLinuxGlobalDispatchBindReadiness::NotReady
+        );
+        assert!(!final_seal.can_compile_trait_impl);
+        assert!(!final_seal.can_attach_to_adapter);
+        assert!(!final_seal.can_register_global);
+        let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+        assert!(!bind_shape_item(&bind_shape, Input::DisplayHandleObject).modeled);
+        assert_eq!(bind_shape.modeled_count, 4);
+        assert_eq!(bind_shape.blocked_count, 5);
+        let plan = smithay_linux_handler_reduction_plan_report();
+        assert_eq!(
+            plan.selected_first,
+            Some(Candidate::GlobalDispatchBindShape)
+        );
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        assert_eq!(matrix.ready_count, 0);
+        let probe = smithay_linux_handler_probe_report();
+        assert!(!probe.compiled_trait_shape);
+
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("phase49o-internal-ownership");
+        let mut adapter = SmithayLinuxAdapterSkeleton::with_socket_name(socket_name)
+            .expect("Phase 49O 边界测试应能构造 adapter skeleton");
+        let registration = adapter.attempt_real_global_registration_feasibility();
+        assert_eq!(
+            registration.mode,
+            SmithayLinuxAdapterRealGlobalRegistrationMode::FeasibilityBlocked
+        );
+        assert_eq!(adapter.global_handler_boundary_report().ready_count, 0);
+        let capabilities = adapter.capabilities();
+        assert!(!capabilities.registers_protocol_globals);
+        assert!(!capabilities.dispatches_protocol_events);
+        assert!(!capabilities.accepts_clients);
+        assert!(!capabilities.supports_real_wayland_surfaces);
+        assert!(!capabilities.supports_gpu_rendering);
+    }
+
+    #[test]
     fn display_handle_internal_access_gate_remains_blocked() {
         use SmithayLinuxDisplayHandleInternalAccessBlocker as Blocker;
         use SmithayLinuxDisplayHandleInternalAccessPrecondition as Precondition;
@@ -3473,8 +3950,8 @@ mod tests {
             ]
         );
         assert!(!gate.preconditions.is_empty());
-        assert_eq!(gate.satisfied_count, 2);
-        assert_eq!(gate.missing_count, 4);
+        assert_eq!(gate.satisfied_count, 3);
+        assert_eq!(gate.missing_count, 3);
         assert_eq!(gate.blocked_count, 2);
         assert_eq!(
             gate.satisfied_count + gate.missing_count + gate.blocked_count,
@@ -3492,7 +3969,7 @@ mod tests {
         assert!(gate.preconditions.iter().all(|item| {
             item.skeleton_only && (item.state == State::Satisfied || !item.blockers.is_empty())
         }));
-        assert_ne!(
+        assert_eq!(
             internal_access_precondition(&gate, Precondition::AdapterOwnsDisplayHandleInternally)
                 .state,
             State::Satisfied
@@ -3531,9 +4008,6 @@ mod tests {
             .flat_map(|item| item.blockers.iter().copied())
             .collect::<Vec<_>>();
         for blocker in [
-            Blocker::RealDisplayHandleAccessForbidden,
-            Blocker::DisplayHandleReadForbidden,
-            Blocker::DisplayHandleStorageForbidden,
             Blocker::ActivationGateBlocked,
             Blocker::GlobalRegistrationForbidden,
             Blocker::GlobalDispatchTraitMissing,
@@ -3997,6 +4471,10 @@ mod tests {
             .replace(
                 "smithay_linux_display_handle_public_api_evidence_report",
                 "",
+            )
+            .replace(
+                "smithay_linux_display_handle_internal_ownership_evidence_report",
+                "",
             );
         assert!(
             !production_without_synthetic_display_flag.contains(&display_handle_api_token),
@@ -4043,7 +4521,23 @@ mod tests {
             .replace("SmithayLinuxDisplayHandlePublicApiEvidenceReport", "")
             .replace("DisplayHandleReturnValue", "")
             .replace("DisplayHandleArgument", "")
-            .replace("DoesNotPermitDisplayHandleAccess", "");
+            .replace("DoesNotPermitDisplayHandleAccess", "")
+            .replace("SmithayLinuxDisplayHandleInternalOwnershipDecision", "")
+            .replace(
+                "SmithayLinuxDisplayHandleInternalOwnershipEvidenceSource",
+                "",
+            )
+            .replace(
+                "SmithayLinuxDisplayHandleInternalOwnershipEvidenceState",
+                "",
+            )
+            .replace("SmithayLinuxDisplayHandleInternalOwnershipLimitation", "")
+            .replace("SmithayLinuxDisplayHandleInternalOwnershipEvidenceItem", "")
+            .replace(
+                "SmithayLinuxDisplayHandleInternalOwnershipEvidenceReport",
+                "",
+            )
+            .replace("DoesNotReadDisplayHandle", "");
         assert!(
             !production_without_bind_diagnostics.contains(&display_handle_token),
             "production probe 除固定诊断名称外不得暴露原生 display handle"
@@ -4087,6 +4581,16 @@ mod tests {
             "display_handle_public_api_evidence_report",
         ]
         .concat();
+        let internal_ownership_evidence_report_type = [
+            "SmithayLinux",
+            "DisplayHandleInternalOwnershipEvidenceReport",
+        ]
+        .concat();
+        let internal_ownership_evidence_function = [
+            "smithay_linux_",
+            "display_handle_internal_ownership_evidence_report",
+        ]
+        .concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -4113,7 +4617,20 @@ mod tests {
             assert!(!source.contains(&internal_gate_function));
             assert!(!source.contains(&public_api_evidence_report_type));
             assert!(!source.contains(&public_api_evidence_function));
+            assert!(!source.contains(&internal_ownership_evidence_report_type));
+            assert!(!source.contains(&internal_ownership_evidence_function));
         }
+    }
+
+    fn internal_ownership_evidence_item_by_source(
+        report: &super::SmithayLinuxDisplayHandleInternalOwnershipEvidenceReport,
+        source: SmithayLinuxDisplayHandleInternalOwnershipEvidenceSource,
+    ) -> &super::SmithayLinuxDisplayHandleInternalOwnershipEvidenceItem {
+        report
+            .items
+            .iter()
+            .find(|item| item.source == source)
+            .expect("internal ownership evidence report 必须包含指定 source")
     }
 
     fn public_api_evidence_item_by_surface(
