@@ -858,6 +858,122 @@ pub struct SmithayLinuxGlobalDispatchBindShapeReport {
     pub skeleton_only: bool,
 }
 
+/// `GlobalDispatch` bind 形状的最终 readiness。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalDispatchBindReadiness {
+    /// 当前输入模型不足以进入真实 trait、adapter 或 protocol 路径。
+    NotReady,
+}
+
+/// Final seal 中单个 bind 输入的稳定状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalDispatchBindSealedInputState {
+    /// 输入只有隔离 synthetic 模型。
+    SyntheticModeled,
+
+    /// 输入保持隐藏并完全脱敏。
+    HiddenRedacted,
+}
+
+/// 阻止 sealed bind shape 进入真实运行路径的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxGlobalDispatchBindFinalBlocker {
+    /// 原生 display handle 必须继续隐藏。
+    DisplayHandleHidden,
+
+    /// 真实 display handle 当前不可用于 bind。
+    RealDisplayHandleUnavailable,
+
+    /// 真实 protocol global 注册仍禁止。
+    GlobalRegistrationForbidden,
+
+    /// 真实 client bind 入口仍禁止。
+    ClientBindEntryForbidden,
+
+    /// 生产 adapter 集成仍禁止。
+    AdapterIntegrationForbidden,
+
+    /// 真实 trait 实现仍禁止。
+    TraitImplementationForbidden,
+
+    /// Protocol request dispatch 仍禁止。
+    DispatchRequestForbidden,
+
+    /// Surface 生命周期能力仍不可用。
+    SurfaceLifecycleUnavailable,
+
+    /// Core admission 能力仍不可用。
+    CoreAdmissionUnavailable,
+}
+
+/// Final seal 中单个 bind 输入的纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxGlobalDispatchBindSealedInputItem {
+    /// 被封板的稳定 bind 输入概念。
+    pub input: SmithayLinuxGlobalDispatchBindInput,
+
+    /// 当前输入的稳定 sealed 状态。
+    pub state: SmithayLinuxGlobalDispatchBindSealedInputState,
+
+    /// 当前输入是否只有 synthetic 模型。
+    pub modeled: bool,
+
+    /// 当前输入是否必须保持隐藏。
+    pub hidden: bool,
+
+    /// 当前输入是否完全脱敏。
+    pub redacted: bool,
+
+    /// 阻止输入进入真实路径的非空原因。
+    pub blockers: Vec<SmithayLinuxGlobalDispatchBindFinalBlocker>,
+
+    /// 当前 item 是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
+/// `GlobalDispatch` bind shape 的最终纯数据封板报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxGlobalDispatchBindFinalSealReport {
+    /// 当前整体 readiness。
+    pub readiness: SmithayLinuxGlobalDispatchBindReadiness,
+
+    /// 按既有 bind shape 固定顺序排列的 sealed 输入。
+    pub inputs: Vec<SmithayLinuxGlobalDispatchBindSealedInputItem>,
+
+    /// 只有 synthetic 模型的输入数量。
+    pub synthetic_modeled_count: usize,
+
+    /// 保持隐藏并完全脱敏的输入数量。
+    pub hidden_redacted_count: usize,
+
+    /// 仍带有 blocker 的输入数量。
+    pub blocked_count: usize,
+
+    /// 当前 sealed shape 是否足以编译真实 trait 实现。
+    pub can_compile_trait_impl: bool,
+
+    /// 当前 sealed shape 是否可以接入生产 adapter。
+    pub can_attach_to_adapter: bool,
+
+    /// 当前 sealed shape 是否可以注册真实 protocol global。
+    pub can_register_global: bool,
+
+    /// 当前 sealed shape 是否可以进入 protocol request dispatch。
+    pub can_dispatch_requests: bool,
+
+    /// 当前 sealed shape 是否可以创建真实 surface。
+    pub can_create_surfaces: bool,
+
+    /// 当前 sealed shape 是否可以进入 core admission。
+    pub can_enter_core_admission: bool,
+
+    /// 下一项允许研究的 internal-only policy 名称。
+    pub next_safe_target: Option<&'static str>,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// 返回 handler trait 审计的固定保守报告。
 pub fn smithay_linux_handler_probe_report() -> SmithayLinuxHandlerProbeReport {
     SmithayLinuxHandlerProbeReport {
@@ -1423,6 +1539,73 @@ pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDi
     }
 }
 
+/// 返回 `GlobalDispatch` bind shape 的最终保守封板报告。
+///
+/// 该函数只汇总既有 shape 和访问策略纯数据，不读取 adapter、bootstrap 或系统对象。
+pub fn smithay_linux_global_dispatch_bind_final_seal_report()
+-> SmithayLinuxGlobalDispatchBindFinalSealReport {
+    use SmithayLinuxDisplayHandleAccessPolicy as AccessPolicy;
+    use SmithayLinuxDisplayHandleRedaction as Redaction;
+    use SmithayLinuxGlobalDispatchBindInput as Input;
+    use SmithayLinuxGlobalDispatchBindSealedInputState as State;
+
+    let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+    let display_policy = smithay_linux_display_handle_access_report();
+    let display_is_hidden = display_policy.policy == AccessPolicy::Hidden;
+    let display_is_redacted = display_policy.redaction == Redaction::FullyRedacted;
+    let inputs = bind_shape
+        .items
+        .into_iter()
+        .map(|item| {
+            let is_display = item.input == Input::DisplayHandleObject;
+            let state = if is_display {
+                State::HiddenRedacted
+            } else {
+                State::SyntheticModeled
+            };
+            let blockers = final_seal_blockers(&item, is_display);
+
+            SmithayLinuxGlobalDispatchBindSealedInputItem {
+                input: item.input,
+                state,
+                modeled: item.modeled,
+                hidden: is_display && display_is_hidden,
+                redacted: is_display && display_is_redacted,
+                blockers,
+                skeleton_only: item.skeleton_only,
+            }
+        })
+        .collect::<Vec<_>>();
+    let synthetic_modeled_count = inputs
+        .iter()
+        .filter(|item| item.state == State::SyntheticModeled && item.modeled)
+        .count();
+    let hidden_redacted_count = inputs
+        .iter()
+        .filter(|item| item.state == State::HiddenRedacted && item.hidden && item.redacted)
+        .count();
+    let blocked_count = inputs
+        .iter()
+        .filter(|item| !item.blockers.is_empty())
+        .count();
+
+    SmithayLinuxGlobalDispatchBindFinalSealReport {
+        readiness: SmithayLinuxGlobalDispatchBindReadiness::NotReady,
+        inputs,
+        synthetic_modeled_count,
+        hidden_redacted_count,
+        blocked_count,
+        can_compile_trait_impl: bind_shape.can_compile_trait_impl,
+        can_attach_to_adapter: bind_shape.can_attach_to_adapter,
+        can_register_global: bind_shape.can_register_global,
+        can_dispatch_requests: false,
+        can_create_surfaces: false,
+        can_enter_core_admission: false,
+        next_safe_target: Some("DisplayHandleInternalAccessGatePolicy"),
+        skeleton_only: bind_shape.skeleton_only && display_policy.skeleton_only,
+    }
+}
+
 fn requirement_item(
     handler: SmithayLinuxAdapterGlobalHandlerKind,
     requirement: SmithayLinuxHandlerRequirement,
@@ -1453,6 +1636,53 @@ fn global_dispatch_bind_shape_item(
         modeled,
         blockers,
         skeleton_only: true,
+    }
+}
+
+fn final_seal_blockers(
+    item: &SmithayLinuxGlobalDispatchBindShapeItem,
+    is_display: bool,
+) -> Vec<SmithayLinuxGlobalDispatchBindFinalBlocker> {
+    use SmithayLinuxGlobalDispatchBindBlocker as ShapeBlocker;
+    use SmithayLinuxGlobalDispatchBindFinalBlocker as FinalBlocker;
+
+    let mut blockers = Vec::new();
+    for blocker in &item.blockers {
+        let blocker = match blocker {
+            ShapeBlocker::DisplayHandleMustRemainHidden => FinalBlocker::DisplayHandleHidden,
+            ShapeBlocker::AdapterIntegrationForbidden => FinalBlocker::AdapterIntegrationForbidden,
+            ShapeBlocker::WouldCreateClientBindEntry => FinalBlocker::ClientBindEntryForbidden,
+            ShapeBlocker::WouldRequireRealGlobalRegistration => {
+                FinalBlocker::GlobalRegistrationForbidden
+            }
+            ShapeBlocker::ClientObjectNotModeled
+            | ShapeBlocker::ResourceObjectNotModeled
+            | ShapeBlocker::GlobalDataNotModeled
+            | ShapeBlocker::HandlerStateNotIntegrated => FinalBlocker::TraitImplementationForbidden,
+        };
+        push_unique_final_blocker(&mut blockers, blocker);
+    }
+    if is_display {
+        push_unique_final_blocker(&mut blockers, FinalBlocker::RealDisplayHandleUnavailable);
+    }
+    for blocker in [
+        FinalBlocker::TraitImplementationForbidden,
+        FinalBlocker::DispatchRequestForbidden,
+        FinalBlocker::SurfaceLifecycleUnavailable,
+        FinalBlocker::CoreAdmissionUnavailable,
+    ] {
+        push_unique_final_blocker(&mut blockers, blocker);
+    }
+
+    blockers
+}
+
+fn push_unique_final_blocker(
+    blockers: &mut Vec<SmithayLinuxGlobalDispatchBindFinalBlocker>,
+    blocker: SmithayLinuxGlobalDispatchBindFinalBlocker,
+) {
+    if !blockers.contains(&blocker) {
+        blockers.push(blocker);
     }
 }
 
@@ -1501,14 +1731,17 @@ mod tests {
         SmithayLinuxBindHandlerStateSource, SmithayLinuxBindHandlerStateState,
         SmithayLinuxBindHandlerStateSyntheticId, SmithayLinuxDisplayHandleAccessBlocker,
         SmithayLinuxDisplayHandleAccessPolicy, SmithayLinuxDisplayHandleRedaction,
-        SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindInput,
-        SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind,
-        SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionDecision,
-        SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
-        SmithayLinuxHandlerRequirementEvidence, SmithayLinuxHandlerRequirementState,
-        SmithayLinuxInertHandlerProbe, smithay_linux_bind_client_identity_report,
-        smithay_linux_bind_global_data_report, smithay_linux_bind_global_resource_identity_report,
+        SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindFinalBlocker,
+        SmithayLinuxGlobalDispatchBindInput, SmithayLinuxGlobalDispatchBindReadiness,
+        SmithayLinuxGlobalDispatchBindSealedInputState, SmithayLinuxHandlerProbeBlocker,
+        SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerReductionCandidate,
+        SmithayLinuxHandlerReductionDecision, SmithayLinuxHandlerReductionRisk,
+        SmithayLinuxHandlerRequirement, SmithayLinuxHandlerRequirementEvidence,
+        SmithayLinuxHandlerRequirementState, SmithayLinuxInertHandlerProbe,
+        smithay_linux_bind_client_identity_report, smithay_linux_bind_global_data_report,
+        smithay_linux_bind_global_resource_identity_report,
         smithay_linux_bind_handler_state_report, smithay_linux_display_handle_access_report,
+        smithay_linux_global_dispatch_bind_final_seal_report,
         smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
         smithay_linux_handler_reduction_plan_report,
         smithay_linux_handler_requirement_matrix_report,
@@ -2265,6 +2498,173 @@ mod tests {
     }
 
     #[test]
+    fn global_dispatch_bind_final_seal_remains_not_ready() {
+        use SmithayLinuxGlobalDispatchBindFinalBlocker as FinalBlocker;
+        use SmithayLinuxGlobalDispatchBindInput as Input;
+        use SmithayLinuxGlobalDispatchBindSealedInputState as State;
+        use SmithayLinuxHandlerReductionCandidate as Candidate;
+        use SmithayLinuxHandlerReductionDecision as Decision;
+        use SmithayLinuxHandlerReductionRisk as Risk;
+        use SmithayLinuxHandlerRequirement as Requirement;
+        use SmithayLinuxHandlerRequirementEvidence as Evidence;
+
+        let seal = smithay_linux_global_dispatch_bind_final_seal_report();
+        let actual_order = seal
+            .inputs
+            .iter()
+            .map(|item| item.input)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            seal.readiness,
+            SmithayLinuxGlobalDispatchBindReadiness::NotReady
+        );
+        assert_eq!(
+            actual_order,
+            vec![
+                Input::ClientObject,
+                Input::GlobalResourceObject,
+                Input::GlobalDataObject,
+                Input::DisplayHandleObject,
+                Input::HandlerState,
+            ]
+        );
+        assert_eq!(seal.inputs.len(), 5);
+        assert_eq!(seal.synthetic_modeled_count, 4);
+        assert_eq!(seal.hidden_redacted_count, 1);
+        assert_eq!(seal.blocked_count, 5);
+        assert!(!seal.can_compile_trait_impl);
+        assert!(!seal.can_attach_to_adapter);
+        assert!(!seal.can_register_global);
+        assert!(!seal.can_dispatch_requests);
+        assert!(!seal.can_create_surfaces);
+        assert!(!seal.can_enter_core_admission);
+        assert_eq!(
+            seal.next_safe_target,
+            Some("DisplayHandleInternalAccessGatePolicy")
+        );
+        assert!(seal.skeleton_only);
+        assert!(
+            seal.inputs
+                .iter()
+                .all(|item| !item.blockers.is_empty() && item.skeleton_only)
+        );
+
+        for input in [
+            Input::ClientObject,
+            Input::GlobalResourceObject,
+            Input::GlobalDataObject,
+            Input::HandlerState,
+        ] {
+            let item = final_seal_input(&seal, input);
+            assert_eq!(item.state, State::SyntheticModeled);
+            assert!(item.modeled);
+            assert!(!item.hidden);
+            assert!(!item.redacted);
+        }
+        let display = final_seal_input(&seal, Input::DisplayHandleObject);
+        assert_eq!(display.state, State::HiddenRedacted);
+        assert!(!display.modeled);
+        assert!(display.hidden);
+        assert!(display.redacted);
+        assert!(
+            display
+                .blockers
+                .contains(&FinalBlocker::DisplayHandleHidden)
+        );
+        assert!(
+            display
+                .blockers
+                .contains(&FinalBlocker::RealDisplayHandleUnavailable)
+        );
+        assert!(seal.inputs.iter().any(|item| {
+            item.blockers
+                .contains(&FinalBlocker::GlobalRegistrationForbidden)
+        }));
+        assert!(seal.inputs.iter().any(|item| {
+            item.blockers
+                .contains(&FinalBlocker::ClientBindEntryForbidden)
+        }));
+        assert!(seal.inputs.iter().all(|item| {
+            item.blockers
+                .contains(&FinalBlocker::TraitImplementationForbidden)
+        }));
+        assert!(seal.inputs.iter().all(|item| {
+            item.blockers
+                .contains(&FinalBlocker::DispatchRequestForbidden)
+        }));
+        assert!(seal.inputs.iter().all(|item| {
+            item.blockers
+                .contains(&FinalBlocker::SurfaceLifecycleUnavailable)
+        }));
+        assert!(seal.inputs.iter().all(|item| {
+            item.blockers
+                .contains(&FinalBlocker::CoreAdmissionUnavailable)
+        }));
+
+        let shape = smithay_linux_global_dispatch_bind_shape_report();
+        assert_eq!(shape.modeled_count, 4);
+        assert_eq!(shape.blocked_count, 5);
+        assert!(!bind_shape_item(&shape, Input::DisplayHandleObject).modeled);
+        assert!(!shape.can_compile_trait_impl);
+        assert!(!shape.can_attach_to_adapter);
+        assert!(!shape.can_register_global);
+
+        let display_policy = smithay_linux_display_handle_access_report();
+        assert_eq!(
+            display_policy.policy,
+            SmithayLinuxDisplayHandleAccessPolicy::Hidden
+        );
+        assert_eq!(
+            display_policy.redaction,
+            SmithayLinuxDisplayHandleRedaction::FullyRedacted
+        );
+        assert!(!display_policy.represents_real_display_handle);
+        assert!(!display_policy.exposes_display_handle);
+        assert!(!display_policy.stores_display_handle);
+        assert!(!display_policy.reads_display_handle);
+        assert!(!display_policy.can_call_create_global);
+        assert!(!display_policy.can_call_register_global);
+
+        let matrix = smithay_linux_handler_requirement_matrix_report();
+        let bind_requirements = matrix
+            .items
+            .iter()
+            .filter(|item| item.requirement == Requirement::GlobalDispatchBind)
+            .collect::<Vec<_>>();
+        assert_eq!(matrix.ready_count, 0);
+        assert_eq!(bind_requirements.len(), 3);
+        assert!(
+            bind_requirements
+                .iter()
+                .all(|item| item.evidence.contains(&Evidence::RequiresClientBindEntry))
+        );
+
+        let plan = smithay_linux_handler_reduction_plan_report();
+        assert_eq!(
+            plan.selected_first,
+            Some(Candidate::GlobalDispatchBindShape)
+        );
+        assert!(
+            reduction_candidate_report(&plan, Candidate::GlobalDispatchBindShape)
+                .risks
+                .contains(&Risk::IntroducesClientBindEntry)
+        );
+        assert_eq!(
+            reduction_candidate_report(&plan, Candidate::SurfaceLifecycleBridge).decision,
+            Decision::Blocked
+        );
+        assert_eq!(
+            reduction_candidate_report(&plan, Candidate::CoreAdmissionBridge).decision,
+            Decision::Blocked
+        );
+
+        let probe = smithay_linux_handler_probe_report();
+        assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
+        assert!(!probe.compiled_trait_shape);
+    }
+
+    #[test]
     fn global_dispatch_bind_shape_aligns_with_reduction_matrix_and_probe() {
         use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
         use SmithayLinuxGlobalDispatchBindInput as Input;
@@ -2640,7 +3040,10 @@ mod tests {
             .replace("SmithayLinuxDisplayHandleAccessReport", "")
             .replace("RealDisplayHandleMustRemainPrivate", "")
             .replace("DisplayHandleExposureForbidden", "")
-            .replace("DisplayHandleStorageForbidden", "");
+            .replace("DisplayHandleStorageForbidden", "")
+            .replace("DisplayHandleHidden", "")
+            .replace("RealDisplayHandleUnavailable", "")
+            .replace("DisplayHandleInternalAccessGatePolicy", "");
         assert!(
             !production_without_bind_diagnostics.contains(&display_handle_token),
             "production probe 除固定诊断名称外不得暴露原生 display handle"
@@ -2667,6 +3070,9 @@ mod tests {
         let handler_state_function = ["smithay_linux_", "bind_handler_state_report"].concat();
         let display_access_report_type = ["SmithayLinux", "DisplayHandleAccessReport"].concat();
         let display_access_function = ["smithay_linux_", "display_handle_access_report"].concat();
+        let final_seal_report_type = ["SmithayLinux", "GlobalDispatchBindFinalSealReport"].concat();
+        let final_seal_function =
+            ["smithay_linux_", "global_dispatch_bind_final_seal_report"].concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -2687,7 +3093,20 @@ mod tests {
             assert!(!source.contains(&handler_state_function));
             assert!(!source.contains(&display_access_report_type));
             assert!(!source.contains(&display_access_function));
+            assert!(!source.contains(&final_seal_report_type));
+            assert!(!source.contains(&final_seal_function));
         }
+    }
+
+    fn final_seal_input(
+        report: &super::SmithayLinuxGlobalDispatchBindFinalSealReport,
+        input: SmithayLinuxGlobalDispatchBindInput,
+    ) -> &super::SmithayLinuxGlobalDispatchBindSealedInputItem {
+        report
+            .inputs
+            .iter()
+            .find(|item| item.input == input)
+            .expect("final seal report 必须包含指定 input")
     }
 
     fn bind_shape_item(
