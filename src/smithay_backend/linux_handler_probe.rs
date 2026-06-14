@@ -693,6 +693,79 @@ pub struct SmithayLinuxBindHandlerStateReport {
     pub skeleton_only: bool,
 }
 
+/// 原生 display handle 的稳定访问策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleAccessPolicy {
+    /// Handle 必须保持在本模块不可见的私有边界内。
+    Hidden,
+}
+
+/// Display handle 诊断信息的稳定脱敏级别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleRedaction {
+    /// 报告不包含任何真实 handle 值、引用或可访问对象。
+    FullyRedacted,
+}
+
+/// 阻止 display handle 进入 bind 或 adapter 路径的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxDisplayHandleAccessBlocker {
+    /// 真实 handle 必须继续保留在私有实现边界内。
+    RealDisplayHandleMustRemainPrivate,
+
+    /// 当前阶段禁止通过 public API 暴露 handle。
+    DisplayHandleExposureForbidden,
+
+    /// 当前阶段禁止在 probe 模型中存储 handle。
+    DisplayHandleStorageForbidden,
+
+    /// 当前阶段禁止通过 handle 注册真实 protocol global。
+    GlobalRegistrationForbidden,
+
+    /// 当前阶段禁止把 handle 接入 adapter public API。
+    AdapterPublicApiExposureForbidden,
+
+    /// `GlobalDispatch` bind 入口仍禁止实现。
+    GlobalDispatchBindStillForbidden,
+}
+
+/// Display handle 访问边界的纯数据脱敏报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxDisplayHandleAccessReport {
+    /// 当前稳定访问策略。
+    pub policy: SmithayLinuxDisplayHandleAccessPolicy,
+
+    /// 当前稳定脱敏级别。
+    pub redaction: SmithayLinuxDisplayHandleRedaction,
+
+    /// 当前报告是否代表真实 handle。
+    pub represents_real_display_handle: bool,
+
+    /// 当前报告是否暴露真实 handle。
+    pub exposes_display_handle: bool,
+
+    /// 当前报告是否存储真实 handle。
+    pub stores_display_handle: bool,
+
+    /// 当前报告是否读取真实 handle。
+    pub reads_display_handle: bool,
+
+    /// 当前边界是否允许调用真实 global 创建入口。
+    pub can_call_create_global: bool,
+
+    /// 当前边界是否允许调用真实 global 注册入口。
+    pub can_call_register_global: bool,
+
+    /// 当前报告是否接触 adapter public API。
+    pub touches_adapter_public_api: bool,
+
+    /// 阻止 handle 进入真实路径的非空原因。
+    pub blockers: Vec<SmithayLinuxDisplayHandleAccessBlocker>,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// `GlobalDispatch` bind 入口会暴露的稳定输入概念。
 ///
 /// 这些变体只记录类型形状，不持有相应的 Smithay 原生对象。
@@ -1250,6 +1323,34 @@ pub fn smithay_linux_bind_handler_state_report() -> SmithayLinuxBindHandlerState
     }
 }
 
+/// 返回固定的 display handle 访问策略和脱敏报告。
+///
+/// 该函数只构造纯数据，不读取 adapter、bootstrap 或任何真实 handle。
+pub fn smithay_linux_display_handle_access_report() -> SmithayLinuxDisplayHandleAccessReport {
+    use SmithayLinuxDisplayHandleAccessBlocker as Blocker;
+
+    SmithayLinuxDisplayHandleAccessReport {
+        policy: SmithayLinuxDisplayHandleAccessPolicy::Hidden,
+        redaction: SmithayLinuxDisplayHandleRedaction::FullyRedacted,
+        represents_real_display_handle: false,
+        exposes_display_handle: false,
+        stores_display_handle: false,
+        reads_display_handle: false,
+        can_call_create_global: false,
+        can_call_register_global: false,
+        touches_adapter_public_api: false,
+        blockers: vec![
+            Blocker::RealDisplayHandleMustRemainPrivate,
+            Blocker::DisplayHandleExposureForbidden,
+            Blocker::DisplayHandleStorageForbidden,
+            Blocker::GlobalRegistrationForbidden,
+            Blocker::AdapterPublicApiExposureForbidden,
+            Blocker::GlobalDispatchBindStillForbidden,
+        ],
+        skeleton_only: true,
+    }
+}
+
 /// 返回 `GlobalDispatch` bind 输入概念的固定保守形状报告。
 ///
 /// 除 DisplayHandleObject 外的输入都只有 synthetic 模型。所有 item 仍有 blocker，
@@ -1398,16 +1499,18 @@ mod tests {
         SmithayLinuxBindGlobalResourceIdentitySource, SmithayLinuxBindGlobalResourceIdentityState,
         SmithayLinuxBindGlobalResourceSyntheticId, SmithayLinuxBindHandlerStateBlocker,
         SmithayLinuxBindHandlerStateSource, SmithayLinuxBindHandlerStateState,
-        SmithayLinuxBindHandlerStateSyntheticId, SmithayLinuxGlobalDispatchBindBlocker,
-        SmithayLinuxGlobalDispatchBindInput, SmithayLinuxHandlerProbeBlocker,
-        SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerReductionCandidate,
-        SmithayLinuxHandlerReductionDecision, SmithayLinuxHandlerReductionRisk,
-        SmithayLinuxHandlerRequirement, SmithayLinuxHandlerRequirementEvidence,
-        SmithayLinuxHandlerRequirementState, SmithayLinuxInertHandlerProbe,
-        smithay_linux_bind_client_identity_report, smithay_linux_bind_global_data_report,
-        smithay_linux_bind_global_resource_identity_report,
-        smithay_linux_bind_handler_state_report, smithay_linux_global_dispatch_bind_shape_report,
-        smithay_linux_handler_probe_report, smithay_linux_handler_reduction_plan_report,
+        SmithayLinuxBindHandlerStateSyntheticId, SmithayLinuxDisplayHandleAccessBlocker,
+        SmithayLinuxDisplayHandleAccessPolicy, SmithayLinuxDisplayHandleRedaction,
+        SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindInput,
+        SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind,
+        SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionDecision,
+        SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
+        SmithayLinuxHandlerRequirementEvidence, SmithayLinuxHandlerRequirementState,
+        SmithayLinuxInertHandlerProbe, smithay_linux_bind_client_identity_report,
+        smithay_linux_bind_global_data_report, smithay_linux_bind_global_resource_identity_report,
+        smithay_linux_bind_handler_state_report, smithay_linux_display_handle_access_report,
+        smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
+        smithay_linux_handler_reduction_plan_report,
         smithay_linux_handler_requirement_matrix_report,
     };
     use crate::smithay_backend::{
@@ -2090,6 +2193,78 @@ mod tests {
     }
 
     #[test]
+    fn display_handle_access_policy_is_fully_redacted() {
+        use SmithayLinuxDisplayHandleAccessBlocker as AccessBlocker;
+        use SmithayLinuxGlobalDispatchBindBlocker as BindBlocker;
+        use SmithayLinuxGlobalDispatchBindInput as Input;
+
+        let report = smithay_linux_display_handle_access_report();
+
+        assert_eq!(report.policy, SmithayLinuxDisplayHandleAccessPolicy::Hidden);
+        assert_eq!(
+            report.redaction,
+            SmithayLinuxDisplayHandleRedaction::FullyRedacted
+        );
+        assert!(!report.represents_real_display_handle);
+        assert!(!report.exposes_display_handle);
+        assert!(!report.stores_display_handle);
+        assert!(!report.reads_display_handle);
+        assert!(!report.can_call_create_global);
+        assert!(!report.can_call_register_global);
+        assert!(!report.touches_adapter_public_api);
+        assert!(report.skeleton_only);
+        assert!(!report.blockers.is_empty());
+        assert!(
+            report
+                .blockers
+                .contains(&AccessBlocker::RealDisplayHandleMustRemainPrivate)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&AccessBlocker::DisplayHandleExposureForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&AccessBlocker::DisplayHandleStorageForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&AccessBlocker::GlobalRegistrationForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&AccessBlocker::AdapterPublicApiExposureForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&AccessBlocker::GlobalDispatchBindStillForbidden)
+        );
+
+        let bind_shape = smithay_linux_global_dispatch_bind_shape_report();
+        assert!(bind_shape_item(&bind_shape, Input::ClientObject).modeled);
+        assert!(bind_shape_item(&bind_shape, Input::GlobalResourceObject).modeled);
+        assert!(bind_shape_item(&bind_shape, Input::GlobalDataObject).modeled);
+        assert!(bind_shape_item(&bind_shape, Input::HandlerState).modeled);
+        let display_handle = bind_shape_item(&bind_shape, Input::DisplayHandleObject);
+        assert!(!display_handle.modeled);
+        assert!(
+            display_handle
+                .blockers
+                .contains(&BindBlocker::DisplayHandleMustRemainHidden)
+        );
+        assert_eq!(bind_shape.modeled_count, 4);
+        assert_eq!(bind_shape.blocked_count, 5);
+        assert!(!bind_shape.can_compile_trait_impl);
+        assert!(!bind_shape.can_attach_to_adapter);
+        assert!(!bind_shape.can_register_global);
+    }
+
+    #[test]
     fn global_dispatch_bind_shape_aligns_with_reduction_matrix_and_probe() {
         use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
         use SmithayLinuxGlobalDispatchBindInput as Input;
@@ -2443,8 +2618,13 @@ mod tests {
             );
         }
         let display_handle_api_token = ["display_", "handle"].concat();
-        let production_without_synthetic_display_flag =
-            production_source.replace("touches_display_handle", "");
+        let production_without_synthetic_display_flag = production_source
+            .replace("touches_display_handle", "")
+            .replace("represents_real_display_handle", "")
+            .replace("exposes_display_handle", "")
+            .replace("stores_display_handle", "")
+            .replace("reads_display_handle", "")
+            .replace("smithay_linux_display_handle_access_report", "");
         assert!(
             !production_without_synthetic_display_flag.contains(&display_handle_api_token),
             "production probe 除纯数据布尔字段外不得读取原生 display handle"
@@ -2453,7 +2633,14 @@ mod tests {
         let production_without_bind_diagnostics = production_source
             .replace("DisplayHandleObject", "")
             .replace("DisplayHandleMustRemainHidden", "")
-            .replace("DisplayHandleStillHidden", "");
+            .replace("DisplayHandleStillHidden", "")
+            .replace("SmithayLinuxDisplayHandleAccessPolicy", "")
+            .replace("SmithayLinuxDisplayHandleRedaction", "")
+            .replace("SmithayLinuxDisplayHandleAccessBlocker", "")
+            .replace("SmithayLinuxDisplayHandleAccessReport", "")
+            .replace("RealDisplayHandleMustRemainPrivate", "")
+            .replace("DisplayHandleExposureForbidden", "")
+            .replace("DisplayHandleStorageForbidden", "");
         assert!(
             !production_without_bind_diagnostics.contains(&display_handle_token),
             "production probe 除固定诊断名称外不得暴露原生 display handle"
@@ -2478,6 +2665,8 @@ mod tests {
         let global_data_function = ["smithay_linux_", "bind_global_data_report"].concat();
         let handler_state_report_type = ["SmithayLinux", "BindHandlerStateReport"].concat();
         let handler_state_function = ["smithay_linux_", "bind_handler_state_report"].concat();
+        let display_access_report_type = ["SmithayLinux", "DisplayHandleAccessReport"].concat();
+        let display_access_function = ["smithay_linux_", "display_handle_access_report"].concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -2496,6 +2685,8 @@ mod tests {
             assert!(!source.contains(&global_data_function));
             assert!(!source.contains(&handler_state_report_type));
             assert!(!source.contains(&handler_state_function));
+            assert!(!source.contains(&display_access_report_type));
+            assert!(!source.contains(&display_access_function));
         }
     }
 
