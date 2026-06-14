@@ -447,6 +447,88 @@ pub struct SmithayLinuxBindClientIdentityReport {
     pub skeleton_only: bool,
 }
 
+/// Bind shape 使用的纯 synthetic global resource 标识。
+///
+/// 数值只用于隔离测试和诊断，不对应真实 Wayland resource、object ID 或系统资源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SmithayLinuxBindGlobalResourceSyntheticId(u64);
+
+impl SmithayLinuxBindGlobalResourceSyntheticId {
+    /// 从任意 inert 数值构造 synthetic ID；零值同样有效。
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// 返回 synthetic ID 的原始数值。
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// Bind global resource identity 的稳定来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindGlobalResourceIdentitySource {
+    /// Identity 仅由隔离 synthetic 数据提供。
+    SyntheticOnly,
+}
+
+/// Bind global resource identity 的稳定建模状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindGlobalResourceIdentityState {
+    /// Synthetic identity 已建模，但不代表真实 protocol resource 可用。
+    SyntheticModeled,
+}
+
+/// 阻止 synthetic global resource identity 进入真实 bind 路径的稳定原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmithayLinuxBindGlobalResourceIdentityBlocker {
+    /// 真实 Wayland resource object 仍不可用。
+    RealResourceObjectUnavailable,
+
+    /// 当前阶段禁止真实 protocol global 注册。
+    RealGlobalRegistrationForbidden,
+
+    /// 真实 protocol resource 生命周期跟踪仍不可用。
+    ProtocolResourceTrackingUnavailable,
+
+    /// Identity model 禁止接入生产 adapter。
+    AdapterIntegrationForbidden,
+
+    /// `GlobalDispatch` bind 入口仍禁止实现。
+    GlobalDispatchBindStillForbidden,
+}
+
+/// 隔离 synthetic bind global resource identity 的纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmithayLinuxBindGlobalResourceIdentityReport {
+    /// Identity 数据的稳定来源。
+    pub source: SmithayLinuxBindGlobalResourceIdentitySource,
+
+    /// Identity 的稳定建模状态。
+    pub state: SmithayLinuxBindGlobalResourceIdentityState,
+
+    /// 用于隔离诊断的固定 synthetic ID。
+    pub synthetic_id: SmithayLinuxBindGlobalResourceSyntheticId,
+
+    /// 当前 identity 是否代表真实 Wayland resource。
+    pub represents_real_resource: bool,
+
+    /// 当前 identity 是否来自真实 protocol global 注册。
+    pub comes_from_real_global_registration: bool,
+
+    /// 当前模型是否跟踪真实 protocol resource。
+    pub tracks_protocol_resource: bool,
+
+    /// 当前模型是否接触生产 adapter。
+    pub touches_adapter: bool,
+
+    /// 阻止 identity 进入真实 bind 路径的非空原因。
+    pub blockers: Vec<SmithayLinuxBindGlobalResourceIdentityBlocker>,
+
+    /// 当前报告是否仍然只描述结构骨架。
+    pub skeleton_only: bool,
+}
+
 /// `GlobalDispatch` bind 入口会暴露的稳定输入概念。
 ///
 /// 这些变体只记录类型形状，不持有相应的 Smithay 原生对象。
@@ -928,10 +1010,36 @@ pub fn smithay_linux_bind_client_identity_report() -> SmithayLinuxBindClientIden
     }
 }
 
+/// 返回固定的 synthetic bind global resource identity 报告。
+///
+/// 该函数只构造纯数据，不读取 adapter、bootstrap 或真实 protocol resource 状态。
+pub fn smithay_linux_bind_global_resource_identity_report()
+-> SmithayLinuxBindGlobalResourceIdentityReport {
+    use SmithayLinuxBindGlobalResourceIdentityBlocker as Blocker;
+
+    SmithayLinuxBindGlobalResourceIdentityReport {
+        source: SmithayLinuxBindGlobalResourceIdentitySource::SyntheticOnly,
+        state: SmithayLinuxBindGlobalResourceIdentityState::SyntheticModeled,
+        synthetic_id: SmithayLinuxBindGlobalResourceSyntheticId::new(1),
+        represents_real_resource: false,
+        comes_from_real_global_registration: false,
+        tracks_protocol_resource: false,
+        touches_adapter: false,
+        blockers: vec![
+            Blocker::RealResourceObjectUnavailable,
+            Blocker::RealGlobalRegistrationForbidden,
+            Blocker::ProtocolResourceTrackingUnavailable,
+            Blocker::AdapterIntegrationForbidden,
+            Blocker::GlobalDispatchBindStillForbidden,
+        ],
+        skeleton_only: true,
+    }
+}
+
 /// 返回 `GlobalDispatch` bind 输入概念的固定保守形状报告。
 ///
-/// ClientObject 只有 synthetic identity 模型；其他输入仍未建模。所有 item 仍有
-/// blocker，因此该函数不建立 trait、adapter 或 global readiness。
+/// ClientObject 和 GlobalResourceObject 只有 synthetic identity 模型；其他输入
+/// 仍未建模。所有 item 仍有 blocker，因此不建立 trait、adapter 或 global readiness。
 pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDispatchBindShapeReport
 {
     use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
@@ -949,9 +1057,8 @@ pub fn smithay_linux_global_dispatch_bind_shape_report() -> SmithayLinuxGlobalDi
         ),
         global_dispatch_bind_shape_item(
             Input::GlobalResourceObject,
-            false,
+            true,
             vec![
-                Blocker::ResourceObjectNotModeled,
                 Blocker::WouldCreateClientBindEntry,
                 Blocker::WouldRequireRealGlobalRegistration,
                 Blocker::AdapterIntegrationForbidden,
@@ -1071,12 +1178,16 @@ mod tests {
     use super::{
         SmithayLinuxBindClientIdentityBlocker, SmithayLinuxBindClientIdentitySource,
         SmithayLinuxBindClientIdentityState, SmithayLinuxBindClientSyntheticId,
-        SmithayLinuxGlobalDispatchBindBlocker, SmithayLinuxGlobalDispatchBindInput,
-        SmithayLinuxHandlerProbeBlocker, SmithayLinuxHandlerProbeKind,
-        SmithayLinuxHandlerReductionCandidate, SmithayLinuxHandlerReductionDecision,
-        SmithayLinuxHandlerReductionRisk, SmithayLinuxHandlerRequirement,
-        SmithayLinuxHandlerRequirementEvidence, SmithayLinuxHandlerRequirementState,
-        SmithayLinuxInertHandlerProbe, smithay_linux_bind_client_identity_report,
+        SmithayLinuxBindGlobalResourceIdentityBlocker,
+        SmithayLinuxBindGlobalResourceIdentitySource, SmithayLinuxBindGlobalResourceIdentityState,
+        SmithayLinuxBindGlobalResourceSyntheticId, SmithayLinuxGlobalDispatchBindBlocker,
+        SmithayLinuxGlobalDispatchBindInput, SmithayLinuxHandlerProbeBlocker,
+        SmithayLinuxHandlerProbeKind, SmithayLinuxHandlerReductionCandidate,
+        SmithayLinuxHandlerReductionDecision, SmithayLinuxHandlerReductionRisk,
+        SmithayLinuxHandlerRequirement, SmithayLinuxHandlerRequirementEvidence,
+        SmithayLinuxHandlerRequirementState, SmithayLinuxInertHandlerProbe,
+        smithay_linux_bind_client_identity_report,
+        smithay_linux_bind_global_resource_identity_report,
         smithay_linux_global_dispatch_bind_shape_report, smithay_linux_handler_probe_report,
         smithay_linux_handler_reduction_plan_report,
         smithay_linux_handler_requirement_matrix_report,
@@ -1480,7 +1591,7 @@ mod tests {
             ]
         );
         assert_eq!(report.items.len(), 5);
-        assert_eq!(report.modeled_count, 1);
+        assert_eq!(report.modeled_count, 2);
         assert_eq!(report.blocked_count, 5);
         assert!(!report.can_compile_trait_impl);
         assert!(!report.can_attach_to_adapter);
@@ -1505,10 +1616,22 @@ mod tests {
                 .blockers
                 .contains(&Blocker::WouldRequireRealGlobalRegistration)
         );
+        let resource = bind_shape_item(&report, Input::GlobalResourceObject);
+        assert!(resource.modeled);
         assert!(
-            bind_shape_item(&report, Input::GlobalResourceObject)
+            !resource
                 .blockers
                 .contains(&Blocker::ResourceObjectNotModeled)
+        );
+        assert!(
+            resource
+                .blockers
+                .contains(&Blocker::WouldCreateClientBindEntry)
+        );
+        assert!(
+            resource
+                .blockers
+                .contains(&Blocker::WouldRequireRealGlobalRegistration)
         );
         assert!(
             bind_shape_item(&report, Input::GlobalDataObject)
@@ -1580,6 +1703,56 @@ mod tests {
     }
 
     #[test]
+    fn bind_global_resource_identity_is_stable_synthetic_data() {
+        use SmithayLinuxBindGlobalResourceIdentityBlocker as Blocker;
+
+        let zero = SmithayLinuxBindGlobalResourceSyntheticId::new(0);
+        let report = smithay_linux_bind_global_resource_identity_report();
+
+        assert_eq!(zero.value(), 0);
+        assert_eq!(
+            report.source,
+            SmithayLinuxBindGlobalResourceIdentitySource::SyntheticOnly
+        );
+        assert_eq!(
+            report.state,
+            SmithayLinuxBindGlobalResourceIdentityState::SyntheticModeled
+        );
+        assert_eq!(report.synthetic_id.value(), 1);
+        assert!(!report.represents_real_resource);
+        assert!(!report.comes_from_real_global_registration);
+        assert!(!report.tracks_protocol_resource);
+        assert!(!report.touches_adapter);
+        assert!(report.skeleton_only);
+        assert!(!report.blockers.is_empty());
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::RealResourceObjectUnavailable)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::RealGlobalRegistrationForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::ProtocolResourceTrackingUnavailable)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::AdapterIntegrationForbidden)
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&Blocker::GlobalDispatchBindStillForbidden)
+        );
+    }
+
+    #[test]
     fn global_dispatch_bind_shape_aligns_with_reduction_matrix_and_probe() {
         use SmithayLinuxGlobalDispatchBindBlocker as Blocker;
         use SmithayLinuxGlobalDispatchBindInput as Input;
@@ -1607,7 +1780,7 @@ mod tests {
         assert!(!bind_shape.can_compile_trait_impl);
         assert!(!bind_shape.can_attach_to_adapter);
         assert!(!bind_shape.can_register_global);
-        assert_eq!(bind_shape.modeled_count, 1);
+        assert_eq!(bind_shape.modeled_count, 2);
         assert_eq!(bind_shape.blocked_count, 5);
         assert_eq!(bind_requirements.len(), 3);
         assert!(
@@ -1624,10 +1797,35 @@ mod tests {
                 .contains(&Blocker::WouldCreateClientBindEntry)
         );
         assert!(
-            bind_shape_item(&bind_shape, Input::DisplayHandleObject)
+            client
                 .blockers
-                .contains(&Blocker::DisplayHandleMustRemainHidden)
+                .contains(&Blocker::WouldRequireRealGlobalRegistration)
         );
+        let resource = bind_shape_item(&bind_shape, Input::GlobalResourceObject);
+        assert!(resource.modeled);
+        assert!(
+            !resource
+                .blockers
+                .contains(&Blocker::ResourceObjectNotModeled)
+        );
+        assert!(
+            resource
+                .blockers
+                .contains(&Blocker::WouldCreateClientBindEntry)
+        );
+        assert!(
+            resource
+                .blockers
+                .contains(&Blocker::WouldRequireRealGlobalRegistration)
+        );
+        assert!(!bind_shape_item(&bind_shape, Input::GlobalDataObject).modeled);
+        assert!(
+            !bind_shape_item(&bind_shape, Input::DisplayHandleObject).modeled
+                && bind_shape_item(&bind_shape, Input::DisplayHandleObject)
+                    .blockers
+                    .contains(&Blocker::DisplayHandleMustRemainHidden)
+        );
+        assert!(!bind_shape_item(&bind_shape, Input::HandlerState).modeled);
         assert_eq!(matrix.ready_count, 0);
         assert_eq!(probe.kind, SmithayLinuxHandlerProbeKind::TypeShapeOnly);
         assert!(!probe.compiled_trait_shape);
@@ -1832,6 +2030,11 @@ mod tests {
             ("Owned", "Fd"),
             ("Borrowed", "Fd"),
             ("Unix", "Stream"),
+            ("Resource", "<"),
+            ("wayland_server::", "Resource"),
+            ("wl_", "resource"),
+            ("Object", "Id"),
+            ("object_", "id"),
             ("process::", "id"),
             ("accept", "("),
             ("create_", "global("),
@@ -1885,6 +2088,10 @@ mod tests {
         let bind_shape_function = ["smithay_linux_", "global_dispatch_bind_shape_report"].concat();
         let client_identity_report_type = ["SmithayLinux", "BindClientIdentityReport"].concat();
         let client_identity_function = ["smithay_linux_", "bind_client_identity_report"].concat();
+        let resource_identity_report_type =
+            ["SmithayLinux", "BindGlobalResourceIdentityReport"].concat();
+        let resource_identity_function =
+            ["smithay_linux_", "bind_global_resource_identity_report"].concat();
         for source in [adapter_source, runtime_source] {
             assert!(!source.contains(&probe_type));
             assert!(!source.contains(&probe_report_type));
@@ -1897,6 +2104,8 @@ mod tests {
             assert!(!source.contains(&bind_shape_function));
             assert!(!source.contains(&client_identity_report_type));
             assert!(!source.contains(&client_identity_function));
+            assert!(!source.contains(&resource_identity_report_type));
+            assert!(!source.contains(&resource_identity_function));
         }
     }
 
