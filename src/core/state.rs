@@ -1120,6 +1120,56 @@ mod tests {
         assert!(!state.registry.is_alive(focused));
     }
 
+    /// 验证关闭非焦点窗口不会错误改变当前焦点。
+    #[test]
+    fn close_non_focused_window_preserves_focus() {
+        let mut state = State::new();
+        let focus_before = state.compositor.focus;
+        let non_focused = state
+            .compositor
+            .current_workspace()
+            .and_then(|workspace| workspace.slot_window(1))
+            .expect("默认 slot 1 必须包含非焦点窗口");
+
+        let result = state.close_window(non_focused);
+
+        assert!(result.removed_from_workspace);
+        assert!(result.marked_dead);
+
+        // 非焦点 slot 的生命周期变化不能让当前有效焦点漂移到其他窗口。
+        assert_eq!(state.compositor.focus, focus_before);
+        assert!(!state.registry.is_alive(non_focused));
+    }
+
+    /// 验证关闭焦点窗口后 Fullscreen 不会继续绘制 dead window。
+    #[test]
+    fn close_window_removes_dead_window_from_fullscreen_render_frame() {
+        let mut state = State::new();
+        let closed = state
+            .compositor
+            .focus
+            .window
+            .expect("默认状态必须包含焦点窗口");
+
+        let result = state.close_window(closed);
+        let frame = state.current_render_frame_for_current_output();
+
+        assert!(result.removed_from_workspace);
+        assert!(result.marked_dead);
+        assert!(!state.registry.is_alive(closed));
+
+        // focus 必须重新解析到合法 slot/window，不能继续指向已经销毁的 WindowId。
+        assert!(state.compositor.focus.slot < 4);
+        assert_ne!(state.compositor.focus.window, Some(closed));
+
+        // Fullscreen 只能从 workspace 可见引用生成命令，因此 dead window 不得残留。
+        assert!(frame.commands.iter().all(|command| {
+            let RenderCommand::DrawWindow { window, .. } = command;
+            *window != closed
+        }));
+        assert!(state.validate().is_valid());
+    }
+
     /// 验证成功加载 session 后会重建 registry，不保留默认 mock metadata。
     #[test]
     fn load_session_rebuilds_registry_without_default_mock_residue() {

@@ -6,7 +6,8 @@
 //! `ClientId`、`SurfaceId`、`WindowId` 是不同层级：
 //! `ClientId` 表示外部应用连接；`SurfaceId` 表示该 client 创建的 surface；
 //! `WindowId` 表示 compositor 内部管理的逻辑窗口。socket 连接本身不等于
-//! surface 或 window，本阶段也不建立 client 与 surface 的绑定关系。
+//! surface 或 window；ClientRegistry 本身不持有 surface 关系，归属绑定由
+//! SurfaceRegistry 保存并由 State 统一协调生命周期。
 
 /// Wayland client 的核心占位 ID。
 ///
@@ -113,7 +114,8 @@ impl ClientRegistry {
 
     /// 将 client 标记为 dead。
     ///
-    /// 本阶段只修改 client 记录，不级联关闭 surface 或 window。
+    /// Registry 层只修改 client 记录；需要级联关闭 surface 或 window 的调用方
+    /// 必须通过 `State::close_client()`，避免局部注册表直接跨 seam 修改其他状态。
     pub fn mark_dead(&mut self, client: ClientId) -> bool {
         let Some(record) = self.clients.iter_mut().find(|record| record.id == client) else {
             return false;

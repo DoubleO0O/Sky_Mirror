@@ -42,7 +42,8 @@ pub enum CoreCommand {
 
     /// 关闭指定 client 占位记录。
     ///
-    /// 当前阶段只标记 client dead，不自动关闭 surface 或 window。
+    /// 命令由 State 统一标记 client dead，并级联关闭归属 surface 与绑定 window；
+    /// Command 层不直接操作 workspace、slot 或 stack。
     CloseClient(ClientId),
 
     /// 注册一个新逻辑窗口，并把它分配到当前 workspace。

@@ -13,7 +13,7 @@ pub type WindowId = u64;
 /// workspace 当前使用的布局模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutMode {
-    /// 只显示 slot 0 的 active window。
+    /// 优先显示 focused slot 的 active window；焦点无效时回退到首个 occupied slot。
     Fullscreen,
     /// 最多显示 slot 0 和 slot 1，左右分屏。
     Split,
@@ -225,51 +225,70 @@ impl Workspace {
         }
     }
 
-    /// 从 workspace 的固定 slot 或 stack 中删除指定窗口。
+    /// 从 workspace 的全部固定 slot 或 stack 中删除指定窗口。
     ///
     /// Empty slot 直接跳过；Single 命中后变为 Empty；Stack 命中后根据剩余窗口数
-    /// 保持 Stack、降级为 Single 或清空为 Empty。slot 数组长度始终保持为 4。
+    /// 保持 Stack、降级为 Single 或清空为 Empty。方法会扫描全部四个 slot，确保
+    /// session 或异常输入造成的重复 WindowId 不会在窗口销毁后继续被 layout 读取。
     pub fn remove_window(&mut self, window: WindowId) -> bool {
+        let mut removed = false;
+
         for slot in &mut self.slots {
-            match &mut slot.content {
+            let removed_from_slot = match &mut slot.content {
                 // Empty 不包含任何窗口，不需要修改。
-                SlotContent::Empty => continue,
+                SlotContent::Empty => false,
                 // Single 只有在 WindowId 匹配时才清空当前 slot。
                 SlotContent::Single(existing) => {
                     if *existing != window {
-                        continue;
+                        false
+                    } else {
+                        slot.content = SlotContent::Empty;
+                        true
                     }
-
-                    slot.content = SlotContent::Empty;
                 }
                 // Stack 先删除窗口，再根据剩余数量恢复 SlotContent 不变量。
                 SlotContent::Stack(stack) => {
-                    if !stack.remove_window(window) {
-                        continue;
+                    let mut removed_from_stack = false;
+
+                    // 异常恢复数据可能在同一 Stack 中重复引用 WindowId，必须全部清理。
+                    while stack.remove_window(window) {
+                        removed_from_stack = true;
                     }
 
-                    match stack.windows.len() {
-                        // 没有剩余窗口时，slot 不应继续保存空 Stack。
-                        0 => slot.content = SlotContent::Empty,
-                        // 只剩一个窗口时降级为 Single，避免用 Stack 表达单窗口状态。
-                        1 => {
-                            let remaining = stack.windows[0];
-                            slot.content = SlotContent::Single(remaining);
+                    if !removed_from_stack {
+                        false
+                    } else {
+                        match stack.windows.len() {
+                            // 没有剩余窗口时，slot 不应继续保存空 Stack。
+                            0 => slot.content = SlotContent::Empty,
+                            // 只剩一个窗口时降级为 Single，避免用 Stack 表达单窗口状态。
+                            1 => {
+                                let remaining = stack.windows[0];
+                                slot.content = SlotContent::Single(remaining);
+                            }
+                            // 两个及以上窗口仍满足 Stack 不变量，无需替换内容。
+                            _ => {}
                         }
-                        // 两个及以上窗口仍满足 Stack 不变量，无需替换内容。
-                        _ => {}
+
+                        true
                     }
                 }
-            }
+            };
 
+            if removed_from_slot {
+                // destroy 必须清理全部重复引用，不能在首个命中后提前返回。
+                removed = true;
+            }
+        }
+
+        if removed {
             println!(
                 "[Workspace] Removed window {} from workspace {}",
                 window, self.id
             );
-            return true;
         }
 
-        false
+        removed
     }
 
     /// 收集 workspace 中引用的全部逻辑窗口 ID。
@@ -513,6 +532,23 @@ mod tests {
         assert_eq!(stack.active_window(), Some(2));
     }
 
+    /// 验证删除非 active 窗口不会让当前 active window 错位。
+    #[test]
+    fn stack_remove_non_active_window_preserves_active_window() {
+        let mut stack = Stack::new(1, 2);
+        stack.push(3);
+
+        // 当前 active 是窗口 3；删除它之前的窗口 1 必须同步左移 active 索引。
+        assert_eq!(stack.active_window(), Some(3));
+        assert!(stack.remove_window(1));
+
+        assert_eq!(stack.windows, vec![2, 3]);
+        assert!(stack.active < stack.windows.len());
+
+        // 删除非 active 成员后，可见窗口仍必须是原 active 窗口 3。
+        assert_eq!(stack.active_window(), Some(3));
+    }
+
     /// 验证删除 Single 窗口后，对应固定 slot 会恢复为 Empty。
     #[test]
     fn workspace_remove_single_window_makes_slot_empty() {
@@ -526,6 +562,55 @@ mod tests {
         assert!(matches!(workspace.slots[0].content, SlotContent::Empty));
 
         // 统一读取接口必须同步反映 Empty 状态。
+        assert_eq!(workspace.slot_window(0), None);
+    }
+
+    /// 验证删除窗口会清理同一 workspace 内的全部重复引用。
+    #[test]
+    fn workspace_remove_window_clears_all_duplicate_references() {
+        let mut workspace = Workspace::new(0);
+
+        // session 或异常外部数据可能把同一 WindowId 恢复到多个固定 slot。
+        workspace.slots[0].content = SlotContent::Single(7);
+        workspace.slots[1].content = SlotContent::Single(7);
+
+        assert!(workspace.remove_window(7));
+
+        // destroy 完成后不得残留任何 dead WindowId，否则 layout 仍可能把它显示出来。
+        assert!(!workspace.window_ids().contains(&7));
+        assert!(matches!(workspace.slots[0].content, SlotContent::Empty));
+        assert!(matches!(workspace.slots[1].content, SlotContent::Empty));
+    }
+
+    /// 验证删除窗口会清理同一 Stack 内的全部重复引用。
+    #[test]
+    fn workspace_remove_window_clears_duplicate_references_inside_stack() {
+        let mut workspace = Workspace::new(0);
+        workspace.slots[0].content = SlotContent::Stack(Stack {
+            windows: vec![7, 8, 7],
+            active: 1,
+        });
+
+        assert!(workspace.remove_window(7));
+
+        // 重复 WindowId 全部移除后只剩窗口 8，SlotContent 必须同步降级为 Single。
+        assert!(!workspace.window_ids().contains(&7));
+        assert!(matches!(workspace.slots[0].content, SlotContent::Single(8)));
+    }
+
+    /// 验证异常单元素 Stack 删除最后一个窗口后会规范化为 Empty。
+    #[test]
+    fn workspace_remove_last_stack_window_makes_slot_empty() {
+        let mut workspace = Workspace::new(0);
+        workspace.slots[0].content = SlotContent::Stack(Stack {
+            windows: vec![7],
+            active: 0,
+        });
+
+        // session 恢复可能带来不满足常规二元素起点的 Stack，删除路径仍必须安全收束。
+        assert!(workspace.remove_window(7));
+
+        assert!(matches!(workspace.slots[0].content, SlotContent::Empty));
         assert_eq!(workspace.slot_window(0), None);
     }
 
