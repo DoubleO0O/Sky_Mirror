@@ -88,7 +88,7 @@ impl BackendEventReplayer {
     /// 回放一组后端事件。
     ///
     /// 每个事件都会按输入顺序执行：
-    /// `BackendEvent -> CoreCommand -> State::handle_command() -> ValidationReport`。
+    /// `BackendEvent -> CoreCommand -> State::handle_command_with_validation()`。
     /// 每一步执行后立即验证，但不会自动修复状态或打印报告。
     pub fn replay(
         state: &mut State,
@@ -98,8 +98,9 @@ impl BackendEventReplayer {
 
         for event in events {
             let command = BackendEventTranslator::translate(event.clone());
-            let result = state.handle_command(command.clone());
-            let validation = state.validate();
+
+            // 每一步复用 State 的统一 seam，确保 runtime 与 replay 使用相同 post-command 时序。
+            let (result, validation) = state.handle_command_with_validation(command.clone());
 
             steps.push(BackendReplayStep {
                 event,

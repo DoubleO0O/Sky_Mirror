@@ -44,14 +44,15 @@ impl CoreRuntimeBridge {
     /// 处理单个后端事件。
     ///
     /// 处理流程固定为：
-    /// `BackendEvent -> BackendEventTranslator -> CoreCommand -> State::handle_command()
-    /// -> ValidationReport`。
+    /// `BackendEvent -> BackendEventTranslator -> CoreCommand
+    /// -> State::handle_command_with_validation()`。
     ///
     /// 该方法不会自动打印、不会自动修复状态，也不会保存 `State` 引用。
     pub fn handle_backend_event(state: &mut State, event: BackendEvent) -> RuntimeEventResult {
         let command = BackendEventTranslator::translate(event.clone());
-        let result = state.handle_command(command.clone());
-        let validation = state.validate();
+
+        // State 统一保证 validation 在命令执行后生成；bridge 只附加 event/command 上下文。
+        let (result, validation) = state.handle_command_with_validation(command.clone());
 
         RuntimeEventResult {
             event,

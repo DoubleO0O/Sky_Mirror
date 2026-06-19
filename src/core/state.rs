@@ -932,6 +932,22 @@ impl State {
         CommandHandler::handle(self, command)
     }
 
+    /// 处理命令并返回执行结果与命令后的状态验证报告。
+    ///
+    /// validation 只用于观测，不自动修复、拒绝或回滚命令产生的状态。
+    pub fn handle_command_with_validation(
+        &mut self,
+        command: CoreCommand,
+    ) -> (CommandResult, ValidationReport) {
+        // 旧命令入口继续是唯一状态修改 seam，兼容调用方无需迁移。
+        let result = self.handle_command(command);
+
+        // 命令完成后只读观察最终状态；报告不会修复、拒绝或回滚命令结果。
+        let validation = self.validate();
+
+        (result, validation)
+    }
+
     /// 暴露 workspace 切换的薄封装。
     ///
     /// 实际状态修改仍由 CompositorState 完成。
@@ -1071,7 +1087,14 @@ mod tests {
         SessionFocus, SessionLayoutMode, SessionSlot, SessionSlotContent, SessionState,
         SessionWorkspace,
     };
-    use crate::core::{layout::OutputSize, render::RenderCommand, workspace::LayoutMode};
+    use crate::core::{
+        command::{CommandResult, CoreCommand},
+        layout::OutputSize,
+        render::RenderCommand,
+        surface::SurfaceRole,
+        validator::ValidationIssueKind,
+        workspace::LayoutMode,
+    };
 
     /// 验证关闭焦点窗口后，CompositorState 会刷新到下一个已占用 slot。
     #[test]
@@ -1168,6 +1191,70 @@ mod tests {
             *window != closed
         }));
         assert!(state.validate().is_valid());
+    }
+
+    /// 验证命令边界可以同时返回执行结果和命令后的结构化 validation report。
+    #[test]
+    fn handle_command_with_validation_reports_post_command_state() {
+        let mut state = State::new();
+        let window = state
+            .compositor
+            .focus
+            .window
+            .expect("默认状态必须包含焦点窗口");
+
+        let (result, validation) =
+            state.handle_command_with_validation(CoreCommand::CloseWindow(window));
+
+        let CommandResult::WindowClosed {
+            window: closed,
+            removed_from_workspace,
+            marked_dead,
+            ..
+        } = result
+        else {
+            panic!("CloseWindow 必须保留原有 WindowClosed 结果");
+        };
+
+        // validation 必须在命令完成后生成，因此已经关闭的窗口不能残留在 live path。
+        assert_eq!(closed, window);
+        assert!(removed_from_workspace);
+        assert!(marked_dead);
+        assert!(validation.is_clean());
+        assert_eq!(validation, state.validate());
+    }
+
+    /// 验证 command validation 只观察错误，不会自动修复损坏状态。
+    #[test]
+    fn handle_command_with_validation_does_not_repair_invalid_state() {
+        let mut state = State::new();
+        let surface = state.register_surface(SurfaceRole::XdgToplevel);
+        assert!(state.surfaces.bind_window(surface, 999));
+
+        let before = state
+            .surfaces
+            .get(surface)
+            .expect("损坏 surface 记录必须存在")
+            .clone();
+
+        let (_, validation) = state.handle_command_with_validation(CoreCommand::Validate);
+
+        // 结构化报告必须暴露错误，而不是只依赖 Validate 命令返回的文本。
+        assert!(
+            validation
+                .issues
+                .iter()
+                .any(|issue| { issue.kind == ValidationIssueKind::SurfaceReferencesMissingWindow })
+        );
+
+        // validation 是只读观测；非法绑定必须保持原样，交给明确的状态命令处理。
+        assert_eq!(
+            state
+                .surfaces
+                .get(surface)
+                .expect("validation 后记录必须继续存在"),
+            &before
+        );
     }
 
     /// 验证成功加载 session 后会重建 registry，不保留默认 mock metadata。
