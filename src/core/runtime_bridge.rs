@@ -184,6 +184,238 @@ mod tests {
         assert!(!state.registry.is_alive(mapped_window));
     }
 
+    /// 验证 client connection 通过 runtime public seam 自动分配 ID 并进入诊断快照。
+    #[test]
+    fn runtime_bridge_client_connected_auto_allocates_id_and_updates_diagnostics() {
+        let mut state = State::new();
+
+        let connected = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ClientConnected {
+                client: None,
+                kind: ClientKind::WaylandPlaceholder,
+                name: Some("terminal".to_string()),
+            },
+        );
+
+        // BackendEvent 只表达外部事实；bridge 必须先翻译为命令，不能直接修改 State。
+        assert_eq!(
+            connected.command,
+            CoreCommand::RegisterClient {
+                client: None,
+                kind: ClientKind::WaylandPlaceholder,
+                name: Some("terminal".to_string()),
+            }
+        );
+
+        let CommandResult::ClientRegistered { client, registered } = connected.result else {
+            panic!("client connection 必须返回 ClientRegistered");
+        };
+
+        // generated ClientId 必须从 CommandResult 读取，未来 adapter 不能猜测 registry allocator。
+        assert!(registered);
+        let record = state
+            .clients
+            .get(client)
+            .expect("自动分配的 client 必须存在 registry 记录");
+        assert!(record.alive);
+        assert_eq!(record.kind, ClientKind::WaylandPlaceholder);
+        assert_eq!(record.name.as_deref(), Some("terminal"));
+
+        // client socket connection 不等于 surface；alive client 暂无 surface 是合法中间状态。
+        assert!(state.surfaces.records().is_empty());
+        assert!(connected.validation.is_clean());
+
+        let bundle = state.debug_bundle();
+        let snapshot_record = bundle
+            .snapshot
+            .clients
+            .iter()
+            .find(|record| record.id == client)
+            .expect("DebugBundle 必须包含自动注册的 client");
+
+        // DebugBundle 必须同时反映 client metadata 与命令后的 clean validation。
+        assert!(snapshot_record.alive);
+        assert_eq!(snapshot_record.name.as_deref(), Some("terminal"));
+        assert!(bundle.is_clean());
+    }
+
+    /// 验证 runtime public seam 接受 explicit ClientId，并推进后续自动分配边界。
+    #[test]
+    fn runtime_bridge_client_connected_accepts_explicit_id_without_allocator_conflict() {
+        let mut state = State::new();
+
+        let explicit = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ClientConnected {
+                client: Some(42),
+                kind: ClientKind::WaylandPlaceholder,
+                name: Some("explicit-client".to_string()),
+            },
+        );
+
+        // 翻译后的命令必须保留外部 ID 和 metadata，BackendEvent 本身不写 registry。
+        assert_eq!(
+            explicit.command,
+            CoreCommand::RegisterClient {
+                client: Some(42),
+                kind: ClientKind::WaylandPlaceholder,
+                name: Some("explicit-client".to_string()),
+            }
+        );
+        assert_eq!(
+            explicit.result,
+            CommandResult::ClientRegistered {
+                client: 42,
+                registered: true,
+            }
+        );
+        assert!(state.clients.is_alive(42));
+        assert!(explicit.validation.is_clean());
+
+        let generated = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ClientConnected {
+                client: None,
+                kind: ClientKind::WaylandPlaceholder,
+                name: None,
+            },
+        );
+        let CommandResult::ClientRegistered {
+            client: generated_client,
+            registered,
+        } = generated.result
+        else {
+            panic!("后续自动注册必须返回 ClientRegistered");
+        };
+
+        // 显式 ID 必须推进 allocator，后续 generated ClientId 不能覆盖现有 client 42。
+        assert!(registered);
+        assert_ne!(generated_client, 42);
+        assert!(generated_client > 42);
+        assert!(state.clients.is_alive(generated_client));
+        assert!(generated.validation.is_clean());
+    }
+
+    /// 验证 runtime public seam 拒绝重复 explicit ClientId，且不覆盖原记录。
+    #[test]
+    fn runtime_bridge_client_connected_rejects_duplicate_explicit_id_cleanly() {
+        let mut state = State::new();
+
+        let first = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ClientConnected {
+                client: Some(42),
+                kind: ClientKind::Mock,
+                name: Some("original".to_string()),
+            },
+        );
+        let duplicate = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ClientConnected {
+                client: Some(42),
+                kind: ClientKind::WaylandPlaceholder,
+                name: Some("replacement".to_string()),
+            },
+        );
+
+        assert_eq!(
+            first.result,
+            CommandResult::ClientRegistered {
+                client: 42,
+                registered: true,
+            }
+        );
+        assert_eq!(
+            duplicate.result,
+            CommandResult::ClientRegistered {
+                client: 42,
+                registered: false,
+            }
+        );
+
+        let record = state.clients.get(42).expect("首次 client 记录必须继续存在");
+
+        // 重复外部 ID 不能覆盖首条 metadata，也不能制造第二条同 ID 记录。
+        assert_eq!(record.kind, ClientKind::Mock);
+        assert_eq!(record.name.as_deref(), Some("original"));
+        assert_eq!(
+            state
+                .clients
+                .records()
+                .iter()
+                .filter(|record| record.id == 42)
+                .count(),
+            1
+        );
+
+        // 重复连接是明确的 command result，不是结构损坏，validation 必须保持 clean。
+        assert!(duplicate.validation.is_clean());
+        assert!(state.debug_bundle().is_clean());
+    }
+
+    /// 验证没有 surface 的 client 断开后保留 tombstone，并保持状态 clean。
+    #[test]
+    fn runtime_bridge_client_disconnected_without_surfaces_keeps_clean_tombstone() {
+        let mut state = State::new();
+
+        let connected = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ClientConnected {
+                client: None,
+                kind: ClientKind::WaylandPlaceholder,
+                name: Some("short-lived".to_string()),
+            },
+        );
+        let CommandResult::ClientRegistered { client, registered } = connected.result else {
+            panic!("client connection 必须返回 ClientRegistered");
+        };
+        assert!(registered);
+
+        // alive client 尚未创建 surface 是合法中间状态，不应在断开前产生 validation issue。
+        assert!(state.surfaces.records().is_empty());
+        assert!(connected.validation.is_clean());
+
+        let disconnected = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ClientDisconnected { client },
+        );
+
+        assert_eq!(disconnected.command, CoreCommand::CloseClient(client));
+        assert_eq!(
+            disconnected.result,
+            CommandResult::ClientClosed {
+                client,
+                marked_dead: true,
+                dead_surfaces: Vec::new(),
+                closed_windows: Vec::new(),
+                removed_from_workspace_count: 0,
+                marked_window_dead_count: 0,
+            }
+        );
+
+        // 断开采用 tombstone 而不是物理删除，诊断层才能保留稳定 ClientId 与 metadata。
+        let record = state
+            .clients
+            .get(client)
+            .expect("断开后的 client tombstone 必须保留");
+        assert!(!record.alive);
+        assert!(!state.clients.is_alive(client));
+        assert!(disconnected.validation.is_clean());
+
+        let bundle = state.debug_bundle();
+        let snapshot_record = bundle
+            .snapshot
+            .clients
+            .iter()
+            .find(|record| record.id == client)
+            .expect("DebugBundle 必须保留 dead client tombstone");
+
+        assert!(!snapshot_record.alive);
+        assert_eq!(snapshot_record.name.as_deref(), Some("short-lived"));
+        assert!(bundle.is_clean());
+    }
+
     /// 验证 client 断开事件会通过运行时桥级联关闭 surface 和 window。
     #[test]
     fn runtime_bridge_client_disconnected_cascades_to_surface_and_window() {
@@ -223,10 +455,31 @@ mod tests {
         };
         assert!(bound);
 
+        let mapped_slot = state
+            .compositor
+            .current_workspace()
+            .and_then(|workspace| {
+                workspace
+                    .slots
+                    .iter()
+                    .find(|slot| workspace.slot_window(slot.id) == Some(window))
+                    .map(|slot| slot.id)
+            })
+            .expect("mapped window 必须属于当前 workspace 的一个 slot");
+        let focused = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ActionRequested(Action::FocusSlot(mapped_slot)),
+        );
+
+        // 先经 public Action seam 聚焦目标窗口，才能封板 disconnect 后的 focus cleanup。
+        assert_eq!(state.compositor.focus.window, Some(window));
+        assert!(focused.validation.is_clean());
+
         let disconnected = CoreRuntimeBridge::handle_backend_event(
             &mut state,
             BackendEvent::ClientDisconnected { client: 7 },
         );
+        assert_eq!(disconnected.command, CoreCommand::CloseClient(7));
         let CommandResult::ClientClosed {
             client,
             marked_dead,
@@ -259,9 +512,41 @@ mod tests {
                 .all(|workspace| !workspace.window_ids().contains(&window))
         );
 
+        // client disconnect 必须刷新焦点，不能让 live focus path 指向已关闭窗口。
+        assert!(state.compositor.focus.slot < 4);
+        assert_ne!(state.compositor.focus.window, Some(window));
+
+        let bundle = state.debug_bundle();
+        let client_snapshot = bundle
+            .snapshot
+            .clients
+            .iter()
+            .find(|record| record.id == 7)
+            .expect("DebugBundle 必须保留 dead client");
+        let surface_snapshot = bundle
+            .snapshot
+            .surfaces
+            .iter()
+            .find(|record| record.id == 42)
+            .expect("DebugBundle 必须保留 dead surface");
+        let window_snapshot = bundle
+            .snapshot
+            .windows
+            .iter()
+            .find(|record| record.id == window)
+            .expect("DebugBundle 必须保留 dead window");
+
+        // 级联采用 tombstone 保留历史 identity，同时从 workspace live path 清理窗口。
+        assert!(!client_snapshot.alive);
+        assert!(!surface_snapshot.alive);
+        assert_eq!(surface_snapshot.client, Some(7));
+        assert_eq!(surface_snapshot.window, Some(window));
+        assert!(!window_snapshot.alive);
+        assert!(!window_snapshot.referenced_by_workspace);
+
         // 运行时桥接完成级联后，状态必须重新满足全部不变量。
-        assert!(disconnected.validation.is_valid());
-        assert!(state.validate().is_valid());
+        assert!(disconnected.validation.is_clean());
+        assert!(bundle.is_clean());
     }
 
     /// 验证桥接器会记录状态错误，但不会自动修复损坏的绑定。
