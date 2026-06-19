@@ -2,6 +2,8 @@
 //!
 //! 本模块只描述 adapter 观察到的 session 身份及其与核心 client 身份的关系。
 //! 它不持有平台后端对象，也不负责把 session 事件提交到核心状态机。
+//! Phase 51D 只在这条 seam 产生并记录纯数据事件；Phase 51E 才会消费事件，
+//! 协调核心 registry、session mapping 和 disconnect bridge。
 
 use std::{
     collections::{HashMap, hash_map::Entry},
@@ -35,6 +37,15 @@ impl NestedClientSessionId {
     }
 }
 
+/// adapter 拒绝 nested client session 的纯数据原因。
+///
+/// 当前只表达“本阶段不支持”这一保守事实，不提升任何真实 client capability。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NestedClientSessionRejectionReason {
+    /// 当前 adapter/runtime 尚不支持处理该 session。
+    Unsupported,
+}
+
 /// adapter 层观察到的 nested client session 生命周期事件。
 ///
 /// 事件只携带 adapter session ID，不携带核心 `ClientId`，也不自动转换为核心事件。
@@ -52,6 +63,158 @@ pub enum NestedClientSessionEvent {
         /// 本次断开引用的 adapter session 身份。
         session: NestedClientSessionId,
     },
+}
+
+/// event record 中稳定、可筛选的 session 事件类别。
+///
+/// 该枚举与 Phase 51C 的 lifecycle event 分离，因此增加拒绝诊断不会改变旧 enum
+/// 的 variants，也不会破坏已有 exhaustive match。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NestedClientSessionEventKind {
+    /// adapter 观察到 session 连接。
+    Connected,
+
+    /// adapter 观察到 session 断开。
+    Disconnected,
+
+    /// adapter 拒绝或暂不支持 session。
+    Rejected,
+}
+
+/// 一条带稳定顺序和可选诊断信息的 session 事件记录。
+///
+/// Record 只包含 ID、枚举、整数与字符串等纯数据，adapter 可以安全地把它交给
+/// 后续协调层。Phase 51D 不在这里读取或修改核心状态。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedClientSessionEventRecord {
+    /// adapter 观察事件的单调递增顺序，从 1 开始。
+    pub sequence: u64,
+
+    /// 本条记录的稳定事件类别。
+    pub kind: NestedClientSessionEventKind,
+
+    /// adapter session 身份；拒绝发生在分配 ID 之前时允许为空。
+    pub session: Option<NestedClientSessionId>,
+
+    /// 拒绝事件的结构化原因；连接和断开事件固定为空。
+    pub rejection_reason: Option<NestedClientSessionRejectionReason>,
+
+    /// adapter 可选提供的 session/client 显示标签，仅用于诊断。
+    pub label: Option<String>,
+
+    /// adapter 可选提供的诊断文本，不用于驱动核心状态转换。
+    pub diagnostic: Option<String>,
+}
+
+/// 按 adapter 观察顺序保存 session 事件的纯数据 recorder。
+///
+/// Log 是 Phase 51D 的 producer seam：调用方只提交纯数据事件，log 统一分配
+/// sequence 并保留顺序。它不持有核心 registry 或 mapping；Phase 51E 才会在
+/// 独立 coordinator 中消费这些记录并处理核心生命周期。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedClientSessionEventLog {
+    next_sequence: u64,
+    records: Vec<NestedClientSessionEventRecord>,
+}
+
+impl NestedClientSessionEventLog {
+    /// 创建空 event log，首条记录的 sequence 为 1。
+    pub fn new() -> Self {
+        Self {
+            next_sequence: 1,
+            records: Vec::new(),
+        }
+    }
+
+    /// 记录一条纯数据 session 事件，并返回刚写入的记录。
+    ///
+    /// 本方法只追加本地诊断记录，不提交核心事件、不注册 client，也不修改
+    /// Phase 51C 的 session-to-client mapping。
+    pub fn record(
+        &mut self,
+        event: NestedClientSessionEvent,
+        label: Option<String>,
+        diagnostic: Option<String>,
+    ) -> &NestedClientSessionEventRecord {
+        let (kind, session) = match event {
+            NestedClientSessionEvent::Connected { session } => {
+                (NestedClientSessionEventKind::Connected, session)
+            }
+            NestedClientSessionEvent::Disconnected { session } => {
+                (NestedClientSessionEventKind::Disconnected, session)
+            }
+        };
+
+        self.push_record(kind, Some(session), None, label, diagnostic)
+    }
+
+    /// 记录一条纯数据拒绝事件，并返回刚写入的记录。
+    ///
+    /// 拒绝发生在 adapter session ID 分配前时，`session` 可以为 `None`。
+    /// 本方法只记录 unsupported 事实，不改变 Linux client capability。
+    pub fn record_rejected(
+        &mut self,
+        session: Option<NestedClientSessionId>,
+        reason: NestedClientSessionRejectionReason,
+        label: Option<String>,
+        diagnostic: Option<String>,
+    ) -> &NestedClientSessionEventRecord {
+        self.push_record(
+            NestedClientSessionEventKind::Rejected,
+            session,
+            Some(reason),
+            label,
+            diagnostic,
+        )
+    }
+
+    /// 在唯一位置分配 sequence 并追加标准化 event record。
+    fn push_record(
+        &mut self,
+        kind: NestedClientSessionEventKind,
+        session: Option<NestedClientSessionId>,
+        rejection_reason: Option<NestedClientSessionRejectionReason>,
+        label: Option<String>,
+        diagnostic: Option<String>,
+    ) -> &NestedClientSessionEventRecord {
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+
+        // Vec 只在末尾追加，确保记录顺序与 adapter 观察顺序完全一致。
+        let record_index = self.records.len();
+        self.records.push(NestedClientSessionEventRecord {
+            sequence,
+            kind,
+            session,
+            rejection_reason,
+            label,
+            diagnostic,
+        });
+
+        // record_index 在 push 前取自 len，因此必然指向刚追加的记录。
+        &self.records[record_index]
+    }
+
+    /// 返回按 sequence 排列的全部 event records。
+    pub fn records(&self) -> &[NestedClientSessionEventRecord] {
+        &self.records
+    }
+
+    /// 返回当前已记录的 session 事件数量。
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// 判断当前是否尚未记录任何 session 事件。
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
+impl Default for NestedClientSessionEventLog {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// adapter session 映射操作的结构化失败原因。
@@ -135,8 +298,9 @@ impl NestedClientSessionRegistry {
 #[cfg(test)]
 mod tests {
     use super::{
-        NestedClientSessionError, NestedClientSessionEvent, NestedClientSessionId,
-        NestedClientSessionRegistry,
+        NestedClientSessionError, NestedClientSessionEvent, NestedClientSessionEventKind,
+        NestedClientSessionEventLog, NestedClientSessionEventRecord, NestedClientSessionId,
+        NestedClientSessionRegistry, NestedClientSessionRejectionReason,
     };
     use crate::core::client::ClientId;
 
@@ -165,6 +329,117 @@ mod tests {
         assert_ne!(connected, disconnected);
         assert!(format!("{connected:?}").contains("Connected"));
         assert!(format!("{disconnected:?}").contains("Disconnected"));
+    }
+
+    /// 验证纯数据 log 可以记录连接事件及 adapter 可见的诊断字段。
+    #[test]
+    fn event_log_records_connected_event() {
+        let mut log = NestedClientSessionEventLog::new();
+        let session = NestedClientSessionId::new(7).expect("非零 session ID 必须有效");
+        let event = NestedClientSessionEvent::Connected { session };
+
+        let record = log.record(
+            event,
+            Some("nested-terminal".to_string()),
+            Some("session connected".to_string()),
+        );
+
+        assert_eq!(record.sequence, 1);
+        assert_eq!(record.kind, NestedClientSessionEventKind::Connected);
+        assert_eq!(record.session, Some(session));
+        assert_eq!(record.rejection_reason, None);
+        assert_eq!(record.label.as_deref(), Some("nested-terminal"));
+        assert_eq!(record.diagnostic.as_deref(), Some("session connected"));
+    }
+
+    /// 验证纯数据 log 可以记录断开事件，而不触发任何核心状态变更。
+    #[test]
+    fn event_log_records_disconnected_event() {
+        let mut log = NestedClientSessionEventLog::new();
+        let session = NestedClientSessionId::new(7).expect("非零 session ID 必须有效");
+        let event = NestedClientSessionEvent::Disconnected { session };
+
+        let record = log.record(event, None, Some("peer closed".to_string()));
+
+        assert_eq!(record.sequence, 1);
+        assert_eq!(record.kind, NestedClientSessionEventKind::Disconnected);
+        assert_eq!(record.session, Some(session));
+        assert_eq!(record.rejection_reason, None);
+        assert_eq!(record.label, None);
+        assert_eq!(record.diagnostic.as_deref(), Some("peer closed"));
+    }
+
+    /// 验证 log 按观察顺序保存事件，并分配单调递增的 sequence。
+    #[test]
+    fn event_log_preserves_order_and_monotonic_sequence() {
+        let mut log = NestedClientSessionEventLog::new();
+        let first_session = NestedClientSessionId::new(7).expect("非零 session ID 必须有效");
+        let second_session = NestedClientSessionId::new(8).expect("非零 session ID 必须有效");
+        let first = NestedClientSessionEvent::Connected {
+            session: first_session,
+        };
+        let second = NestedClientSessionEvent::Disconnected {
+            session: second_session,
+        };
+
+        log.record(first, None, None);
+        log.record(second, None, None);
+
+        assert_eq!(log.len(), 2);
+        assert!(!log.is_empty());
+        assert_eq!(log.records()[0].sequence, 1);
+        assert_eq!(
+            log.records()[0].kind,
+            NestedClientSessionEventKind::Connected
+        );
+        assert_eq!(log.records()[0].session, Some(first_session));
+        assert_eq!(log.records()[1].sequence, 2);
+        assert_eq!(
+            log.records()[1].kind,
+            NestedClientSessionEventKind::Disconnected
+        );
+        assert_eq!(log.records()[1].session, Some(second_session));
+    }
+
+    /// 验证 event record 是可克隆、可比较的纯数据诊断值。
+    #[test]
+    fn event_record_supports_clone_compare_and_debug() {
+        let mut log = NestedClientSessionEventLog::new();
+        let session = NestedClientSessionId::new(7).expect("非零 session ID 必须有效");
+        let record: NestedClientSessionEventRecord = log
+            .record(
+                NestedClientSessionEvent::Connected { session },
+                Some("nested-client".to_string()),
+                None,
+            )
+            .clone();
+
+        assert_eq!(record.clone(), record);
+        assert!(format!("{record:?}").contains("NestedClientSessionEventRecord"));
+    }
+
+    /// 验证 adapter 可以记录尚未取得 session ID 的 unsupported 拒绝结果。
+    #[test]
+    fn event_log_records_rejected_session() {
+        let mut log = NestedClientSessionEventLog::new();
+        let reason = NestedClientSessionRejectionReason::Unsupported;
+
+        let record = log.record_rejected(
+            None,
+            reason,
+            Some("nested-client".to_string()),
+            Some("client sessions remain unsupported".to_string()),
+        );
+
+        assert_eq!(record.sequence, 1);
+        assert_eq!(record.kind, NestedClientSessionEventKind::Rejected);
+        assert_eq!(record.session, None);
+        assert_eq!(record.rejection_reason, Some(reason));
+        assert_eq!(record.label.as_deref(), Some("nested-client"));
+        assert_eq!(
+            record.diagnostic.as_deref(),
+            Some("client sessions remain unsupported")
+        );
     }
 
     /// 验证新 registry 不包含任何 adapter session 映射。
@@ -271,6 +546,8 @@ mod tests {
             ["impl ", "Dispatch"].concat(),
             ["impl ", "GlobalDispatch"].concat(),
             ["ac", "cept"].concat(),
+            ["Backend", "Event"].concat(),
+            ["Core", "Command"].concat(),
         ];
 
         for forbidden in forbidden_tokens {
