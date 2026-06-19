@@ -6,9 +6,8 @@
 
 mod backend;
 mod core;
-// Feature boundary: 默认构建不编译 Smithay 集成层；probe 与 Linux 资源路径由各自
-// feature 选择，程序入口本身不启动或调用这些探针。
-#[cfg(any(feature = "smithay-probe", feature = "smithay-linux"))]
+// default build 需要编译 adapter 的纯数据 client session 边界及其测试；
+// 真实 probe 与 Linux 资源模块仍由 smithay_backend 内部的 feature gate 隔离。
 mod smithay_backend;
 
 use core::event_loop::EventLoop;

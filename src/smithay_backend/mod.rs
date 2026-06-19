@@ -1,8 +1,10 @@
-//! Smithay 集成层的 feature-gated 骨架。
+//! Smithay 集成层的 feature-gated 骨架与跨平台纯数据边界。
 //!
-//! `smithay-probe` 只编译纯数据事件适配、driver、runtime 和场景测试，不依赖
-//! Smithay crate。`smithay-linux` 在 Linux 上额外编译 Display、socket 和
-//! bootstrap 等真实系统资源探针；旧 `smithay-backend` 名称是它的兼容别名。
+//! `client_session` 在 default build 中编译，用于保持 adapter session identity
+//! 与核心 client identity 分离。`smithay-probe` 只额外编译纯数据事件适配、
+//! driver、runtime 和场景测试，不依赖 Smithay crate。`smithay-linux` 在 Linux
+//! 上额外编译 Display、socket 和 bootstrap 等真实系统资源探针；旧
+//! `smithay-backend` 名称是它的兼容别名。
 //!
 //! Feature invariant: `smithay-probe` 不得因本模块的声明或 re-export 引入 Smithay
 //! 或平台图形栈。Linux 资源能被构造也不代表 compositor 已启动、client 已接收或
@@ -52,6 +54,8 @@ pub mod client_event;
 /// Smithay client ID 分配器探针。
 #[cfg(feature = "smithay-probe")]
 pub mod client_id;
+/// Nested client session 的跨平台纯数据身份与映射边界。
+pub mod client_session;
 /// Smithay 诊断请求事件适配探针。
 #[cfg(feature = "smithay-probe")]
 pub mod diagnostic_event;
@@ -321,6 +325,7 @@ pub use window_admission_preview::{
     BackendWindowAdmissionPreviewWarning, WindowAdmissionPreviewPlanner,
 };
 
+#[cfg(feature = "smithay-probe")]
 use crate::core::{
     backend_driver::BackendDriverRunner, backend_event::BackendEvent,
     runtime_bridge::RuntimeEventResult, state::State,
@@ -330,8 +335,10 @@ use crate::core::{
 ///
 /// 该结构目前不持有真实 Smithay display、socket、seat 或 surface。它只为未来
 /// Smithay backend 预留统一位置，并证明相关代码可以在 feature gate 下独立编译。
+#[cfg(feature = "smithay-probe")]
 pub struct SmithayBackendProbe;
 
+#[cfg(feature = "smithay-probe")]
 impl SmithayBackendProbe {
     /// 创建 Smithay 集成探针。
     ///
@@ -364,11 +371,12 @@ impl SmithayBackendProbe {
 ///
 /// 启用 `smithay-probe` 时，该函数可用但不会拉入 Smithay crate，也不会构造
 /// 真实协议或渲染状态。
+#[cfg(feature = "smithay-probe")]
 pub fn smithay_compile_probe() -> &'static str {
     "smithay-backend-probe"
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "smithay-probe"))]
 mod tests {
     use super::{SmithayBackendProbe, smithay_compile_probe};
     use crate::core::{backend_event::BackendEvent, state::State};
