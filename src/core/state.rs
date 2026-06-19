@@ -120,10 +120,15 @@ impl CompositorState {
 
     /// 为当前 workspace 计算窗口 placement。
     ///
-    /// 如果 current_workspace ID 无效，则返回空列表；计算过程不修改状态。
+    /// 当前 `FocusState.slot` 会作为 Fullscreen 的优先可见 slot；如果该 slot 为空，
+    /// LayoutEngine 会回退到第一个 occupied slot。current_workspace ID 无效时返回空列表。
     pub fn current_layout(&self, output: OutputSize) -> Vec<WindowPlacement> {
         self.current_workspace()
-            .map(|workspace| LayoutEngine::compute_workspace(workspace, output))
+            .map(|workspace| {
+                // State 是同时拥有 workspace 与 FocusState 的最小 seam，因此由这里传递焦点。
+                // LayoutEngine 仍只消费纯数据，不读取或修改全局 compositor 状态。
+                LayoutEngine::compute_workspace_with_focus(workspace, Some(self.focus.slot), output)
+            })
             .unwrap_or_default()
     }
 
@@ -1062,11 +1067,11 @@ mod tests {
     use std::fs;
 
     use super::{CompositorState, State};
-    use crate::core::render::RenderCommand;
     use crate::core::session::{
         SessionFocus, SessionLayoutMode, SessionSlot, SessionSlotContent, SessionState,
         SessionWorkspace,
     };
+    use crate::core::{layout::OutputSize, render::RenderCommand, workspace::LayoutMode};
 
     /// 验证关闭焦点窗口后，CompositorState 会刷新到下一个已占用 slot。
     #[test]
@@ -1187,5 +1192,42 @@ mod tests {
 
         // 默认 mock 窗口在初始状态下必须处于存活状态。
         assert!(metadata.alive);
+    }
+
+    /// 验证 Fullscreen 渲染链路显示当前 focused slot，而不是固定显示 slot 0。
+    #[test]
+    fn fullscreen_render_frame_uses_focused_slot() {
+        let mut compositor = CompositorState::new();
+        compositor.assign_window_to_current_workspace(1);
+        compositor.assign_window_to_current_workspace(2);
+        compositor.set_current_layout(LayoutMode::Fullscreen);
+        compositor.focus_slot(1);
+
+        let frame = compositor.current_render_frame(OutputSize {
+            width: 1920,
+            height: 1080,
+        });
+
+        // Fullscreen 渲染帧只能包含当前 focused slot 的一个窗口。
+        assert_eq!(frame.commands.len(), 1);
+        let RenderCommand::DrawWindow {
+            window,
+            focused,
+            rect,
+            ..
+        } = &frame.commands[0];
+
+        // focused slot 1 对应窗口 2；该窗口必须既可见又保持 focused 标记。
+        assert_eq!(*window, 2);
+        assert!(*focused);
+        assert_eq!(
+            *rect,
+            crate::core::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            }
+        );
     }
 }
