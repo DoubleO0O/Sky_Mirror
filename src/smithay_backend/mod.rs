@@ -71,6 +71,9 @@ pub mod linux_handler_probe;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only nested socket connection 的纯数据 session event probe。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod nested_socket_probe;
 /// Smithay 输出尺寸变化事件适配探针。
 #[cfg(feature = "smithay-probe")]
 pub mod output_event;
@@ -250,6 +253,11 @@ pub use linux_handler_probe::{
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
 #[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use nested_socket_probe::{
+    NestedSocketAcceptProbe, NestedSocketAcceptProbeBlocker, NestedSocketAcceptProbeReport,
+};
+#[allow(unused_imports)]
 #[cfg(feature = "smithay-probe")]
 pub use output_event::{
     SmithayOutputEventMode, SmithayOutputEventProbe, SmithayOutputResizeDescriptor,
@@ -415,5 +423,76 @@ mod tests {
         // 输出变化证明探针复用了 BackendEvent 与 BackendDriverRunner 链路。
         assert_eq!(output.width, 1024);
         assert_eq!(output.height, 768);
+    }
+}
+
+#[cfg(test)]
+mod nested_socket_probe_gate_tests {
+    /// 验证 socket accept event probe 的声明与导出都保持 Linux-only feature gate。
+    #[test]
+    fn nested_socket_probe_is_not_visible_to_default_or_smithay_probe_builds() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod nested_socket_probe;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub use nested_socket_probe::{")
+            .collect::<Vec<_>>();
+
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 production probe 只引用 session event，不引用 core 或协议/runtime 入口。
+    ///
+    /// 该测试只读取 Linux-only 文件源码，不编译其类型，因此 default 与
+    /// `smithay-probe` 仍不会看到 Linux API。
+    #[test]
+    fn nested_socket_probe_production_source_stays_on_session_event_seam() {
+        let source = include_str!("nested_socket_probe.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let forbidden_tokens = [
+            ["Wl", "Surface"].concat(),
+            ["xdg", "_toplevel"].concat(),
+            ["Xdg", "Toplevel"].concat(),
+            ["insert", "_client"].concat(),
+            ["DisplayHandle", "::", "insert_client"].concat(),
+            ["delegate", "_"].concat(),
+            ["impl ", "Dispatch"].concat(),
+            ["impl ", "GlobalDispatch"].concat(),
+            ["render", "er"].concat(),
+            ["frame", "_callback"].concat(),
+            ["lib", "input"].concat(),
+            ["D", "rm"].concat(),
+            ["G", "bm"].concat(),
+            ["E", "gl"].concat(),
+            ["Vul", "kan"].concat(),
+            ["Backend", "Event"].concat(),
+            ["Core", "Command"].concat(),
+            ["NestedClientSessionCore", "Bridge"].concat(),
+            [".", "accept", "("].concat(),
+        ];
+
+        for forbidden in forbidden_tokens {
+            assert!(
+                !production_code.contains(&forbidden),
+                "nested socket probe 生产代码包含禁止 token: {forbidden}"
+            );
+        }
     }
 }
