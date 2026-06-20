@@ -563,6 +563,44 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// 验证 Linux CI proof 只解锁 single-pump coordinator 的五个精确能力位。
+    #[test]
+    fn nested_runtime_coordinator_proof_capabilities_are_precise() {
+        let source = include_str!("nested_runtime_coordinator.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+
+        for proven in [
+            "nested_runtime_coordinator_available: true",
+            "single_pump_available: true",
+            "connected_bridge_invoked: true",
+            "disconnect_bridge_invoked: true",
+            "display_dispatch_invoked: true",
+        ] {
+            assert!(
+                production.contains(proven),
+                "Linux lifecycle proof 尚未反映精确 capability: {proven}"
+            );
+        }
+
+        for conservative in [
+            "accepts_clients: false",
+            "runtime_accept_loop_started: false",
+            "protocol_dispatch_started: false",
+            "long_running_loop_available: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production.contains(conservative),
+                "C 路线越级上调了未证明 capability: {conservative}"
+            );
+        }
+    }
+
     /// 验证真实 disconnect callback bridge 的模块声明与公共导出都保持 Linux-only。
     #[test]
     fn real_disconnect_callback_bridge_is_linux_only() {

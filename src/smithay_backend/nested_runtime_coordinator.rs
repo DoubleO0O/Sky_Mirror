@@ -23,8 +23,8 @@ pub enum NestedRuntimeCoordinatorBlocker {
 
 /// Phase 51K coordinator 的保守 capability 报告。
 ///
-/// `coordinator_boundary_defined` 只说明接口已存在；其余 runtime 字段在 Linux
-/// lifecycle proof 通过前保持 `false`。长期 loop、surface 和 render 不属于本阶段。
+/// `coordinator_boundary_defined` 说明接口已存在；五个 single-pump 字段由 Linux CI
+/// lifecycle proof 支持。长期 loop、surface 和 render 不属于本阶段。
 #[must_use = "必须区分 single-pump boundary、Linux proof 与长期 compositor loop"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NestedRuntimeCoordinatorReadinessReport {
@@ -85,20 +85,17 @@ impl NestedRuntimeCoordinatorReadinessReport {
     }
 }
 
-/// 返回 Phase 51K B 路线的保守 coordinator readiness。
-#[must_use = "boundary report 不能代替 Linux lifecycle pump proof"]
+/// 返回 Phase 51K C 路线经 Linux lifecycle proof 支持的 coordinator readiness。
+#[must_use = "single-pump proof 不能代替长期 runtime loop"]
 pub fn nested_runtime_coordinator_readiness_report() -> NestedRuntimeCoordinatorReadinessReport {
     NestedRuntimeCoordinatorReadinessReport {
-        blockers: vec![
-            NestedRuntimeCoordinatorBlocker::MissingLinuxLifecyclePumpProof,
-            NestedRuntimeCoordinatorBlocker::MissingLongRunningLoop,
-        ],
+        blockers: vec![NestedRuntimeCoordinatorBlocker::MissingLongRunningLoop],
         coordinator_boundary_defined: true,
-        nested_runtime_coordinator_available: false,
-        single_pump_available: false,
-        connected_bridge_invoked: false,
-        disconnect_bridge_invoked: false,
-        display_dispatch_invoked: false,
+        nested_runtime_coordinator_available: true,
+        single_pump_available: true,
+        connected_bridge_invoked: true,
+        disconnect_bridge_invoked: true,
+        display_dispatch_invoked: true,
         accepts_clients: false,
         runtime_accept_loop_started: false,
         protocol_dispatch_started: false,
@@ -288,24 +285,21 @@ mod tests {
         smithay_backend::test_support::{assert_runtime_dir, unique_socket_name},
     };
 
-    /// 验证 B 路线只声明 single-pump boundary，不预先声称 Linux proof 或长期 loop。
+    /// 验证 C 路线只上调 Linux proof 支持的 single-pump 字段，不冒充长期 loop。
     #[test]
-    fn nested_runtime_coordinator_keeps_long_running_loop_false() {
+    fn nested_runtime_coordinator_proof_capabilities_are_precise() {
         let report = nested_runtime_coordinator_readiness_report();
 
         assert_eq!(
             report.blockers,
-            vec![
-                NestedRuntimeCoordinatorBlocker::MissingLinuxLifecyclePumpProof,
-                NestedRuntimeCoordinatorBlocker::MissingLongRunningLoop,
-            ]
+            vec![NestedRuntimeCoordinatorBlocker::MissingLongRunningLoop]
         );
         assert!(report.coordinator_boundary_defined);
-        assert!(!report.nested_runtime_coordinator_available);
-        assert!(!report.single_pump_available);
-        assert!(!report.connected_bridge_invoked);
-        assert!(!report.disconnect_bridge_invoked);
-        assert!(!report.display_dispatch_invoked);
+        assert!(report.nested_runtime_coordinator_available);
+        assert!(report.single_pump_available);
+        assert!(report.connected_bridge_invoked);
+        assert!(report.disconnect_bridge_invoked);
+        assert!(report.display_dispatch_invoked);
         assert!(!report.accepts_clients);
         assert!(!report.runtime_accept_loop_started);
         assert!(!report.protocol_dispatch_started);
@@ -314,7 +308,7 @@ mod tests {
         assert!(!report.shell_role_support);
         assert!(!report.render_support);
         assert!(!report.input_support);
-        assert!(!report.is_single_pump_ready());
+        assert!(report.is_single_pump_ready());
     }
 
     /// 验证没有 client 的 single pump 安全返回，不 panic、不制造 core mutation。
@@ -367,6 +361,11 @@ mod tests {
         assert_eq!(report.closed_core_clients, report.registered_core_clients);
         assert!(report.validation_is_clean);
         assert!(report.is_successful());
+        assert!(report.readiness.is_single_pump_ready());
+        assert!(!report.readiness.accepts_clients);
+        assert!(!report.readiness.runtime_accept_loop_started);
+        assert!(!report.readiness.protocol_dispatch_started);
+        assert!(!report.readiness.long_running_loop_available);
         let client = report.registered_core_clients[0];
         assert!(!state.clients.is_alive(client));
         assert!(state.clients.get(client).is_some());
