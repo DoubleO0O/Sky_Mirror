@@ -305,9 +305,9 @@ mod tests {
         assert_eq!(report.all_observed_validations_clean, Some(true));
     }
 
-    /// 验证 controlled bridge 不能提升真实 callback 或真实 core close capability。
+    /// 验证 controlled helper 读取已接受 proof，但不会越级宣称项目级 accept readiness。
     #[test]
-    fn real_disconnect_callback_boundary_keeps_runtime_capability_false() {
+    fn disconnect_report_reflects_runtime_proof_without_claiming_accepts_clients() {
         let mut log = NestedClientSessionEventLog::new();
         let mut bridge = NestedClientSessionCoreBridge::new();
         let mut mapping = NestedAcceptedClientMapping::new();
@@ -323,8 +323,8 @@ mod tests {
         );
 
         assert!(!report.readiness.accepts_clients);
-        assert!(!report.readiness.real_disconnect_callback_observed);
-        assert!(!report.readiness.core_close_invoked_from_real_callback);
+        assert!(report.readiness.real_disconnect_callback_observed);
+        assert!(report.readiness.core_close_invoked_from_real_callback);
         assert!(!report.readiness.is_ready());
     }
 }

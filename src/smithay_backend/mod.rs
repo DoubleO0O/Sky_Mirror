@@ -564,6 +564,21 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// 验证真实 Linux proof 只提升 disconnect callback 两项能力，不越级宣称 accept。
+    #[test]
+    fn runtime_disconnect_proof_capabilities_are_precise() {
+        let source = include_str!("client_disconnect.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+
+        assert!(production.contains("blockers: Vec::new()"));
+        assert!(production.contains("real_disconnect_callback_observed: true"));
+        assert!(production.contains("core_close_invoked_from_real_callback: true"));
+        assert!(production.contains("accepts_clients: false"));
+        assert!(!production.contains("accepts_clients: true"));
+    }
+
     /// 验证真实 accept connected flow 的模块声明与公共导出都保持 Linux-only。
     #[test]
     fn real_accept_connected_flow_is_linux_only() {
@@ -807,9 +822,9 @@ mod nested_socket_probe_gate_tests {
         assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
     }
 
-    /// 验证 Phase 51J B 路线只报告 readiness，不伪造真实 callback 或 core mutation。
+    /// 验证 Phase 51J-C 报告只提升经 Linux runtime proof 的 callback 能力。
     #[test]
-    fn client_disconnect_callback_readiness_source_stays_conservative() {
+    fn client_disconnect_callback_runtime_proof_source_stays_precise() {
         let source = include_str!("client_disconnect.rs");
         let production = source
             .split_once("#[cfg(test)]")
@@ -835,11 +850,9 @@ mod nested_socket_probe_gate_tests {
             );
         }
 
-        // 真实 callback 与项目级 runtime 能力必须显式保持 false。
+        // 项目级 accept、长期 dispatch 与越级 surface/render 能力继续保持 false。
         for conservative_field in [
             "accepts_clients: false",
-            "real_disconnect_callback_observed: false",
-            "core_close_invoked_from_real_callback: false",
             "surface_support: false",
             "shell_role_support: false",
             "render_support: false",
@@ -852,8 +865,11 @@ mod nested_socket_probe_gate_tests {
             );
         }
 
-        // 已接受 baseline 和本轮受控 seam 可以报告结构存在，但不等于 runtime callback。
+        // baseline seam 与本轮真实 callback proof 必须逐项保留精确证据。
         for boundary_evidence in [
+            "blockers: Vec::new()",
+            "real_disconnect_callback_observed: true",
+            "core_close_invoked_from_real_callback: true",
             "real_client_data_callback_owned: true",
             "real_inserted_client_mapping_available: true",
             "disconnect_event_bridge_available: true",

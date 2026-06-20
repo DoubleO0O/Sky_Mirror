@@ -2,10 +2,10 @@
 //!
 //! 已接受的 Phase 51I-C-B 提供真实 accept/insertion 边界、`ClientData` owner 与
 //! backend-client/session mapping；Phase 51J-A-B 再提供 disconnected event 到既有
-//! core bridge 的受控 seam。尚无真实 runtime disconnect callback 触发证明，因此本
-//! 模块继续明确保留 callback source 与 Linux 完整链路 blockers，不提升真实能力位。
+//! core bridge 的受控 seam。Phase 51J-C 的 Linux test 已真实关闭 peer、dispatch
+//! Display，并观察 callback 到 core close 的完整链路，因此只精确提升这两项证据。
 
-/// 真实 disconnect callback 接入前仍缺失的独立前置条件。
+/// 真实 disconnect callback runtime proof 的可诊断前置条件。
 ///
 /// 每个 blocker 都对应一项必须由真实 Linux runtime 代码和测试证明的事实，避免用
 /// 单一 `NotReady` 状态掩盖 accept、client ownership 或 callback source 的具体缺口。
@@ -30,12 +30,13 @@ pub enum NestedClientDisconnectCallbackBlocker {
     MissingLinuxRuntimeProof,
 }
 
-/// Phase 51J B 路线的 disconnect callback readiness 报告。
+/// Phase 51J-C 的 disconnect callback runtime proof 报告。
 ///
 /// 报告只保存 blocker 与布尔能力证据，不保存 Smithay client、Wayland object、
 /// socket 或 core 状态引用。已由 accepted boundary 证明的结构事实可以为 `true`；
-/// 真实 callback observation、真实 core close 和项目级 accept capability 必须为 `false`。
-#[must_use = "readiness 报告必须被检查，不能忽略尚未满足的真实 runtime 前置条件"]
+/// 真实 callback observation 与真实 core close 可由 Linux proof 标记为 `true`；项目级
+/// accept、长期 protocol dispatch、surface 与 render 能力仍保持 `false`。
+#[must_use = "runtime proof 报告必须被检查，不能把 callback proof 扩大为 compositor readiness"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NestedClientDisconnectCallbackReadinessReport {
     /// 当前仍阻止真实 disconnect callback 接入的全部已知条件。
@@ -93,22 +94,18 @@ impl NestedClientDisconnectCallbackReadinessReport {
     }
 }
 
-/// 生成当前 Phase 51J B 路线的保守 readiness 报告。
+/// 生成当前 Phase 51J-C 路线的精确 runtime proof 报告。
 ///
-/// 该函数不会生成 disconnected record，也不会调用 `State`。未来真实 callback
-/// 必须先在 adapter/runtime 层形成纯数据 session event，再复用既有 bridge；
-/// readiness 报告本身不能绕过这条 seam 去修改 core registry。
-#[must_use = "调用方必须检查 blockers，readiness 报告不代表真实 callback 已完成"]
+/// 该函数不会生成 disconnected record，也不会调用 `State`。真实 proof 已由 Linux
+/// runtime test 取得；报告只保存证据快照，不能绕过 session event/bridge seam。
+#[must_use = "调用方必须区分 callback proof 与尚未具备的项目级 runtime 能力"]
 pub fn nested_client_disconnect_callback_readiness_report()
 -> NestedClientDisconnectCallbackReadinessReport {
     NestedClientDisconnectCallbackReadinessReport {
-        blockers: vec![
-            NestedClientDisconnectCallbackBlocker::MissingDisconnectCallbackSource,
-            NestedClientDisconnectCallbackBlocker::MissingLinuxRuntimeProof,
-        ],
+        blockers: Vec::new(),
         accepts_clients: false,
-        real_disconnect_callback_observed: false,
-        core_close_invoked_from_real_callback: false,
+        real_disconnect_callback_observed: true,
+        core_close_invoked_from_real_callback: true,
         real_client_data_callback_owned: true,
         real_inserted_client_mapping_available: true,
         disconnect_event_bridge_available: true,
@@ -122,37 +119,25 @@ pub fn nested_client_disconnect_callback_readiness_report()
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        NestedClientDisconnectCallbackBlocker, nested_client_disconnect_callback_readiness_report,
-    };
+    use super::nested_client_disconnect_callback_readiness_report;
 
-    /// 验证报告逐项暴露全部真实 runtime 前置缺口。
+    /// 验证真实 callback source 与 Linux 完整链路 proof 已不再阻塞。
     #[test]
-    fn disconnect_callback_readiness_reports_remaining_runtime_blockers() {
-        // Arrange 与 Act：已接受的 accept/owner/mapping 前置条件不再伪报为缺失。
+    fn disconnect_callback_runtime_proof_clears_remaining_blockers() {
         let report = nested_client_disconnect_callback_readiness_report();
 
-        // Assert：只保留真实 callback source 与本分支 Linux 完整链路证明。
-        assert_eq!(
-            report.blockers,
-            vec![
-                NestedClientDisconnectCallbackBlocker::MissingDisconnectCallbackSource,
-                NestedClientDisconnectCallbackBlocker::MissingLinuxRuntimeProof,
-            ]
-        );
+        assert!(report.blockers.is_empty());
         assert!(!report.is_ready());
     }
 
-    /// 验证 B 路线不会把 controlled record 或 readiness 文案冒充真实能力。
+    /// 验证 C 路线只提升真实 callback/close proof，不越级提升项目 runtime。
     #[test]
-    fn disconnect_callback_readiness_keeps_runtime_capabilities_false() {
-        // Arrange 与 Act：生成当前唯一受支持的保守报告。
+    fn disconnect_callback_runtime_proof_updates_only_proven_capabilities() {
         let report = nested_client_disconnect_callback_readiness_report();
 
-        // Assert：所有真实 runtime 与越级 surface/render 能力必须保持关闭。
         assert!(!report.accepts_clients);
-        assert!(!report.real_disconnect_callback_observed);
-        assert!(!report.core_close_invoked_from_real_callback);
+        assert!(report.real_disconnect_callback_observed);
+        assert!(report.core_close_invoked_from_real_callback);
         assert!(report.real_client_data_callback_owned);
         assert!(report.real_inserted_client_mapping_available);
         assert!(report.disconnect_event_bridge_available);

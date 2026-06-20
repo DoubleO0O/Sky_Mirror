@@ -870,6 +870,9 @@ mod tests {
         assert!(runtime.validation.is_clean());
         assert_eq!(disconnected.all_observed_validations_clean, Some(true));
         assert_eq!(disconnected.removed_backend_mapping_count, 1);
+        assert!(disconnected.readiness.real_disconnect_callback_observed);
+        assert!(disconnected.readiness.core_close_invoked_from_real_callback);
+        assert!(!disconnected.readiness.accepts_clients);
         assert!(flow.mapping().is_empty());
         assert_eq!(flow.active_core_session_count(), 0);
         assert!(!state.clients.is_alive(core_client));
