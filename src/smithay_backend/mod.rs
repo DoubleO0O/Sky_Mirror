@@ -77,6 +77,9 @@ pub mod linux_handler_probe;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only accept/dispatch/disconnect lifecycle 的单次 pump coordinator。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod nested_runtime_coordinator;
 /// Linux-only nested socket probe 到核心 lifecycle bridge 的受控 flow proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod nested_socket_flow;
@@ -282,6 +285,13 @@ pub use linux_handler_probe::{
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use nested_runtime_coordinator::{
+    NestedRuntimeCoordinator, NestedRuntimeCoordinatorBlocker,
+    NestedRuntimeCoordinatorReadinessReport, NestedRuntimePumpError, NestedRuntimePumpErrorKind,
+    NestedRuntimePumpReport, nested_runtime_coordinator_readiness_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_socket_flow::{NestedSocketProbeBridgeFlow, NestedSocketProbeBridgeFlowReport};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -470,6 +480,89 @@ mod tests {
 
 #[cfg(test)]
 mod nested_socket_probe_gate_tests {
+    /// 验证 nested runtime coordinator 的声明与公共导出都保持 Linux-only。
+    #[test]
+    fn nested_runtime_coordinator_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod nested_runtime_coordinator;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("pub use nested_runtime_coordinator::{"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 single-pump coordinator 只编排已有 flow，并保守描述长期能力。
+    #[test]
+    fn nested_runtime_coordinator_source_preserves_lifecycle_seams() {
+        let source = include_str!("nested_runtime_coordinator.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "pub struct NestedRuntimeCoordinator",
+            "pub struct NestedRuntimePumpReport",
+            "pub enum NestedRuntimePumpErrorKind",
+            "pub fn pump_once",
+            ".pump_once(state, timeout)",
+            ".dispatch_wayland_clients_once()",
+            ".bridge_pending_disconnects(state)",
+            "validation_is_clean",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "nested runtime coordinator 缺少必要 seam token: {required}"
+            );
+        }
+
+        for conservative in [
+            "accepts_clients: false",
+            "runtime_accept_loop_started: false",
+            "protocol_dispatch_started: false",
+            "long_running_loop_available: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production_code.contains(conservative),
+                "nested runtime coordinator 缺少保守 capability: {conservative}"
+            );
+        }
+
+        for forbidden in [
+            ["State", "::handle_command"].concat(),
+            [".", "clients"].concat(),
+            [".", "surfaces"].concat(),
+            [".", "registry"].concat(),
+            ["Backend", "Event::NestedClient"].concat(),
+            ["Core", "Command::PumpClient"].concat(),
+        ] {
+            assert!(
+                !production_code.contains(&forbidden),
+                "nested runtime coordinator 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// 验证真实 disconnect callback bridge 的模块声明与公共导出都保持 Linux-only。
     #[test]
     fn real_disconnect_callback_bridge_is_linux_only() {

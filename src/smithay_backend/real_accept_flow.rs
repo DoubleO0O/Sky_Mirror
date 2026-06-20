@@ -496,8 +496,11 @@ impl NestedRealAcceptFlow {
         )
     }
 
-    // 只让 Display backend 观察真实 socket readiness/EOF；callback 不直接接触 core。
-    fn dispatch_wayland_clients_once(&mut self) -> std::io::Result<usize> {
+    /// 让 coordinator 执行一次 Display backend client dispatch。
+    ///
+    /// 本 seam 只观察 socket readiness/EOF；callback 仍只写 session event，不能直接
+    /// 接触 core。一次调用不代表长期 protocol dispatch loop 已启动。
+    pub(crate) fn dispatch_wayland_clients_once(&mut self) -> std::io::Result<usize> {
         self.display.dispatch_clients_once()
     }
 
