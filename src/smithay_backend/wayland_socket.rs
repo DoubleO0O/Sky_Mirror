@@ -89,6 +89,15 @@ impl SmithayWaylandSocketProbe {
         self.socket.socket_name().to_string_lossy().into_owned()
     }
 
+    /// 消费探针并交出底层 `ListeningSocketSource`。
+    ///
+    /// 只有 Linux-only runtime glue 可以调用该入口，把 source 注册到 Smithay
+    /// re-export 的同版本 calloop。消费后不再存在 `ProbeOnly` wrapper，调用方必须
+    /// 继续保证 callback 只产生 adapter session event，不能直接修改 core。
+    pub fn into_source(self) -> ListeningSocketSource {
+        self.socket
+    }
+
     /// 返回当前阶段说明。
     ///
     /// 该文本用于测试和日志确认 socket 仍未接入真实 compositor。

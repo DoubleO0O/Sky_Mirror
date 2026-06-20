@@ -42,6 +42,26 @@ impl NestedClientCallbackEventQueue {
         self.lock_events().drain(..).collect()
     }
 
+    /// 只取出当前全部 `Connected`，并保留其他 callback event 的原有顺序。
+    ///
+    /// Phase 51I-C 只允许真实 accept 进入连接注册 seam；`Disconnected` 必须留给
+    /// Phase 51J-A 的真实 callback 验证，不能被连接 flow 顺手提交到 core close。
+    pub fn drain_connected(&self) -> Vec<NestedClientSessionEvent> {
+        let mut events = self.lock_events();
+        let mut connected = Vec::new();
+        let mut deferred = VecDeque::new();
+
+        while let Some(event) = events.pop_front() {
+            match event {
+                NestedClientSessionEvent::Connected { .. } => connected.push(event),
+                NestedClientSessionEvent::Disconnected { .. } => deferred.push_back(event),
+            }
+        }
+
+        *events = deferred;
+        connected
+    }
+
     /// 返回当前尚未被 runtime coordinator 消费的事件数。
     pub fn len(&self) -> usize {
         self.lock_events().len()
@@ -285,6 +305,38 @@ mod tests {
         assert_eq!(
             events.drain(),
             vec![NestedClientSessionEvent::Disconnected { session }]
+        );
+    }
+
+    /// 验证 connected-only drain 不会提前消费 Phase 51J-A 的 disconnect callback。
+    #[test]
+    fn connected_only_drain_preserves_disconnected_events() {
+        // Arrange
+        let connected_session = session(54);
+        let disconnected_session = session(55);
+        let events = NestedClientCallbackEventQueue::new();
+        events.push(NestedClientSessionEvent::Disconnected {
+            session: disconnected_session,
+        });
+        events.push(NestedClientSessionEvent::Connected {
+            session: connected_session,
+        });
+
+        // Act
+        let connected = events.drain_connected();
+
+        // Assert
+        assert_eq!(
+            connected,
+            vec![NestedClientSessionEvent::Connected {
+                session: connected_session
+            }]
+        );
+        assert_eq!(
+            events.drain(),
+            vec![NestedClientSessionEvent::Disconnected {
+                session: disconnected_session
+            }]
         );
     }
 

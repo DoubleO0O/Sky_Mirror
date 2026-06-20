@@ -86,6 +86,9 @@ pub mod nested_socket_probe;
 /// Smithay 输出尺寸变化事件适配探针。
 #[cfg(feature = "smithay-probe")]
 pub mod output_event;
+/// Linux-only 真实 socket callback 到 connected core lifecycle 的最小边界。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod real_accept_flow;
 /// Smithay 纯数据运行时探针。
 #[cfg(feature = "smithay-probe")]
 pub mod runtime;
@@ -288,6 +291,14 @@ pub use output_event::{
     SmithayOutputEventMode, SmithayOutputEventProbe, SmithayOutputResizeDescriptor,
 };
 #[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use real_accept_flow::{
+    NestedAcceptedClientAttempt, NestedAcceptedClientFailureReason, NestedAcceptedClientMapping,
+    NestedRealAcceptConnectedBridgeBlocker, NestedRealAcceptConnectedBridgeReadinessReport,
+    NestedRealAcceptFlow, NestedRealAcceptPumpReport,
+    nested_real_accept_connected_bridge_readiness_report,
+};
+#[allow(unused_imports)]
 #[cfg(feature = "smithay-probe")]
 pub use runtime::{SmithayRuntimeMode, SmithayRuntimeProbe};
 #[allow(unused_imports)]
@@ -453,6 +464,116 @@ mod tests {
 
 #[cfg(test)]
 mod nested_socket_probe_gate_tests {
+    /// 验证真实 accept connected flow 的模块声明与公共导出都保持 Linux-only。
+    #[test]
+    fn real_accept_connected_flow_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod real_accept_flow;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("pub use real_accept_flow::{"))
+            .collect::<Vec<_>>();
+
+        // 真实 UnixStream/calloop API 不能进入 default 或 smithay-probe 编译面。
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 real accept flow 使用同版本 calloop 和既有 core bridge，且能力保持保守。
+    #[test]
+    fn real_accept_connected_flow_source_preserves_runtime_boundary() {
+        let source = include_str!("real_accept_flow.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // callback 必须使用 Smithay re-export 的 calloop，并复用 insertion/core seam。
+        for required in [
+            "calloop::{self, EventLoop}",
+            "ListeningSocketSource",
+            ".insert_source(socket_source",
+            "NestedClientInsertCompileBoundary",
+            ".drain_connected()",
+            "NestedClientSessionCoreBridge",
+            ".handle_record(state, &record)",
+            "MissingRealAcceptLoop",
+            "MissingLinuxRuntimeProof",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "real accept flow 缺少必要边界 token: {required}"
+            );
+        }
+
+        // Linux runtime 证明尚未在当前分支完成，因此这些字段必须显式保持 false。
+        for conservative in [
+            "real_accept_loop_available: false",
+            "accepted_stream_available: false",
+            "display_handle_insert_client_runtime_available: false",
+            "inserted_client_mapping_available: false",
+            "connected_event_bridged_to_core: false",
+            "validation_report_available: false",
+            "accepts_clients: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "protocol_dispatch_started: false",
+        ] {
+            assert!(
+                production_code.contains(conservative),
+                "real accept flow 缺少保守 capability: {conservative}"
+            );
+        }
+
+        // flow 可以借用 State 交给既有 bridge，但不能直接写 registry 或新增同义事件。
+        for forbidden in [
+            ["Backend", "Event::ClientAccepted"].concat(),
+            ["Core", "Command::InsertClient"].concat(),
+            ["State", "::handle_command"].concat(),
+            [".", "clients"].concat(),
+            [".", "surfaces"].concat(),
+            ["Surface", "Registry"].concat(),
+            ["Window", "Registry"].concat(),
+            ["Global", "Dispatch"].concat(),
+            ["impl ", "Dispatch"].concat(),
+            ["xdg", "_toplevel"].concat(),
+            ["frame", "_callback"].concat(),
+        ] {
+            assert!(
+                !production_code.contains(&forbidden),
+                "real accept flow 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// 验证 insertion queue 提供只消费 Connected、保留 Disconnected 的窄接口。
+    #[test]
+    fn client_insert_queue_exposes_connected_only_drain() {
+        let source = include_str!("client_insert.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+
+        // Phase 51I-C 只能推进 connected；真实 disconnect 必须留给 Phase 51J-A。
+        assert!(production.contains("pub fn drain_connected"));
+        assert!(production.contains("NestedClientSessionEvent::Connected"));
+        assert!(production.contains("deferred.push_back(event)"));
+    }
+
     /// 验证 inserted-client 编译边界的模块声明与公共导出都保持 Linux-only。
     #[test]
     fn client_insert_compile_boundary_is_linux_only() {
