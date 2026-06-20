@@ -57,6 +57,9 @@ pub mod client_event;
 /// Smithay client ID 分配器探针。
 #[cfg(feature = "smithay-probe")]
 pub mod client_id;
+/// Linux-only `ClientData` owner 与 `DisplayHandle::insert_client` 编译验证边界。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod client_insert;
 /// Nested client session 的跨平台纯数据身份与映射边界。
 pub mod client_session;
 /// Smithay 诊断请求事件适配探针。
@@ -149,6 +152,13 @@ pub use client_event::{
 #[allow(unused_imports)]
 #[cfg(feature = "smithay-probe")]
 pub use client_id::{SmithayClientIdAllocatorMode, SmithayClientIdAllocatorProbe};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use client_insert::{
+    NestedClientCallbackEventQueue, NestedClientDataOwner, NestedClientInsertCompileBoundary,
+    NestedClientInsertCompileProofReport, nested_client_insert_compile_proof_report,
+    nested_session_for_inserted_client,
+};
 #[allow(unused_imports)]
 #[cfg(feature = "smithay-probe")]
 pub use diagnostic_event::{
@@ -443,6 +453,95 @@ mod tests {
 
 #[cfg(test)]
 mod nested_socket_probe_gate_tests {
+    /// 验证 inserted-client 编译边界的模块声明与公共导出都保持 Linux-only。
+    #[test]
+    fn client_insert_compile_boundary_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod client_insert;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("pub use client_insert::{"))
+            .collect::<Vec<_>>();
+
+        // 模块和 re-export 必须各自带完整 Linux-only gate，不能污染 default/probe。
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 B 路线引用真实 insertion API，但不伪造 accept 或越过 session seam。
+    #[test]
+    fn client_insert_compile_boundary_source_stays_conservative() {
+        let source = include_str!("client_insert.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // B 路线必须有真实锁定版本 API 调用点、owner 与双向 session event 形状。
+        for required in [
+            "impl ClientData for NestedClientDataOwner",
+            "DisplayHandle",
+            ".insert_client(stream, owner)",
+            "NestedClientSessionEvent::Connected",
+            "NestedClientSessionEvent::Disconnected",
+            "display_handle_available: true",
+            "insert_client_api_available: true",
+            "client_data_owner_defined: true",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "insert compile boundary 缺少必要 token: {required}"
+            );
+        }
+
+        // 没有真实 socket callback / Linux runtime proof 时，所有能力位必须保持关闭。
+        for conservative in [
+            "real_accept_loop_available: false",
+            "real_client_insert_observed: false",
+            "inserted_client_mapping_available: false",
+            "connected_event_bridged_to_core: false",
+            "accepts_clients: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "protocol_dispatch_started: false",
+        ] {
+            assert!(
+                production_code.contains(conservative),
+                "insert compile boundary 缺少保守字段: {conservative}"
+            );
+        }
+
+        // 本边界接收外部提供的 stream，不拥有 accept loop，也不能直接写 core。
+        for forbidden in [
+            [".", "accept", "("].concat(),
+            ["Listening", "SocketSource"].concat(),
+            ["crate", "::core"].concat(),
+            ["Backend", "Event"].concat(),
+            ["Core", "Command"].concat(),
+            ["Surface", "Registry"].concat(),
+            ["Window", "Registry"].concat(),
+        ] {
+            assert!(
+                !production_code.contains(&forbidden),
+                "insert compile boundary 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// 验证 disconnect callback readiness 的模块声明与公共导出都保持 Linux-only。
     ///
     /// readiness 虽然只描述纯数据 blocker，但它表达的是未来真实 `ClientData`

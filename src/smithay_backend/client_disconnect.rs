@@ -1,8 +1,9 @@
 //! Phase 51J 真实 client disconnect callback 的 Linux-only readiness 边界。
 //!
-//! 当前仓库尚未具备真实 accept loop、`DisplayHandle::insert_client`、`ClientData`
-//! owner 或真实 inserted-client mapping，因此本模块只枚举前置缺口并返回保守报告。
-//! 它不创建 fake disconnected event，不调用 core，也不提升任何 runtime capability。
+//! 当前仓库尚未具备经 Linux runtime 测试证明的真实 accept loop、accepted-stream
+//! insertion、callback ownership 或真实 inserted-client mapping，因此本模块只枚举
+//! 前置缺口并返回保守报告。Phase 51H-R / 51I 的 compile boundary 不等同于这些
+//! runtime 事实；本模块不创建 fake disconnected event，不调用 core，也不提升能力位。
 
 /// 真实 disconnect callback 接入前仍缺失的独立前置条件。
 ///
@@ -13,10 +14,10 @@ pub enum NestedClientDisconnectCallbackBlocker {
     /// 尚未启动真实 Wayland socket accept loop。
     MissingRealAcceptLoop,
 
-    /// 尚未使用 accepted stream 调用 `DisplayHandle::insert_client`。
+    /// 尚未由真实 accept callback 使用 accepted stream 调用并验证 client insertion。
     MissingDisplayHandleInsertClient,
 
-    /// 尚无真实 `ClientData` owner 承担 disconnect/error callback 生命周期。
+    /// 尚无经真实 inserted-client 生命周期验证的 `ClientData` callback ownership。
     MissingClientDataOwner,
 
     /// 尚无真实 inserted client 到 [`NestedClientSessionId`](super::client_session::NestedClientSessionId) 的 adapter mapping。
