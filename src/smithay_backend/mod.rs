@@ -71,6 +71,9 @@ pub mod linux_handler_probe;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only nested socket probe 到核心 lifecycle bridge 的受控 flow proof。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod nested_socket_flow;
 /// Linux-only nested socket connection 的纯数据 session event probe。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod nested_socket_probe;
@@ -252,6 +255,9 @@ pub use linux_handler_probe::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use nested_socket_flow::{NestedSocketProbeBridgeFlow, NestedSocketProbeBridgeFlowReport};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_socket_probe::{
@@ -492,6 +498,80 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !production_code.contains(&forbidden),
                 "nested socket probe 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// 验证 Phase 51G flow 的声明与导出都保持 Linux-only feature gate。
+    #[test]
+    fn nested_socket_flow_is_not_visible_to_default_or_smithay_probe_builds() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod nested_socket_flow;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("pub use nested_socket_flow::{"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 flow 只组合 probe 和 core bridge，不引入真实平台 runtime 入口。
+    #[test]
+    fn nested_socket_flow_production_source_stays_on_probe_bridge_seam() {
+        let source = include_str!("nested_socket_flow.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let forbidden_tokens = [
+            ["smithay", "::"].concat(),
+            ["Listening", "SocketSource"].concat(),
+            ["Display", "Handle"].concat(),
+            ["insert", "_client"].concat(),
+            [".", "accept", "("].concat(),
+            ["wl", "_client"].concat(),
+            ["Wl", "Surface"].concat(),
+            ["wl", "_surface"].concat(),
+            ["xdg", "_toplevel"].concat(),
+            ["Xdg", "Toplevel"].concat(),
+            ["delegate", "_"].concat(),
+            ["impl ", "Dispatch"].concat(),
+            ["impl ", "GlobalDispatch"].concat(),
+            ["render", "er"].concat(),
+            ["frame", "_callback"].concat(),
+            ["key", "board"].concat(),
+            ["point", "er"].concat(),
+            ["lib", "input"].concat(),
+            ["D", "RM"].concat(),
+            ["G", "BM"].concat(),
+            ["E", "GL"].concat(),
+            ["Vul", "kan"].concat(),
+            ["Backend", "Event"].concat(),
+            ["Core", "Command"].concat(),
+            ["handle", "_command"].concat(),
+            ["register", "_client"].concat(),
+            [".", "clients"].concat(),
+            ["Surface", "Registry"].concat(),
+        ];
+
+        for forbidden in forbidden_tokens {
+            assert!(
+                !production_code.contains(&forbidden),
+                "nested socket flow 生产代码包含禁止 token: {forbidden}"
             );
         }
     }
