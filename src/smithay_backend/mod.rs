@@ -547,7 +547,6 @@ mod nested_socket_probe_gate_tests {
         }
 
         for conservative in [
-            "wakeup_supported: false",
             "long_running_loop_available: false",
             "runtime_accept_loop_started: false",
             "protocol_dispatch_started: false",
@@ -597,7 +596,6 @@ mod nested_socket_probe_gate_tests {
         }
 
         for conservative in [
-            "wakeup_supported: false",
             "long_running_loop_available: false",
             "accepts_clients: false",
             "runtime_accept_loop_started: false",
@@ -645,9 +643,6 @@ mod nested_socket_probe_gate_tests {
         }
 
         for conservative in [
-            "wakeup_supported: false",
-            "interruptible_wait_available: false",
-            "stop_can_interrupt_wait: false",
             "long_running_loop_available: false",
             "runtime_accept_loop_started: false",
             "protocol_dispatch_started: false",
@@ -671,6 +666,42 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !production_code.contains(&forbidden),
                 "runtime wakeup 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// 验证 Linux CI proof 只解锁 wakeup/interruptible wait 的三个精确能力位。
+    #[test]
+    fn nested_runtime_wakeup_proof_capabilities_are_precise() {
+        let source = include_str!("nested_runtime_loop.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+
+        for proven in [
+            "wakeup_supported: true",
+            "interruptible_wait_available: true",
+            "stop_can_interrupt_wait: true",
+        ] {
+            assert!(
+                production.contains(proven),
+                "Linux wakeup proof 尚未反映精确 capability: {proven}"
+            );
+        }
+
+        for conservative in [
+            "long_running_loop_available: false",
+            "accepts_clients: false",
+            "runtime_accept_loop_started: false",
+            "protocol_dispatch_started: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production.contains(conservative),
+                "C 路线越级上调了未证明 capability: {conservative}"
             );
         }
     }

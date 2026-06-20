@@ -100,21 +100,18 @@ impl NestedRuntimeLoopReadinessReport {
     }
 }
 
-/// 返回 Phase 51M B 路线的 wakeup readiness；既有 bounded proof 保持成立。
-#[must_use = "wakeup interface 不能代替 Linux interrupt proof 或完整 compositor runtime"]
+/// 返回 Phase 51M C 路线经 Linux interrupt proof 支持的 wakeup readiness。
+#[must_use = "wakeup proof 不能代替完整 compositor runtime"]
 pub fn nested_runtime_loop_readiness_report() -> NestedRuntimeLoopReadinessReport {
     NestedRuntimeLoopReadinessReport {
-        blockers: vec![
-            NestedRuntimeLoopBlocker::MissingWakeup,
-            NestedRuntimeLoopBlocker::MissingCompleteRuntimeLoop,
-        ],
+        blockers: vec![NestedRuntimeLoopBlocker::MissingCompleteRuntimeLoop],
         loop_boundary_defined: true,
         nested_runtime_loop_available: true,
         bounded_loop_available: true,
         stop_requested_supported: true,
-        wakeup_supported: false,
-        interruptible_wait_available: false,
-        stop_can_interrupt_wait: false,
+        wakeup_supported: true,
+        interruptible_wait_available: true,
+        stop_can_interrupt_wait: true,
         long_running_loop_available: false,
         accepts_clients: false,
         runtime_accept_loop_started: false,
@@ -550,25 +547,22 @@ mod tests {
         (event_loop, stop_handle)
     }
 
-    /// 验证 C 路线只上调 Linux proof 支持的 bounded/stop 字段，不冒充完整 runtime。
+    /// 验证 51M-C 只上调 Linux proof 支持的 wakeup 字段，不冒充完整 runtime。
     #[test]
-    fn nested_runtime_loop_proof_capabilities_are_precise() {
+    fn nested_runtime_wakeup_proof_capabilities_are_precise() {
         let report = nested_runtime_loop_readiness_report();
 
         assert_eq!(
             report.blockers,
-            vec![
-                NestedRuntimeLoopBlocker::MissingWakeup,
-                NestedRuntimeLoopBlocker::MissingCompleteRuntimeLoop,
-            ]
+            vec![NestedRuntimeLoopBlocker::MissingCompleteRuntimeLoop]
         );
         assert!(report.loop_boundary_defined);
         assert!(report.nested_runtime_loop_available);
         assert!(report.bounded_loop_available);
         assert!(report.stop_requested_supported);
-        assert!(!report.wakeup_supported);
-        assert!(!report.interruptible_wait_available);
-        assert!(!report.stop_can_interrupt_wait);
+        assert!(report.wakeup_supported);
+        assert!(report.interruptible_wait_available);
+        assert!(report.stop_can_interrupt_wait);
         assert!(!report.long_running_loop_available);
         assert!(!report.accepts_clients);
         assert!(!report.runtime_accept_loop_started);
@@ -578,7 +572,7 @@ mod tests {
         assert!(!report.render_support);
         assert!(!report.input_support);
         assert!(report.is_bounded_loop_ready());
-        assert!(!report.is_interruptible_wait_ready());
+        assert!(report.is_interruptible_wait_ready());
     }
 
     /// `max_iterations = 0` 必须安全退出，不能隐式执行一次 pump。
@@ -665,7 +659,7 @@ mod tests {
         assert!(!stop_handle.is_stop_requested());
         assert!(report.validation_is_clean);
         assert!(report.readiness.is_bounded_loop_ready());
-        assert!(!report.readiness.wakeup_supported);
+        assert!(report.readiness.wakeup_supported);
         assert!(!report.readiness.long_running_loop_available);
     }
 
@@ -762,7 +756,8 @@ mod tests {
         assert!(observed_elapsed < Duration::from_secs(2));
         assert!(report.validation_is_clean);
         assert!(report.is_successful());
-        assert!(!report.readiness.wakeup_supported);
+        assert!(report.readiness.wakeup_supported);
+        assert!(report.readiness.is_interruptible_wait_ready());
         assert!(!report.readiness.long_running_loop_available);
     }
 
@@ -803,7 +798,7 @@ mod tests {
         assert!(report.validation_is_clean);
         assert!(report.is_successful());
         assert!(report.readiness.is_bounded_loop_ready());
-        assert!(!report.readiness.wakeup_supported);
+        assert!(report.readiness.wakeup_supported);
         assert!(!report.readiness.long_running_loop_available);
         let client = report.pump_reports[0].registered_core_clients[0];
         assert!(!state.clients.is_alive(client));
