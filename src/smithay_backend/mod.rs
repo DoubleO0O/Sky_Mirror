@@ -131,6 +131,8 @@ pub mod surface_trace;
 /// Surface 到窗口候选意图的纯数据规划层。
 #[cfg(feature = "smithay-probe")]
 pub mod surface_window_intent;
+/// Surface/XDG protocol object 接纳的跨平台纯数据 identity 与 mapping contract。
+pub mod surface_xdg_admission;
 /// Smithay toplevel 映射事件适配探针。
 #[cfg(feature = "smithay-probe")]
 pub mod toplevel_event;
@@ -388,6 +390,13 @@ pub use surface_trace::{
 pub use surface_window_intent::{
     BackendWindowCandidateId, BackendWindowCandidateIntent, BackendWindowCandidateIntentReport,
     SurfaceWindowIntentPlanner,
+};
+#[allow(unused_imports)]
+pub use surface_xdg_admission::{
+    AdapterSurfaceId, AdapterToplevelId, ProtocolObjectId, SurfaceAdmissionIntent,
+    SurfaceAdmissionMapping, SurfaceXdgAdmissionBlocker, SurfaceXdgAdmissionError,
+    SurfaceXdgAdmissionLedger, SurfaceXdgAdmissionReadinessReport, SurfaceXdgAdmissionReport,
+    ToplevelAdmissionMapping, XdgToplevelAdmissionIntent, surface_xdg_admission_readiness_report,
 };
 #[allow(unused_imports)]
 #[cfg(feature = "smithay-probe")]
