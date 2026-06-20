@@ -1,9 +1,9 @@
 //! Phase 51J 真实 client disconnect callback 的 Linux-only readiness 边界。
 //!
-//! 当前仓库尚未具备经 Linux runtime 测试证明的真实 accept loop、accepted-stream
-//! insertion、callback ownership 或真实 inserted-client mapping，因此本模块只枚举
-//! 前置缺口并返回保守报告。Phase 51H-R / 51I 的 compile boundary 不等同于这些
-//! runtime 事实；本模块不创建 fake disconnected event，不调用 core，也不提升能力位。
+//! 已接受的 Phase 51I-C-B 提供真实 accept/insertion 边界、`ClientData` owner 与
+//! backend-client/session mapping；Phase 51J-A-B 再提供 disconnected event 到既有
+//! core bridge 的受控 seam。尚无真实 runtime disconnect callback 触发证明，因此本
+//! 模块继续明确保留 callback source 与 Linux 完整链路 blockers，不提升真实能力位。
 
 /// 真实 disconnect callback 接入前仍缺失的独立前置条件。
 ///
@@ -33,8 +33,8 @@ pub enum NestedClientDisconnectCallbackBlocker {
 /// Phase 51J B 路线的 disconnect callback readiness 报告。
 ///
 /// 报告只保存 blocker 与布尔能力证据，不保存 Smithay client、Wayland object、
-/// socket 或 core 状态引用。所有能力字段在当前阶段都故意保持 `false`；这表示
-/// 前置实现尚未存在，而不是遗漏了某个赋值。
+/// socket 或 core 状态引用。已由 accepted boundary 证明的结构事实可以为 `true`；
+/// 真实 callback observation、真实 core close 和项目级 accept capability 必须为 `false`。
 #[must_use = "readiness 报告必须被检查，不能忽略尚未满足的真实 runtime 前置条件"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NestedClientDisconnectCallbackReadinessReport {
@@ -55,6 +55,9 @@ pub struct NestedClientDisconnectCallbackReadinessReport {
 
     /// 是否已经保存真实 inserted client 到 adapter session 的映射。
     pub real_inserted_client_mapping_available: bool,
+
+    /// 是否已存在 disconnected session event 到既有 core bridge 的受控 seam。
+    pub disconnect_event_bridge_available: bool,
 
     /// 是否支持真实 surface；Phase 51J readiness 固定为 `false`。
     pub surface_support: bool,
@@ -84,6 +87,7 @@ impl NestedClientDisconnectCallbackReadinessReport {
             && self.core_close_invoked_from_real_callback
             && self.real_client_data_callback_owned
             && self.real_inserted_client_mapping_available
+            && self.disconnect_event_bridge_available
             && self.protocol_dispatch_started
             && self.runtime_accept_loop_started
     }
@@ -99,18 +103,15 @@ pub fn nested_client_disconnect_callback_readiness_report()
 -> NestedClientDisconnectCallbackReadinessReport {
     NestedClientDisconnectCallbackReadinessReport {
         blockers: vec![
-            NestedClientDisconnectCallbackBlocker::MissingRealAcceptLoop,
-            NestedClientDisconnectCallbackBlocker::MissingDisplayHandleInsertClient,
-            NestedClientDisconnectCallbackBlocker::MissingClientDataOwner,
-            NestedClientDisconnectCallbackBlocker::MissingRealClientSessionMapping,
             NestedClientDisconnectCallbackBlocker::MissingDisconnectCallbackSource,
             NestedClientDisconnectCallbackBlocker::MissingLinuxRuntimeProof,
         ],
         accepts_clients: false,
         real_disconnect_callback_observed: false,
         core_close_invoked_from_real_callback: false,
-        real_client_data_callback_owned: false,
-        real_inserted_client_mapping_available: false,
+        real_client_data_callback_owned: true,
+        real_inserted_client_mapping_available: true,
+        disconnect_event_bridge_available: true,
         surface_support: false,
         shell_role_support: false,
         render_support: false,
@@ -127,18 +128,14 @@ mod tests {
 
     /// 验证报告逐项暴露全部真实 runtime 前置缺口。
     #[test]
-    fn disconnect_callback_readiness_reports_all_missing_preconditions() {
-        // Arrange 与 Act：当前 readiness 不接受调用方伪造的运行时证据。
+    fn disconnect_callback_readiness_reports_remaining_runtime_blockers() {
+        // Arrange 与 Act：已接受的 accept/owner/mapping 前置条件不再伪报为缺失。
         let report = nested_client_disconnect_callback_readiness_report();
 
-        // Assert：blocker 顺序从 socket/client owner 到完整 Linux proof，便于稳定诊断。
+        // Assert：只保留真实 callback source 与本分支 Linux 完整链路证明。
         assert_eq!(
             report.blockers,
             vec![
-                NestedClientDisconnectCallbackBlocker::MissingRealAcceptLoop,
-                NestedClientDisconnectCallbackBlocker::MissingDisplayHandleInsertClient,
-                NestedClientDisconnectCallbackBlocker::MissingClientDataOwner,
-                NestedClientDisconnectCallbackBlocker::MissingRealClientSessionMapping,
                 NestedClientDisconnectCallbackBlocker::MissingDisconnectCallbackSource,
                 NestedClientDisconnectCallbackBlocker::MissingLinuxRuntimeProof,
             ]
@@ -156,8 +153,9 @@ mod tests {
         assert!(!report.accepts_clients);
         assert!(!report.real_disconnect_callback_observed);
         assert!(!report.core_close_invoked_from_real_callback);
-        assert!(!report.real_client_data_callback_owned);
-        assert!(!report.real_inserted_client_mapping_available);
+        assert!(report.real_client_data_callback_owned);
+        assert!(report.real_inserted_client_mapping_available);
+        assert!(report.disconnect_event_bridge_available);
         assert!(!report.surface_support);
         assert!(!report.shell_role_support);
         assert!(!report.render_support);

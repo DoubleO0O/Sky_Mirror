@@ -89,6 +89,9 @@ pub mod output_event;
 /// Linux-only 真实 socket callback 到 connected core lifecycle 的最小边界。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod real_accept_flow;
+/// Linux-only disconnect callback queue 到既有 core close seam 的桥接边界。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod real_disconnect_flow;
 /// Smithay 纯数据运行时探针。
 #[cfg(feature = "smithay-probe")]
 pub mod runtime;
@@ -299,6 +302,9 @@ pub use real_accept_flow::{
     nested_real_accept_connected_bridge_readiness_report,
 };
 #[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use real_disconnect_flow::NestedRealDisconnectCallbackReport;
+#[allow(unused_imports)]
 #[cfg(feature = "smithay-probe")]
 pub use runtime::{SmithayRuntimeMode, SmithayRuntimeProbe};
 #[allow(unused_imports)]
@@ -464,6 +470,74 @@ mod tests {
 
 #[cfg(test)]
 mod nested_socket_probe_gate_tests {
+    /// 验证真实 disconnect callback bridge 的模块声明与公共导出都保持 Linux-only。
+    #[test]
+    fn real_disconnect_callback_bridge_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod real_disconnect_flow;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("pub use real_disconnect_flow::"))
+            .collect::<Vec<_>>();
+
+        // ClientData/Wayland 类型不能进入 default 或 smithay-probe 编译面。
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 disconnect flow 只消费 session event 并复用既有 core bridge。
+    #[test]
+    fn real_disconnect_callback_flow_source_preserves_core_seam() {
+        let source = include_str!("real_disconnect_flow.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "NestedClientSessionEvent::Disconnected",
+            "NestedClientSessionCoreBridge",
+            ".handle_record(state, &record)",
+            ".remove_session(session)",
+            "nested_client_disconnect_callback_readiness_report()",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "disconnect flow 缺少既有 seam token: {required}"
+            );
+        }
+
+        // flow 只能借用 State 交给 bridge，不能直接写 registry 或发明同义事件/命令。
+        for forbidden in [
+            ["Backend", "Event::ClientClosed"].concat(),
+            ["Core", "Command::DisconnectClient"].concat(),
+            ["State", "::handle_command"].concat(),
+            [".", "clients"].concat(),
+            [".", "surfaces"].concat(),
+            [".", "registry"].concat(),
+            ["xdg", "_toplevel"].concat(),
+            ["frame", "_callback"].concat(),
+        ] {
+            assert!(
+                !production_code.contains(&forbidden),
+                "disconnect flow 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// 验证真实 accept connected flow 的模块声明与公共导出都保持 Linux-only。
     #[test]
     fn real_accept_connected_flow_is_linux_only() {
@@ -508,6 +582,9 @@ mod nested_socket_probe_gate_tests {
             ".insert_source(socket_source",
             "NestedClientInsertCompileBoundary",
             ".drain_connected()",
+            "pub fn bridge_pending_disconnects",
+            ".drain_disconnected()",
+            "bridge_disconnected_events",
             "NestedClientSessionCoreBridge",
             ".handle_record(state, &record)",
             "MissingRealAcceptLoop",
@@ -572,6 +649,20 @@ mod nested_socket_probe_gate_tests {
         assert!(production.contains("pub fn drain_connected"));
         assert!(production.contains("NestedClientSessionEvent::Connected"));
         assert!(production.contains("deferred.push_back(event)"));
+    }
+
+    /// 验证 insertion queue 提供只消费 Disconnected、保留 Connected 的窄接口。
+    #[test]
+    fn client_insert_queue_exposes_disconnected_only_drain() {
+        let source = include_str!("client_insert.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+
+        // disconnect coordinator 只能取走 Disconnected，不能吞掉稍后仍需注册的 Connected。
+        assert!(production.contains("pub fn drain_disconnected"));
+        assert!(production.contains("NestedClientSessionEvent::Disconnected"));
+        assert!(production.contains("connected.push_back(event)"));
     }
 
     /// 验证 inserted-client 编译边界的模块声明与公共导出都保持 Linux-only。
@@ -718,13 +809,11 @@ mod nested_socket_probe_gate_tests {
             );
         }
 
-        // 这些字段必须在构造报告时显式保持 false，不能靠缺省或文案暗示能力。
+        // 真实 callback 与项目级 runtime 能力必须显式保持 false。
         for conservative_field in [
             "accepts_clients: false",
             "real_disconnect_callback_observed: false",
             "core_close_invoked_from_real_callback: false",
-            "real_client_data_callback_owned: false",
-            "real_inserted_client_mapping_available: false",
             "surface_support: false",
             "shell_role_support: false",
             "render_support: false",
@@ -734,6 +823,18 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 production_code.contains(conservative_field),
                 "disconnect readiness 缺少保守字段赋值: {conservative_field}"
+            );
+        }
+
+        // 已接受 baseline 和本轮受控 seam 可以报告结构存在，但不等于 runtime callback。
+        for boundary_evidence in [
+            "real_client_data_callback_owned: true",
+            "real_inserted_client_mapping_available: true",
+            "disconnect_event_bridge_available: true",
+        ] {
+            assert!(
+                production_code.contains(boundary_evidence),
+                "disconnect readiness 缺少已建立的边界证据: {boundary_evidence}"
             );
         }
 

@@ -62,6 +62,26 @@ impl NestedClientCallbackEventQueue {
         connected
     }
 
+    /// 只取出当前全部 `Disconnected`，并保留 `Connected` 的原有顺序。
+    ///
+    /// disconnect coordinator 必须先把 callback 事实转换为 session event，再交给
+    /// core bridge；这里不能直接访问 `State`，也不能吞掉尚待注册的连接事件。
+    pub fn drain_disconnected(&self) -> Vec<NestedClientSessionEvent> {
+        let mut events = self.lock_events();
+        let mut disconnected = Vec::new();
+        let mut connected = VecDeque::new();
+
+        while let Some(event) = events.pop_front() {
+            match event {
+                NestedClientSessionEvent::Connected { .. } => connected.push_back(event),
+                NestedClientSessionEvent::Disconnected { .. } => disconnected.push(event),
+            }
+        }
+
+        *events = connected;
+        disconnected
+    }
+
     /// 返回当前尚未被 runtime coordinator 消费的事件数。
     pub fn len(&self) -> usize {
         self.lock_events().len()
@@ -336,6 +356,38 @@ mod tests {
             events.drain(),
             vec![NestedClientSessionEvent::Disconnected {
                 session: disconnected_session
+            }]
+        );
+    }
+
+    /// 验证 disconnected-only drain 不会消费仍待 connected coordinator 注册的事件。
+    #[test]
+    fn disconnected_only_drain_preserves_connected_events() {
+        // Arrange
+        let connected_session = session(56);
+        let disconnected_session = session(57);
+        let events = NestedClientCallbackEventQueue::new();
+        events.push(NestedClientSessionEvent::Connected {
+            session: connected_session,
+        });
+        events.push(NestedClientSessionEvent::Disconnected {
+            session: disconnected_session,
+        });
+
+        // Act
+        let disconnected = events.drain_disconnected();
+
+        // Assert
+        assert_eq!(
+            disconnected,
+            vec![NestedClientSessionEvent::Disconnected {
+                session: disconnected_session
+            }]
+        );
+        assert_eq!(
+            events.drain(),
+            vec![NestedClientSessionEvent::Connected {
+                session: connected_session
             }]
         );
     }

@@ -35,6 +35,7 @@ use crate::{
             NestedClientSessionEvent, NestedClientSessionEventLog, NestedClientSessionEventRecord,
             NestedClientSessionId,
         },
+        real_disconnect_flow::{NestedRealDisconnectCallbackReport, bridge_disconnected_events},
         wayland_display::SmithayWaylandDisplayProbe,
         wayland_socket::SmithayWaylandSocketProbe,
     },
@@ -232,6 +233,18 @@ impl NestedAcceptedClientMapping {
     /// 移除 backend client mapping，并返回原 session。
     pub fn remove(&mut self, client: &WaylandClientId) -> Option<NestedClientSessionId> {
         self.sessions.remove(client)
+    }
+
+    /// 按 adapter session 移除 backend client mapping，并返回 backend identity。
+    ///
+    /// disconnect callback 只携带 owner 保存的 session，因此 coordinator 必须用该
+    /// identity 清理 mapping；它不能把 backend ID 数值猜成 core client ID。
+    pub fn remove_session(&mut self, session: NestedClientSessionId) -> Option<WaylandClientId> {
+        let client = self.sessions.iter().find_map(|(client, mapped_session)| {
+            (*mapped_session == session).then(|| client.clone())
+        })?;
+        self.sessions.remove(&client);
+        Some(client)
     }
 
     /// 返回当前 mapping 数量。
@@ -458,6 +471,31 @@ impl NestedRealAcceptFlow {
         })
     }
 
+    /// 桥接 callback queue 中当前待处理的 disconnected session events。
+    ///
+    /// 本方法不会触发或伪造 `ClientData::disconnected`；它只消费 owner callback 已写入
+    /// 的事实，并复用 [`NestedClientSessionCoreBridge`] 进入既有 core close seam。
+    /// 因当前分支尚无真实 runtime callback 触发证明，返回报告中的真实能力保持 false。
+    pub fn bridge_pending_disconnects(
+        &mut self,
+        state: &mut State,
+    ) -> NestedRealDisconnectCallbackReport {
+        let events = self
+            .loop_data
+            .insert_boundary
+            .event_queue()
+            .drain_disconnected();
+
+        bridge_disconnected_events(
+            events,
+            &self.socket_name,
+            &mut self.event_log,
+            &mut self.core_bridge,
+            &mut self.loop_data.mapping,
+            state,
+        )
+    }
+
     /// 只读访问 persistent backend-client/session mapping。
     pub fn mapping(&self) -> &NestedAcceptedClientMapping {
         &self.loop_data.mapping
@@ -605,6 +643,27 @@ mod tests {
         assert_eq!(mapping.lookup(&client_id), Some(session));
         assert_eq!(mapping.len(), 1);
         assert_eq!(mapping.remove(&client_id), Some(session));
+        assert!(mapping.is_empty());
+    }
+
+    /// 验证 disconnect session identity 可以移除对应 backend client mapping。
+    #[test]
+    fn disconnected_session_removes_inserted_client_mapping() {
+        // Arrange：真实插入 stream 取得不可伪造的 backend ClientId。
+        let display = Display::<()>::new().expect("Wayland Display 必须能构造");
+        let mut insert = NestedClientInsertCompileBoundary::new(display.handle());
+        let (server_stream, _client_stream) =
+            UnixStream::pair().expect("UnixStream pair 必须能构造");
+        let session = session(73);
+        let client = insert
+            .insert_client(server_stream, session)
+            .expect("测试 client 必须成功插入 Display");
+        let client_id = client.id();
+        let mut mapping = NestedAcceptedClientMapping::new();
+        assert_eq!(mapping.insert(client_id.clone(), session), None);
+
+        // Act 与 Assert：callback 只知道 session，也能精确清理对应 backend mapping。
+        assert_eq!(mapping.remove_session(session), Some(client_id));
         assert!(mapping.is_empty());
     }
 
