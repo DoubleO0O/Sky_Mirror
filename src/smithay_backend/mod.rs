@@ -48,6 +48,9 @@ pub mod action_event;
 /// Smithay Display 与 Wayland socket 的组合 bootstrap 探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod bootstrap;
+/// Linux-only 真实 client disconnect callback 前置条件报告。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod client_disconnect;
 /// Smithay client connection 事件适配探针。
 #[cfg(feature = "smithay-probe")]
 pub mod client_event;
@@ -132,6 +135,12 @@ pub use action_event::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use bootstrap::{SmithayBootstrapMode, SmithayBootstrapProbe};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use client_disconnect::{
+    NestedClientDisconnectCallbackBlocker, NestedClientDisconnectCallbackReadinessReport,
+    nested_client_disconnect_callback_readiness_report,
+};
 #[allow(unused_imports)]
 #[cfg(feature = "smithay-probe")]
 pub use client_event::{
@@ -434,6 +443,100 @@ mod tests {
 
 #[cfg(test)]
 mod nested_socket_probe_gate_tests {
+    /// 验证 disconnect callback readiness 的模块声明与公共导出都保持 Linux-only。
+    ///
+    /// readiness 虽然只描述纯数据 blocker，但它表达的是未来真实 `ClientData`
+    /// callback 的 Linux runtime 前置条件，因此不能进入 default 或 `smithay-probe`。
+    #[test]
+    fn client_disconnect_callback_readiness_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod client_disconnect;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("pub use client_disconnect::{"))
+            .collect::<Vec<_>>();
+
+        // 模块和 re-export 都必须各自带完整 Linux-only gate，不能只保护其中一侧。
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 Phase 51J B 路线只报告 readiness，不伪造真实 callback 或 core mutation。
+    #[test]
+    fn client_disconnect_callback_readiness_source_stays_conservative() {
+        let source = include_str!("client_disconnect.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // 六类 blocker 必须逐项可见，避免用一个模糊的 NotReady 掩盖真实缺口。
+        for required_blocker in [
+            "MissingRealAcceptLoop",
+            "MissingDisplayHandleInsertClient",
+            "MissingClientDataOwner",
+            "MissingRealClientSessionMapping",
+            "MissingDisconnectCallbackSource",
+            "MissingLinuxRuntimeProof",
+        ] {
+            assert!(
+                production_code.contains(required_blocker),
+                "disconnect readiness 缺少 blocker: {required_blocker}"
+            );
+        }
+
+        // 这些字段必须在构造报告时显式保持 false，不能靠缺省或文案暗示能力。
+        for conservative_field in [
+            "accepts_clients: false",
+            "real_disconnect_callback_observed: false",
+            "core_close_invoked_from_real_callback: false",
+            "real_client_data_callback_owned: false",
+            "real_inserted_client_mapping_available: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "protocol_dispatch_started: false",
+            "runtime_accept_loop_started: false",
+        ] {
+            assert!(
+                production_code.contains(conservative_field),
+                "disconnect readiness 缺少保守字段赋值: {conservative_field}"
+            );
+        }
+
+        // readiness module 只能描述前置条件，不能越过 session event seam 直接写 core。
+        for forbidden in [
+            "crate::core",
+            "BackendEvent",
+            "CoreCommand",
+            "State",
+            "ClientRegistry",
+            "SurfaceRegistry",
+            "WindowRegistry",
+            ".clients",
+            ".surfaces",
+            ".registry",
+        ] {
+            assert!(
+                !production_code.contains(forbidden),
+                "disconnect readiness 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// 验证 socket accept event probe 的声明与导出都保持 Linux-only feature gate。
     #[test]
     fn nested_socket_probe_is_not_visible_to_default_or_smithay_probe_builds() {

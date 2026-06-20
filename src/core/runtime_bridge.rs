@@ -318,7 +318,8 @@ mod tests {
             window::WindowKind,
         },
         smithay_backend::client_session::{
-            NestedClientSessionEvent, NestedClientSessionEventLog, NestedClientSessionId,
+            NestedClientSessionEvent, NestedClientSessionEventKind, NestedClientSessionEventLog,
+            NestedClientSessionEventRecord, NestedClientSessionId,
             NestedClientSessionRejectionReason,
         },
     };
@@ -426,6 +427,178 @@ mod tests {
         assert_eq!(bridge.active_session_count(), 0);
         assert!(!state.clients.is_alive(client));
         assert!(state.clients.get(client).is_some());
+    }
+
+    /// 验证 controlled disconnected record 会复用既有 seam 完成完整级联清理。
+    ///
+    /// 该测试只封板纯数据 record 行为，不代表真实 Smithay `ClientData` callback 已触发。
+    #[test]
+    fn controlled_disconnected_record_closes_bound_core_client() {
+        let mut state = State::new();
+        let mut bridge = NestedClientSessionCoreBridge::new();
+        let session = NestedClientSessionId::new(51).expect("非零 session ID 必须有效");
+        let mut log = NestedClientSessionEventLog::new();
+
+        // Arrange：先经 session bridge 注册核心 client，再经 public runtime seam 创建
+        // 该 client 拥有的 surface/window，禁止测试直接写任一 registry。
+        let connected = log
+            .record(
+                NestedClientSessionEvent::Connected { session },
+                Some("controlled-phase-51j".to_string()),
+                None,
+            )
+            .clone();
+        let _ = bridge.handle_record(&mut state, &connected);
+        let client = bridge
+            .lookup_client(session)
+            .expect("controlled connect 后必须存在 session mapping");
+
+        let created = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::SurfaceCreated {
+                surface: 510,
+                client: Some(client),
+                role: SurfaceRole::XdgToplevel,
+            },
+        );
+        assert!(created.validation.is_clean());
+        let mapped = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ToplevelMapped {
+                surface: 510,
+                title: "controlled-window".to_string(),
+                app_id: Some("sky-mirror.phase-51j".to_string()),
+                kind: WindowKind::WaylandPlaceholder,
+            },
+        );
+        let CommandResult::WindowRegisteredForSurface { window, bound, .. } = mapped.result else {
+            panic!("controlled map 必须返回 WindowRegisteredForSurface");
+        };
+        assert!(bound);
+
+        // Act：用 controlled record 驱动既有 bridge；这里不是 runtime callback。
+        let disconnected = log
+            .record(
+                NestedClientSessionEvent::Disconnected { session },
+                None,
+                Some("controlled disconnected record".to_string()),
+            )
+            .clone();
+        let outcome = bridge.handle_record(&mut state, &disconnected);
+
+        // Assert：event/command/state 路径、mapping remove、tombstone 与级联清理必须同时成立。
+        let NestedClientSessionBridgeOutcome::Disconnected {
+            client: outcome_client,
+            runtime,
+            ..
+        } = outcome
+        else {
+            panic!("known controlled disconnected record 必须生成 Disconnected outcome");
+        };
+        assert_eq!(outcome_client, client);
+        assert_eq!(runtime.event, BackendEvent::ClientDisconnected { client });
+        assert_eq!(runtime.command, CoreCommand::CloseClient(client));
+        assert!(runtime.validation.is_clean());
+        assert_eq!(bridge.lookup_client(session), None);
+        assert_eq!(bridge.active_session_count(), 0);
+
+        // core 保留诊断 tombstone，但 client、surface 与 window 都必须结束生命周期。
+        let client_record = state
+            .clients
+            .get(client)
+            .expect("disconnect 后必须保留 client tombstone");
+        assert!(!client_record.alive);
+        assert!(!state.surfaces.is_alive(510));
+        assert!(!state.registry.is_alive(window));
+        assert!(
+            state
+                .compositor
+                .workspaces
+                .iter()
+                .all(|workspace| !workspace.window_ids().contains(&window))
+        );
+        assert!(state.debug_bundle().is_clean());
+    }
+
+    /// 验证 duplicate controlled disconnect 不会重复关闭或制造验证错误。
+    #[test]
+    fn duplicate_disconnected_session_does_not_close_twice() {
+        let mut state = State::new();
+        let mut bridge = NestedClientSessionCoreBridge::new();
+        let session = NestedClientSessionId::new(52).expect("非零 session ID 必须有效");
+        let mut log = NestedClientSessionEventLog::new();
+
+        // Arrange：首次连接建立唯一 mapping；disconnect record 随后会移除它。
+        let connected = log
+            .record(NestedClientSessionEvent::Connected { session }, None, None)
+            .clone();
+        let _ = bridge.handle_record(&mut state, &connected);
+        let client = bridge
+            .lookup_client(session)
+            .expect("controlled connect 后必须存在 mapping");
+        let disconnected = log
+            .record(
+                NestedClientSessionEvent::Disconnected { session },
+                None,
+                None,
+            )
+            .clone();
+        let first = bridge.handle_record(&mut state, &disconnected);
+        assert!(matches!(
+            first,
+            NestedClientSessionBridgeOutcome::Disconnected {
+                client: closed_client,
+                ..
+            } if closed_client == client
+        ));
+        let client_count_after_first = state.clients.records().len();
+
+        // Act：同一 controlled record 重放时，session 已不再有可信 mapping。
+        let duplicate = bridge.handle_record(&mut state, &disconnected);
+
+        // Assert：第二次必须退化为 unknown，不产生第二次 core close 或新记录。
+        assert_eq!(
+            duplicate,
+            NestedClientSessionBridgeOutcome::UnknownDisconnected { session }
+        );
+        assert_eq!(state.clients.records().len(), client_count_after_first);
+        assert_eq!(bridge.lookup_client(session), None);
+        assert!(!state.clients.is_alive(client));
+        assert!(state.clients.get(client).is_some());
+        assert!(state.validate().is_clean());
+    }
+
+    /// 验证缺少 session 的 invalid disconnected record 返回结构化结果且不 panic。
+    #[test]
+    fn invalid_disconnected_record_does_not_panic_or_mutate_core() {
+        let mut state = State::new();
+        let initial_client_count = state.clients.records().len();
+        let mut bridge = NestedClientSessionCoreBridge::new();
+
+        // Arrange：手工构造字段不完整的纯数据 record，模拟 adapter 边界输入错误。
+        let invalid = NestedClientSessionEventRecord {
+            sequence: 51,
+            kind: NestedClientSessionEventKind::Disconnected,
+            session: None,
+            rejection_reason: None,
+            label: None,
+            diagnostic: Some("missing session".to_string()),
+        };
+
+        // Act：现有 bridge 必须返回 outcome，而不是 panic 或猜测核心 ClientId。
+        let outcome = bridge.handle_record(&mut state, &invalid);
+
+        // Assert：无效输入不产生 mapping、client mutation 或 validation issue。
+        assert_eq!(
+            outcome,
+            NestedClientSessionBridgeOutcome::InvalidRecord {
+                sequence: 51,
+                kind: NestedClientSessionEventKind::Disconnected,
+            }
+        );
+        assert_eq!(bridge.active_session_count(), 0);
+        assert_eq!(state.clients.records().len(), initial_client_count);
+        assert!(state.validate().is_clean());
     }
 
     /// 验证 rejected record 只返回拒绝结果，不注册核心 client 或 mapping。
