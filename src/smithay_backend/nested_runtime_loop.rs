@@ -87,19 +87,18 @@ impl NestedRuntimeLoopReadinessReport {
     }
 }
 
-/// 返回 Phase 51L B 路线的保守 loop readiness。
-#[must_use = "bounded interface 不能代替 Linux proof 或完整 compositor runtime"]
+/// 返回 Phase 51L C 路线经 Linux bounded-loop proof 支持的 readiness。
+#[must_use = "bounded-loop proof 不能代替 wakeup 或完整 compositor runtime"]
 pub fn nested_runtime_loop_readiness_report() -> NestedRuntimeLoopReadinessReport {
     NestedRuntimeLoopReadinessReport {
         blockers: vec![
-            NestedRuntimeLoopBlocker::MissingLinuxBoundedLoopProof,
             NestedRuntimeLoopBlocker::MissingWakeup,
             NestedRuntimeLoopBlocker::MissingCompleteRuntimeLoop,
         ],
         loop_boundary_defined: true,
-        nested_runtime_loop_available: false,
-        bounded_loop_available: false,
-        stop_requested_supported: false,
+        nested_runtime_loop_available: true,
+        bounded_loop_available: true,
+        stop_requested_supported: true,
         wakeup_supported: false,
         long_running_loop_available: false,
         accepts_clients: false,
@@ -402,23 +401,22 @@ mod tests {
         }
     }
 
-    /// 验证 B 路线只定义 bounded interface，不预先声称 Linux proof 或完整 runtime。
+    /// 验证 C 路线只上调 Linux proof 支持的 bounded/stop 字段，不冒充完整 runtime。
     #[test]
-    fn nested_runtime_loop_keeps_complete_runtime_capabilities_false() {
+    fn nested_runtime_loop_proof_capabilities_are_precise() {
         let report = nested_runtime_loop_readiness_report();
 
         assert_eq!(
             report.blockers,
             vec![
-                NestedRuntimeLoopBlocker::MissingLinuxBoundedLoopProof,
                 NestedRuntimeLoopBlocker::MissingWakeup,
                 NestedRuntimeLoopBlocker::MissingCompleteRuntimeLoop,
             ]
         );
         assert!(report.loop_boundary_defined);
-        assert!(!report.nested_runtime_loop_available);
-        assert!(!report.bounded_loop_available);
-        assert!(!report.stop_requested_supported);
+        assert!(report.nested_runtime_loop_available);
+        assert!(report.bounded_loop_available);
+        assert!(report.stop_requested_supported);
         assert!(!report.wakeup_supported);
         assert!(!report.long_running_loop_available);
         assert!(!report.accepts_clients);
@@ -428,7 +426,7 @@ mod tests {
         assert!(!report.shell_role_support);
         assert!(!report.render_support);
         assert!(!report.input_support);
-        assert!(!report.is_bounded_loop_ready());
+        assert!(report.is_bounded_loop_ready());
     }
 
     /// `max_iterations = 0` 必须安全退出，不能隐式执行一次 pump。
@@ -514,6 +512,9 @@ mod tests {
         );
         assert!(!stop_handle.is_stop_requested());
         assert!(report.validation_is_clean);
+        assert!(report.readiness.is_bounded_loop_ready());
+        assert!(!report.readiness.wakeup_supported);
+        assert!(!report.readiness.long_running_loop_available);
     }
 
     /// public stop handle 在 run 前请求停止时不得额外执行 pump。
@@ -598,6 +599,9 @@ mod tests {
         );
         assert!(report.validation_is_clean);
         assert!(report.is_successful());
+        assert!(report.readiness.is_bounded_loop_ready());
+        assert!(!report.readiness.wakeup_supported);
+        assert!(!report.readiness.long_running_loop_available);
         let client = report.pump_reports[0].registered_core_clients[0];
         assert!(!state.clients.is_alive(client));
     }

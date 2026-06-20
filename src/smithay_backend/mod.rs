@@ -547,9 +547,6 @@ mod nested_socket_probe_gate_tests {
         }
 
         for conservative in [
-            "nested_runtime_loop_available: false",
-            "bounded_loop_available: false",
-            "stop_requested_supported: false",
             "wakeup_supported: false",
             "long_running_loop_available: false",
             "runtime_accept_loop_started: false",
@@ -576,6 +573,43 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !production_code.contains(&forbidden),
                 "nested runtime loop 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// 验证 Linux CI proof 只解锁 bounded loop 与 cooperative stop 的精确能力位。
+    #[test]
+    fn nested_runtime_loop_proof_capabilities_are_precise() {
+        let source = include_str!("nested_runtime_loop.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+
+        for proven in [
+            "nested_runtime_loop_available: true",
+            "bounded_loop_available: true",
+            "stop_requested_supported: true",
+        ] {
+            assert!(
+                production.contains(proven),
+                "Linux bounded-loop proof 尚未反映精确 capability: {proven}"
+            );
+        }
+
+        for conservative in [
+            "wakeup_supported: false",
+            "long_running_loop_available: false",
+            "accepts_clients: false",
+            "runtime_accept_loop_started: false",
+            "protocol_dispatch_started: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production.contains(conservative),
+                "C 路线越级上调了未证明 capability: {conservative}"
             );
         }
     }
