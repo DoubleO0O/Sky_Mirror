@@ -83,6 +83,9 @@ pub mod nested_runtime_coordinator;
 /// Linux-only nested lifecycle coordinator 的 bounded runtime loop。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod nested_runtime_loop;
+/// Linux-only nested runtime 的 start/run/stop orchestration boundary。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod nested_runtime_orchestrator;
 /// Linux-only nested socket probe 到核心 lifecycle bridge 的受控 flow proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod nested_socket_flow;
@@ -302,6 +305,15 @@ pub use nested_runtime_loop::{
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use nested_runtime_orchestrator::{
+    NestedRuntimeLifecycleReport, NestedRuntimeLifecycleState, NestedRuntimeOrchestrator,
+    NestedRuntimeOrchestratorBlocker, NestedRuntimeOrchestratorConfig,
+    NestedRuntimeOrchestratorError, NestedRuntimeOrchestratorOperation,
+    NestedRuntimeOrchestratorReadinessReport, NestedRuntimeStartReport, NestedRuntimeStopReport,
+    nested_runtime_orchestrator_readiness_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_socket_flow::{NestedSocketProbeBridgeFlow, NestedSocketProbeBridgeFlowReport};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -490,6 +502,100 @@ mod tests {
 
 #[cfg(test)]
 mod nested_socket_probe_gate_tests {
+    /// 验证 runtime orchestrator 的声明与公共导出都保持 Linux-only。
+    #[test]
+    fn runtime_orchestrator_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod nested_runtime_orchestrator;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("pub use nested_runtime_orchestrator::{"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 orchestrator 只编排现有 loop，并保守描述完整 runtime 能力。
+    #[test]
+    fn runtime_orchestrator_source_preserves_loop_seam() {
+        let source = include_str!("nested_runtime_orchestrator.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "pub struct NestedRuntimeOrchestrator",
+            "pub struct NestedRuntimeOrchestratorConfig",
+            "pub struct NestedRuntimeLifecycleReport",
+            "pub struct NestedRuntimeStartReport",
+            "pub struct NestedRuntimeStopReport",
+            "pub enum NestedRuntimeLifecycleState",
+            "pub enum NestedRuntimeOrchestratorError",
+            "pub fn start",
+            "pub fn run",
+            "pub fn stop",
+            "pub fn stop_handle",
+            "NestedRuntimeLoop::with_socket_name",
+            ".run_for_iterations(state, self.config.loop_config)",
+            ".request_stop_and_wakeup()",
+            "validation_is_clean",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "runtime orchestrator 缺少必要 seam token: {required}"
+            );
+        }
+
+        for conservative in [
+            "runtime_orchestrator_available: false",
+            "start_run_stop_available: false",
+            "external_stop_supported: false",
+            "clean_shutdown_supported: false",
+            "long_running_loop_available: false",
+            "accepts_clients: false",
+            "runtime_accept_loop_started: false",
+            "protocol_dispatch_started: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production_code.contains(conservative),
+                "B 路线缺少保守 orchestration capability: {conservative}"
+            );
+        }
+
+        for forbidden in [
+            ["State", "::handle_command"].concat(),
+            [".", "clients"].concat(),
+            [".", "surfaces"].concat(),
+            [".", "registry"].concat(),
+            ["Backend", "Event::RuntimeStarted"].concat(),
+            ["Core", "Command::StartRuntime"].concat(),
+        ] {
+            assert!(
+                !production_code.contains(&forbidden),
+                "runtime orchestrator 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// 验证 nested runtime loop 的声明与公共导出都保持 Linux-only。
     #[test]
     fn nested_runtime_loop_is_linux_only() {

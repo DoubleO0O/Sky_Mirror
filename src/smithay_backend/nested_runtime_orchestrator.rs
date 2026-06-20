@@ -1,0 +1,699 @@
+//! Phase 51N Linux-only nested runtime start/run/stop orchestration boundary。
+//!
+//! orchestrator 只管理 lifecycle state，并编排既有 [`NestedRuntimeLoop`]。它不读取或写入
+//! core registry，不创建新的 BackendEvent/CoreCommand，也不把 bounded orchestration
+//! 冒充完整 compositor runtime。
+
+use crate::{
+    core::state::State,
+    smithay_backend::nested_runtime_loop::{
+        NestedRuntimeLoop, NestedRuntimeLoopConfig, NestedRuntimeLoopError,
+        NestedRuntimeLoopExitReason, NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle,
+    },
+};
+
+/// Phase 51N orchestrator 尚未满足的独立能力条件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NestedRuntimeOrchestratorBlocker {
+    /// 尚无 Linux test/CI 证明 start→run→external stop→clean shutdown。
+    MissingLinuxLifecycleProof,
+
+    /// 尚无日常 runtime 入口、完整 accept/protocol/surface/render/input 生命周期。
+    MissingCompleteRuntimeLoop,
+}
+
+/// Phase 51N orchestrator 的保守 capability 报告。
+#[must_use = "必须区分 lifecycle orchestration 与完整 compositor runtime"]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRuntimeOrchestratorReadinessReport {
+    /// 当前仍存在的 orchestration/runtime blockers。
+    pub blockers: Vec<NestedRuntimeOrchestratorBlocker>,
+
+    /// 是否已定义 Linux-only start/run/stop interface。
+    pub orchestration_boundary_defined: bool,
+
+    /// 是否已有 Linux proof 支持的 runtime orchestrator。
+    pub runtime_orchestrator_available: bool,
+
+    /// 是否已有 Linux proof 支持的 start/run/stop lifecycle。
+    pub start_run_stop_available: bool,
+
+    /// 是否已有 Linux proof 支持的 external stop+wakeup。
+    pub external_stop_supported: bool,
+
+    /// 是否已有 Linux proof 支持的 clean shutdown/final report。
+    pub clean_shutdown_supported: bool,
+
+    /// 是否已有完整长期 compositor runtime；本阶段固定为 `false`。
+    pub long_running_loop_available: bool,
+
+    /// 是否具备项目级 client accept 能力；本阶段固定为 `false`。
+    pub accepts_clients: bool,
+
+    /// 是否已启动长期 accept loop；本阶段固定为 `false`。
+    pub runtime_accept_loop_started: bool,
+
+    /// 是否已启动长期 protocol dispatch；本阶段固定为 `false`。
+    pub protocol_dispatch_started: bool,
+
+    /// 是否支持真实 surface；本阶段固定为 `false`。
+    pub surface_support: bool,
+
+    /// 是否支持 shell role；本阶段固定为 `false`。
+    pub shell_role_support: bool,
+
+    /// 是否支持真实 render；本阶段固定为 `false`。
+    pub render_support: bool,
+
+    /// 是否支持真实 input；本阶段固定为 `false`。
+    pub input_support: bool,
+}
+
+impl NestedRuntimeOrchestratorReadinessReport {
+    /// 判断 start/run/stop proof 是否完整成立。
+    pub fn is_start_run_stop_ready(&self) -> bool {
+        self.runtime_orchestrator_available
+            && self.start_run_stop_available
+            && self.external_stop_supported
+            && self.clean_shutdown_supported
+    }
+}
+
+/// 返回 Phase 51N B 路线的保守 orchestration readiness。
+#[must_use = "orchestration interface 不能代替 Linux lifecycle proof"]
+pub fn nested_runtime_orchestrator_readiness_report() -> NestedRuntimeOrchestratorReadinessReport {
+    NestedRuntimeOrchestratorReadinessReport {
+        blockers: vec![
+            NestedRuntimeOrchestratorBlocker::MissingLinuxLifecycleProof,
+            NestedRuntimeOrchestratorBlocker::MissingCompleteRuntimeLoop,
+        ],
+        orchestration_boundary_defined: true,
+        runtime_orchestrator_available: false,
+        start_run_stop_available: false,
+        external_stop_supported: false,
+        clean_shutdown_supported: false,
+        long_running_loop_available: false,
+        accepts_clients: false,
+        runtime_accept_loop_started: false,
+        protocol_dispatch_started: false,
+        surface_support: false,
+        shell_role_support: false,
+        render_support: false,
+        input_support: false,
+    }
+}
+
+/// nested runtime orchestration lifecycle state。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NestedRuntimeLifecycleState {
+    /// 配置已存在，但尚未创建真实 loop 资源。
+    Created,
+
+    /// loop 已创建并可进入 run。
+    Started,
+
+    /// 当前正在执行 bounded loop。
+    Running,
+
+    /// 已观察到 run 退出或 stop request，正在完成结构化收尾。
+    Stopping,
+
+    /// orchestration 已安全停止，不允许重新 start。
+    Stopped,
+
+    /// start 或 run 失败。
+    Failed,
+}
+
+/// 可能触发 lifecycle transition 的公开操作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NestedRuntimeOrchestratorOperation {
+    /// 创建 loop 资源。
+    Start,
+
+    /// 执行 bounded loop。
+    Run,
+
+    /// 请求或完成停止。
+    Stop,
+
+    /// 获取 external stop+wakeup handle。
+    StopHandle,
+}
+
+/// start/run/stop 的结构化错误。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NestedRuntimeOrchestratorError {
+    /// 当前 lifecycle state 不允许指定操作。
+    InvalidTransition {
+        /// 拒绝操作时的 state。
+        state: NestedRuntimeLifecycleState,
+
+        /// 被拒绝的操作。
+        operation: NestedRuntimeOrchestratorOperation,
+    },
+
+    /// start 创建真实 loop 资源失败。
+    StartFailed {
+        /// 底层错误文本，仅用于诊断。
+        message: String,
+    },
+
+    /// state 声称 loop 应存在，但内部资源缺失。
+    MissingRuntimeLoop {
+        /// 检测到不一致时的 state。
+        state: NestedRuntimeLifecycleState,
+    },
+}
+
+/// orchestrator 的固定 socket 与 bounded loop 配置。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRuntimeOrchestratorConfig {
+    /// start 时绑定的 Wayland socket 名称。
+    pub socket_name: String,
+
+    /// run 时传给现有 nested runtime loop 的有限配置。
+    pub loop_config: NestedRuntimeLoopConfig,
+}
+
+/// 一次 start transition 的纯数据报告。
+#[must_use = "start report 必须用于确认资源创建与 lifecycle state"]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRuntimeStartReport {
+    /// start 前的 state。
+    pub previous_state: NestedRuntimeLifecycleState,
+
+    /// start 后的 state。
+    pub state: NestedRuntimeLifecycleState,
+
+    /// 是否真实创建了 nested runtime loop。
+    pub started: bool,
+
+    /// loop 实际绑定的 socket 名称。
+    pub socket_name: String,
+}
+
+/// 一次直接 stop/finalize 的纯数据报告。
+#[must_use = "stop report 必须用于确认 stop request、shutdown 与 validation"]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRuntimeStopReport {
+    /// stop 前的 state。
+    pub previous_state: NestedRuntimeLifecycleState,
+
+    /// stop 后的 state。
+    pub state: NestedRuntimeLifecycleState,
+
+    /// 是否向已有 loop 提交 stop flag。
+    pub stop_requested: bool,
+
+    /// 是否同时提交 calloop wakeup。
+    pub wakeup_requested: bool,
+
+    /// orchestrator 是否完成结构化停止。
+    pub shutdown_completed: bool,
+
+    /// stop 完成时核心状态是否通过 ValidationReport。
+    pub validation_is_clean: bool,
+}
+
+/// start 后一次 run 到最终 lifecycle state 的汇总报告。
+#[must_use = "lifecycle report 包含 loop 退出、shutdown、错误与 validation，不能忽略"]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRuntimeLifecycleReport {
+    /// run 是否从 Started 状态进入。
+    pub started: bool,
+
+    /// 是否真实进入 bounded loop。
+    pub run_entered: bool,
+
+    /// loop 是否消费了 stop request。
+    pub stop_requested: bool,
+
+    /// loop 是否观察到 wakeup request。
+    pub wakeup_requested: bool,
+
+    /// lifecycle 是否完成到 Stopped。
+    pub shutdown_completed: bool,
+
+    /// 既有 loop 的退出原因。
+    pub loop_exit_reason: NestedRuntimeLoopExitReason,
+
+    /// 实际执行的 pump iteration 数量。
+    pub pump_iterations: usize,
+
+    /// 通过既有 bridge 注册的 core client 数量。
+    pub registered_clients: usize,
+
+    /// 通过既有 bridge 关闭的 core client 数量。
+    pub closed_clients: usize,
+
+    /// loop 返回的原始结构化错误。
+    pub errors: Vec<NestedRuntimeLoopError>,
+
+    /// 最终 lifecycle state。
+    pub final_state: NestedRuntimeLifecycleState,
+
+    /// run 退出时核心状态是否通过 ValidationReport。
+    pub validation_is_clean: bool,
+
+    /// 完整原始 bounded-loop report。
+    pub loop_report: NestedRuntimeLoopReport,
+
+    /// 当前 orchestration capability 快照。
+    pub readiness: NestedRuntimeOrchestratorReadinessReport,
+}
+
+impl NestedRuntimeLifecycleReport {
+    /// 本轮是否完成无错误、validation-clean 的结构化停止。
+    pub fn is_clean_shutdown(&self) -> bool {
+        self.shutdown_completed
+            && self.final_state == NestedRuntimeLifecycleState::Stopped
+            && self.errors.is_empty()
+            && self.validation_is_clean
+    }
+}
+
+/// Linux-only nested runtime start/run/stop orchestrator。
+///
+/// orchestrator 只保存 lifecycle policy 与 [`NestedRuntimeLoop`] ownership。所有 client
+/// mutation 继续由 loop/coordinator 内的既有 bridge 完成；本类型只读 ValidationReport。
+pub struct NestedRuntimeOrchestrator {
+    config: NestedRuntimeOrchestratorConfig,
+    state: NestedRuntimeLifecycleState,
+    runtime_loop: Option<NestedRuntimeLoop>,
+}
+
+impl NestedRuntimeOrchestrator {
+    /// 创建尚未绑定 socket 或启动 loop 的 orchestrator。
+    pub fn new(config: NestedRuntimeOrchestratorConfig) -> Self {
+        Self {
+            config,
+            state: NestedRuntimeLifecycleState::Created,
+            runtime_loop: None,
+        }
+    }
+
+    /// 返回当前 lifecycle state。
+    pub fn state(&self) -> NestedRuntimeLifecycleState {
+        self.state
+    }
+
+    /// 从 Created 创建真实 nested runtime loop 并进入 Started。
+    ///
+    /// # Errors
+    ///
+    /// 非 Created 状态返回 structured transition error；socket/Display/calloop 初始化失败
+    /// 返回 `StartFailed` 并进入 Failed。
+    pub fn start(&mut self) -> Result<NestedRuntimeStartReport, NestedRuntimeOrchestratorError> {
+        if self.state != NestedRuntimeLifecycleState::Created {
+            return Err(self.invalid_transition(NestedRuntimeOrchestratorOperation::Start));
+        }
+
+        let previous_state = self.state;
+        match NestedRuntimeLoop::with_socket_name(&self.config.socket_name) {
+            Ok(runtime_loop) => {
+                let socket_name = runtime_loop.socket_name().to_owned();
+                self.runtime_loop = Some(runtime_loop);
+                self.state = NestedRuntimeLifecycleState::Started;
+                Ok(NestedRuntimeStartReport {
+                    previous_state,
+                    state: self.state,
+                    started: true,
+                    socket_name,
+                })
+            }
+            Err(error) => {
+                self.state = NestedRuntimeLifecycleState::Failed;
+                Err(NestedRuntimeOrchestratorError::StartFailed {
+                    message: error.to_string(),
+                })
+            }
+        }
+    }
+
+    /// 返回 external stop+wakeup handle。
+    ///
+    /// # Errors
+    ///
+    /// 只有 Started 或 Running 状态允许获取；Created/Stopped/Failed 返回 transition error。
+    pub fn stop_handle(
+        &self,
+    ) -> Result<NestedRuntimeLoopStopHandle, NestedRuntimeOrchestratorError> {
+        if !matches!(
+            self.state,
+            NestedRuntimeLifecycleState::Started | NestedRuntimeLifecycleState::Running
+        ) {
+            return Err(self.invalid_transition(NestedRuntimeOrchestratorOperation::StopHandle));
+        }
+
+        self.runtime_loop
+            .as_ref()
+            .map(NestedRuntimeLoop::stop_handle)
+            .ok_or(NestedRuntimeOrchestratorError::MissingRuntimeLoop { state: self.state })
+    }
+
+    /// 从 Started 进入 Running，执行既有 bounded loop，并生成 final lifecycle report。
+    ///
+    /// # Errors
+    ///
+    /// 未 start、已 stop 或资源不一致时返回 structured error，不执行 pump。
+    pub fn run(
+        &mut self,
+        state: &mut State,
+    ) -> Result<NestedRuntimeLifecycleReport, NestedRuntimeOrchestratorError> {
+        if self.state != NestedRuntimeLifecycleState::Started {
+            return Err(self.invalid_transition(NestedRuntimeOrchestratorOperation::Run));
+        }
+
+        self.state = NestedRuntimeLifecycleState::Running;
+        let Some(runtime_loop) = self.runtime_loop.as_mut() else {
+            self.state = NestedRuntimeLifecycleState::Failed;
+            return Err(NestedRuntimeOrchestratorError::MissingRuntimeLoop { state: self.state });
+        };
+
+        // 只调用既有 loop seam；orchestrator 不读取或修改任何 core registry。
+        let loop_report = runtime_loop.run_for_iterations(state, self.config.loop_config);
+        Ok(self.finish_run(loop_report))
+    }
+
+    fn finish_run(&mut self, loop_report: NestedRuntimeLoopReport) -> NestedRuntimeLifecycleReport {
+        let loop_failed = loop_report.exit_reason == NestedRuntimeLoopExitReason::Error
+            || !loop_report.validation_is_clean;
+        if loop_failed {
+            self.state = NestedRuntimeLifecycleState::Failed;
+        } else {
+            self.state = NestedRuntimeLifecycleState::Stopping;
+            self.state = NestedRuntimeLifecycleState::Stopped;
+        }
+
+        NestedRuntimeLifecycleReport {
+            started: true,
+            run_entered: true,
+            stop_requested: loop_report.wakeup.stop_requested,
+            wakeup_requested: loop_report.wakeup.wakeup_requested,
+            shutdown_completed: self.state == NestedRuntimeLifecycleState::Stopped,
+            loop_exit_reason: loop_report.exit_reason,
+            pump_iterations: loop_report.iterations_run,
+            registered_clients: loop_report.connected_clients_registered,
+            closed_clients: loop_report.disconnected_clients_closed,
+            errors: loop_report.errors.clone(),
+            final_state: self.state,
+            validation_is_clean: loop_report.validation_is_clean,
+            loop_report,
+            readiness: nested_runtime_orchestrator_readiness_report(),
+        }
+    }
+
+    /// 安全停止尚未运行或已完成的 orchestrator。
+    ///
+    /// Created 直接进入 Stopped；Started/Running 会通过既有 handle 请求 stop+wakeup；
+    /// Stopping/Stopped 为幂等 finalize。该方法不直接修改 core。
+    pub fn stop(&mut self, state: &State) -> NestedRuntimeStopReport {
+        let previous_state = self.state;
+        let mut stop_requested = false;
+        let mut wakeup_requested = false;
+
+        if matches!(
+            self.state,
+            NestedRuntimeLifecycleState::Started | NestedRuntimeLifecycleState::Running
+        ) && let Some(runtime_loop) = self.runtime_loop.as_ref()
+        {
+            runtime_loop.stop_handle().request_stop_and_wakeup();
+            stop_requested = true;
+            wakeup_requested = true;
+            self.state = NestedRuntimeLifecycleState::Stopping;
+        }
+
+        self.state = NestedRuntimeLifecycleState::Stopped;
+        NestedRuntimeStopReport {
+            previous_state,
+            state: self.state,
+            stop_requested,
+            wakeup_requested,
+            shutdown_completed: true,
+            validation_is_clean: state.validate().is_clean(),
+        }
+    }
+
+    fn invalid_transition(
+        &self,
+        operation: NestedRuntimeOrchestratorOperation,
+    ) -> NestedRuntimeOrchestratorError {
+        NestedRuntimeOrchestratorError::InvalidTransition {
+            state: self.state,
+            operation,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{thread, time::Duration};
+
+    use super::{
+        NestedRuntimeLifecycleState, NestedRuntimeOrchestrator, NestedRuntimeOrchestratorBlocker,
+        NestedRuntimeOrchestratorConfig, NestedRuntimeOrchestratorError,
+        NestedRuntimeOrchestratorOperation, nested_runtime_orchestrator_readiness_report,
+    };
+    use crate::{
+        core::state::State,
+        smithay_backend::{
+            nested_runtime_coordinator::{NestedRuntimePumpError, NestedRuntimePumpErrorKind},
+            nested_runtime_loop::{
+                NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
+            },
+            test_support::{assert_runtime_dir, unique_socket_name},
+        },
+    };
+
+    fn config(name: &str, max_iterations: usize) -> NestedRuntimeOrchestratorConfig {
+        NestedRuntimeOrchestratorConfig {
+            socket_name: unique_socket_name(name),
+            loop_config: NestedRuntimeLoopConfig {
+                max_iterations,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: false,
+                continue_after_error: false,
+            },
+        }
+    }
+
+    /// B 路线只声明 orchestration interface，不预先声称 Linux lifecycle proof。
+    #[test]
+    fn runtime_orchestrator_keeps_complete_runtime_capabilities_false() {
+        let report = nested_runtime_orchestrator_readiness_report();
+
+        assert_eq!(
+            report.blockers,
+            vec![
+                NestedRuntimeOrchestratorBlocker::MissingLinuxLifecycleProof,
+                NestedRuntimeOrchestratorBlocker::MissingCompleteRuntimeLoop,
+            ]
+        );
+        assert!(report.orchestration_boundary_defined);
+        assert!(!report.runtime_orchestrator_available);
+        assert!(!report.start_run_stop_available);
+        assert!(!report.external_stop_supported);
+        assert!(!report.clean_shutdown_supported);
+        assert!(!report.long_running_loop_available);
+        assert!(!report.accepts_clients);
+        assert!(!report.runtime_accept_loop_started);
+        assert!(!report.protocol_dispatch_started);
+        assert!(!report.surface_support);
+        assert!(!report.shell_role_support);
+        assert!(!report.render_support);
+        assert!(!report.input_support);
+        assert!(!report.is_start_run_stop_ready());
+    }
+
+    /// start 必须真实创建 loop，并从 Created 转换到 Started。
+    #[test]
+    fn runtime_orchestrator_start_transitions_state() {
+        assert_runtime_dir();
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config("orchestrator-start", 0));
+
+        let report = orchestrator.start().expect("Created 必须允许 start");
+
+        assert!(report.started);
+        assert_eq!(report.previous_state, NestedRuntimeLifecycleState::Created);
+        assert_eq!(report.state, NestedRuntimeLifecycleState::Started);
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Started);
+        assert!(!report.socket_name.is_empty());
+    }
+
+    /// 重复 start 必须返回结构化 transition error，不覆盖已有 loop。
+    #[test]
+    fn runtime_orchestrator_rejects_double_start() {
+        assert_runtime_dir();
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config("orchestrator-double", 0));
+        orchestrator.start().expect("首次 start 必须成功");
+
+        let error = orchestrator.start().expect_err("重复 start 必须失败");
+
+        assert_eq!(
+            error,
+            NestedRuntimeOrchestratorError::InvalidTransition {
+                state: NestedRuntimeLifecycleState::Started,
+                operation: NestedRuntimeOrchestratorOperation::Start,
+            }
+        );
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Started);
+    }
+
+    /// 未 start 的 run 必须返回结构化 error，且不执行 pump。
+    #[test]
+    fn runtime_orchestrator_run_requires_start() {
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config("orchestrator-no-start", 1));
+        let mut state = State::new();
+
+        let error = orchestrator
+            .run(&mut state)
+            .expect_err("Created 不得直接 run");
+
+        assert_eq!(
+            error,
+            NestedRuntimeOrchestratorError::InvalidTransition {
+                state: NestedRuntimeLifecycleState::Created,
+                operation: NestedRuntimeOrchestratorOperation::Run,
+            }
+        );
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Created);
+        assert!(state.validate().is_clean());
+    }
+
+    /// 未 start 的 stop 必须安全完成，不创建 loop 或修改 core。
+    #[test]
+    fn runtime_orchestrator_stop_before_start_is_safe() {
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config("orchestrator-stop", 1));
+        let state = State::new();
+
+        let report = orchestrator.stop(&state);
+
+        assert_eq!(report.previous_state, NestedRuntimeLifecycleState::Created);
+        assert_eq!(report.state, NestedRuntimeLifecycleState::Stopped);
+        assert!(!report.stop_requested);
+        assert!(!report.wakeup_requested);
+        assert!(report.shutdown_completed);
+        assert!(report.validation_is_clean);
+    }
+
+    /// 零迭代 run 仍必须完成 Started→Running→Stopped 与 clean final report。
+    #[test]
+    fn runtime_orchestrator_zero_iteration_run_shuts_down_cleanly() {
+        assert_runtime_dir();
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config("orchestrator-zero", 0));
+        let mut state = State::new();
+        orchestrator.start().expect("Created 必须允许 start");
+
+        let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
+
+        assert!(report.started);
+        assert!(report.run_entered);
+        assert_eq!(report.pump_iterations, 0);
+        assert_eq!(
+            report.loop_exit_reason,
+            NestedRuntimeLoopExitReason::MaxIterationsReached
+        );
+        assert_eq!(report.final_state, NestedRuntimeLifecycleState::Stopped);
+        assert!(report.shutdown_completed);
+        assert!(report.validation_is_clean);
+        assert!(report.is_clean_shutdown());
+    }
+
+    /// loop 返回 pump error 时，orchestrator 必须保留原始结构并进入 Failed。
+    #[test]
+    fn runtime_orchestrator_preserves_structured_pump_errors() {
+        assert_runtime_dir();
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config("orchestrator-error", 0));
+        let mut state = State::new();
+        orchestrator.start().expect("Created 必须允许 start");
+        orchestrator.state = NestedRuntimeLifecycleState::Running;
+        let mut loop_report = orchestrator
+            .runtime_loop
+            .as_mut()
+            .expect("Started 必须持有 runtime loop")
+            .run_for_iterations(&mut state, config("unused", 0).loop_config);
+        let pump_error = NestedRuntimePumpError {
+            kind: NestedRuntimePumpErrorKind::DisplayDispatch,
+            message: "controlled orchestrator pump failure".to_owned(),
+        };
+        let loop_error = NestedRuntimeLoopError {
+            iteration: 1,
+            pump_errors: vec![pump_error],
+        };
+        loop_report.exit_reason = NestedRuntimeLoopExitReason::Error;
+        loop_report.errors = vec![loop_error.clone()];
+
+        let report = orchestrator.finish_run(loop_report);
+
+        assert_eq!(report.loop_exit_reason, NestedRuntimeLoopExitReason::Error);
+        assert_eq!(report.errors, vec![loop_error]);
+        assert_eq!(report.final_state, NestedRuntimeLifecycleState::Failed);
+        assert!(!report.shutdown_completed);
+        assert!(!report.is_clean_shutdown());
+        assert!(report.validation_is_clean);
+    }
+
+    /// 真实 lifecycle proof：external stop+wakeup 中断 run，并生成 clean shutdown report。
+    #[test]
+    fn runtime_orchestrator_stop_wakeup_exits_run() {
+        assert_runtime_dir();
+        let mut orchestration_config = config("orchestrator-wakeup", 1);
+        orchestration_config.loop_config.pump_timeout = Duration::from_secs(5);
+        let mut orchestrator = NestedRuntimeOrchestrator::new(orchestration_config);
+        let mut state = State::new();
+        orchestrator.start().expect("Created 必须允许 start");
+        let stop_handle = orchestrator
+            .stop_handle()
+            .expect("Started 必须暴露 stop handle");
+
+        let stopper = thread::spawn(move || {
+            let wait_deadline = std::time::Instant::now() + Duration::from_secs(1);
+            while !stop_handle.is_waiting() {
+                assert!(
+                    std::time::Instant::now() < wait_deadline,
+                    "orchestrated loop 必须在有界时间内进入 wait"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+            stop_handle.request_stop_and_wakeup();
+        });
+        let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
+        stopper.join().expect("external stopper 不得 panic");
+
+        assert_eq!(
+            report.loop_exit_reason,
+            NestedRuntimeLoopExitReason::Interrupted
+        );
+        assert_eq!(report.pump_iterations, 1);
+        assert!(report.stop_requested);
+        assert!(report.wakeup_requested);
+        assert!(report.shutdown_completed);
+        assert_eq!(report.final_state, NestedRuntimeLifecycleState::Stopped);
+        assert!(report.validation_is_clean);
+        assert!(report.errors.is_empty());
+        assert!(report.is_clean_shutdown());
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Stopped);
+        assert!(!report.readiness.runtime_orchestrator_available);
+        assert!(!report.readiness.long_running_loop_available);
+    }
+
+    /// Started 状态的直接 stop 必须通过既有 handle 请求 wakeup 并完成 clean finalize。
+    #[test]
+    fn runtime_orchestrator_direct_stop_requests_wakeup() {
+        assert_runtime_dir();
+        let mut orchestrator =
+            NestedRuntimeOrchestrator::new(config("orchestrator-direct-stop", 1));
+        let state = State::new();
+        orchestrator.start().expect("Created 必须允许 start");
+
+        let report = orchestrator.stop(&state);
+
+        assert_eq!(report.previous_state, NestedRuntimeLifecycleState::Started);
+        assert_eq!(report.state, NestedRuntimeLifecycleState::Stopped);
+        assert!(report.stop_requested);
+        assert!(report.wakeup_requested);
+        assert!(report.shutdown_completed);
+        assert!(report.validation_is_clean);
+    }
+}
