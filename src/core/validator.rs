@@ -1,7 +1,8 @@
 //! compositor 核心状态的只读一致性检查器。
 //!
 //! Validator 只检查 State 当前是否满足 workspace、slot、stack、focus、output
-//! 和 WindowRegistry 的核心不变量。它不会修复错误，也不会修改任何运行状态。
+//! 以及 window、surface、client registry 的核心不变量。它不会修复错误，
+//! 也不会修改任何运行状态，更不会持有真实 Smithay 或 Wayland 类型。
 
 use std::collections::HashMap;
 
@@ -35,11 +36,20 @@ pub enum ValidationIssueKind {
     /// FocusState.workspace 与 CompositorState.current_workspace 不一致。
     FocusWorkspaceMismatch,
 
+    /// FocusState.workspace 指向不存在的 workspace。
+    MissingFocusWorkspace,
+
     /// FocusState.slot 超出固定 slot 范围。
     FocusSlotOutOfRange,
 
     /// FocusState.window 指向的窗口不在当前 workspace 中。
     FocusWindowNotInCurrentWorkspace,
+
+    /// FocusState.window 指向 registry 中已经 dead 的窗口。
+    FocusWindowDead,
+
+    /// FocusState.window 与 focused slot 当前 active window 不一致。
+    FocusWindowNotActiveInSlot,
 
     /// workspace 中引用了 registry 不存在的窗口。
     WorkspaceReferencesMissingRegistryWindow,
@@ -53,14 +63,20 @@ pub enum ValidationIssueKind {
     /// 存活 surface 绑定了 registry 中已经 dead 的窗口。
     SurfaceReferencesDeadWindow,
 
+    /// dead surface 仍绑定 alive 且位于 workspace live path 的窗口。
+    DeadSurfaceReferencesAliveWorkspaceWindow,
+
     /// surface 绑定了不存在的 client。
     SurfaceReferencesMissingClient,
 
     /// 存活 surface 绑定了已经 dead 的 client。
     SurfaceReferencesDeadClient,
 
-    /// 同一个 WindowId 被多个 slot 或多个 workspace 重复引用。
+    /// 同一个 WindowId 在同一 Stack、多个 slot 或多个 workspace 中重复引用。
     DuplicateWindowReference,
+
+    /// SlotContent::Stack 没有任何窗口。
+    EmptyStack,
 
     /// Stack 的 active 索引越界。
     StackActiveIndexOutOfRange,
@@ -210,6 +226,19 @@ impl StateValidator {
             ));
         }
 
+        // focus.workspace 是焦点层级的根；即使它恰好与 current_workspace 不同，
+        // 也必须独立确认该 ID 能解析，避免 mismatch 掩盖真正的悬空引用。
+        if !compositor
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == compositor.focus.workspace)
+        {
+            report.push(ValidationIssue::error(
+                ValidationIssueKind::MissingFocusWorkspace,
+                format!("焦点 workspace {} 不存在", compositor.focus.workspace),
+            ));
+        }
+
         // 固定 slot 模型只有 0..=3，越界值无法被 Workspace 正确解析。
         if compositor.focus.slot >= 4 {
             report.push(ValidationIssue::error(
@@ -251,8 +280,17 @@ impl StateValidator {
                     // Single 只记录一个没有 stack 索引的窗口位置。
                     SlotContent::Single(window) => vec![(*window, None)],
                     SlotContent::Stack(stack) => {
-                        // Stack 必须至少包含一个窗口，且 active 必须指向合法元素。
-                        if stack.windows.is_empty() || stack.active >= stack.windows.len() {
+                        // 空 Stack 没有可定义的 active window，必须由 Empty slot 表达。
+                        if stack.windows.is_empty() {
+                            report.push(ValidationIssue::error(
+                                ValidationIssueKind::EmptyStack,
+                                format!(
+                                    "workspace {} slot {} 保存了空 Stack",
+                                    workspace.id, slot.id
+                                ),
+                            ));
+                        } else if stack.active >= stack.windows.len() {
+                            // 非空 Stack 的 active 必须始终指向 Vec 内的合法元素。
                             report.push(ValidationIssue::error(
                                 ValidationIssueKind::StackActiveIndexOutOfRange,
                                 format!(
@@ -376,6 +414,20 @@ impl StateValidator {
                     ),
                 ));
             }
+
+            // dead surface 对 dead window 的绑定只是 tombstone 历史；但如果窗口仍 alive
+            // 且保留在 workspace，核心会把已经失效的 protocol 对象当作 live path 使用。
+            // 前面已经收集了全部 workspace 引用，直接复用可避免为每条 surface 重建列表。
+            let window_is_in_workspace = references.contains_key(&window);
+            if !surface.alive && record.alive && window_is_in_workspace {
+                report.push(ValidationIssue::error(
+                    ValidationIssueKind::DeadSurfaceReferencesAliveWorkspaceWindow,
+                    format!(
+                        "dead surface {} 仍绑定 workspace live path 中的 alive 窗口 {}",
+                        surface.id, window
+                    ),
+                ));
+            }
         }
 
         // focus.window 必须属于当前 workspace，避免焦点指向其他工作区或已移除窗口。
@@ -384,6 +436,35 @@ impl StateValidator {
                 report.push(ValidationIssue::error(
                     ValidationIssueKind::FocusWindowNotInCurrentWorkspace,
                     format!("焦点窗口 {} 不属于当前 workspace {}", window, workspace.id),
+                ));
+            }
+
+            // FocusState 明确保存 slot 与 active window，两者必须描述同一位置。
+            // 统一经 slot_window() 解析可避免 validator 自己复制 Stack active 规则。
+            if compositor.focus.slot < 4
+                && workspace.slot_window(compositor.focus.slot) != Some(window)
+            {
+                report.push(ValidationIssue::error(
+                    ValidationIssueKind::FocusWindowNotActiveInSlot,
+                    format!(
+                        "焦点窗口 {} 与 focused slot {} 的 active window 不一致",
+                        window, compositor.focus.slot
+                    ),
+                ));
+            }
+        }
+
+        // tombstone 只用于保留诊断历史，不能继续出现在 live focus path。
+        // 这里独立于 workspace dead 引用检查报告，便于调用方准确定位焦点层损坏。
+        if let Some(window) = compositor.focus.window {
+            if state
+                .registry
+                .get(window)
+                .is_some_and(|record| !record.alive)
+            {
+                report.push(ValidationIssue::error(
+                    ValidationIssueKind::FocusWindowDead,
+                    format!("焦点窗口 {window} 已经标记为 dead"),
                 ));
             }
         }
@@ -436,7 +517,7 @@ mod tests {
         layout::OutputSize,
         state::State,
         surface::SurfaceRole,
-        workspace::{SlotContent, Stack},
+        workspace::{SlotContent, Stack, Workspace},
     };
 
     /// 验证默认集中状态满足全部核心不变量。
@@ -450,6 +531,46 @@ mod tests {
         assert!(report.is_valid());
 
         // 默认状态也不应产生任何 Warning。
+        assert!(report.is_clean());
+    }
+
+    /// 验证关闭全部窗口后的空 live state 仍满足不变量。
+    #[test]
+    fn validator_accepts_empty_live_state() {
+        let mut state = State::new();
+        let windows = state.compositor.workspaces[0].window_ids();
+
+        for window in windows {
+            state.close_window(window);
+        }
+
+        let report = state.validate();
+
+        // registry tombstone 可以保留，但 workspace、focus 和 layout live path 必须为空。
+        assert_eq!(state.compositor.focus.window, None);
+        assert!(state.compositor.workspaces[0].window_ids().is_empty());
+        assert!(report.is_valid());
+        assert!(report.is_clean());
+    }
+
+    /// 验证只有一个 live window 的 workspace 是合法状态。
+    #[test]
+    fn validator_accepts_workspace_with_one_live_window() {
+        let mut state = State::new();
+        let windows = state.compositor.workspaces[0].window_ids();
+
+        for window in windows.into_iter().skip(1) {
+            state.close_window(window);
+        }
+
+        let remaining = state.compositor.workspaces[0].window_ids();
+        let report = state.validate();
+
+        // 单窗口既要有 registry metadata，也必须与当前 focus slot 的可见窗口一致。
+        assert_eq!(remaining.len(), 1);
+        assert!(state.registry.is_alive(remaining[0]));
+        assert_eq!(state.compositor.focus.window, Some(remaining[0]));
+        assert!(report.is_valid());
         assert!(report.is_clean());
     }
 
@@ -488,6 +609,23 @@ mod tests {
                 .issues
                 .iter()
                 .any(|issue| { issue.kind == ValidationIssueKind::FocusWorkspaceMismatch })
+        );
+    }
+
+    /// 验证 focus.workspace 指向不存在的 workspace 时会报告独立错误。
+    #[test]
+    fn validator_reports_missing_focus_workspace() {
+        let mut state = State::new();
+        state.compositor.focus.workspace = 999;
+
+        let report = state.validate();
+
+        // mismatch 只能说明两层 ID 不同；validator 还必须明确指出焦点根节点不存在。
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.kind == ValidationIssueKind::MissingFocusWorkspace)
         );
     }
 
@@ -548,6 +686,28 @@ mod tests {
         );
     }
 
+    /// 验证 focus.window 指向 dead registry 记录时会报告焦点生命周期错误。
+    #[test]
+    fn validator_reports_focus_window_points_to_dead_window() {
+        let mut state = State::new();
+        let window = state
+            .compositor
+            .focus
+            .window
+            .expect("默认状态必须包含焦点窗口");
+        assert!(state.registry.mark_dead(window));
+
+        let report = state.validate();
+
+        // workspace dead 引用与 focus dead 引用影响不同，后者必须能被单独分类。
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.kind == ValidationIssueKind::FocusWindowDead)
+        );
+    }
+
     /// 验证同一个窗口出现在多个 slot 时会报告重复引用。
     #[test]
     fn validator_reports_duplicate_window_reference() {
@@ -567,6 +727,31 @@ mod tests {
                 .issues
                 .iter()
                 .any(|issue| { issue.kind == ValidationIssueKind::DuplicateWindowReference })
+        );
+    }
+
+    /// 验证同一 Stack 内重复 WindowId 也属于重复引用。
+    #[test]
+    fn validator_reports_duplicate_window_inside_same_stack() {
+        let mut state = State::new();
+        let window = state
+            .compositor
+            .focus
+            .window
+            .expect("默认状态必须包含焦点窗口");
+        state.compositor.workspaces[0].slots[0].content = SlotContent::Stack(Stack {
+            windows: vec![window, window],
+            active: 0,
+        });
+
+        let report = state.validate();
+
+        // 重复成员会让删除和 stack 切换产生歧义，不能因位于同一容器而被忽略。
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.kind == ValidationIssueKind::DuplicateWindowReference)
         );
     }
 
@@ -625,6 +810,23 @@ mod tests {
         );
     }
 
+    /// 验证 Workspace 类型本身固定提供且只提供四个 slot。
+    #[test]
+    fn workspace_model_has_exactly_four_slots() {
+        let workspace = Workspace::new(42);
+
+        // `[Slot; 4]` 在类型层禁止动态增删；测试固定该公开模型，防止未来无意改形。
+        assert_eq!(workspace.slots.len(), 4);
+        assert_eq!(
+            workspace
+                .slots
+                .iter()
+                .map(|slot| slot.id)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+    }
+
     /// 验证 Stack active 索引越界时会报告错误。
     #[test]
     fn validator_reports_stack_active_index_out_of_range() {
@@ -650,6 +852,26 @@ mod tests {
         );
     }
 
+    /// 验证空 Stack 会作为独立容器不变量错误被报告。
+    #[test]
+    fn validator_reports_empty_stack() {
+        let mut state = State::new();
+        state.compositor.workspaces[0].slots[0].content = SlotContent::Stack(Stack {
+            windows: Vec::new(),
+            active: 0,
+        });
+
+        let report = state.validate();
+
+        // Empty slot 应由 SlotContent::Empty 表达，空 Stack 会让 active 语义失去定义。
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.kind == ValidationIssueKind::EmptyStack)
+        );
+    }
+
     /// 验证焦点窗口不属于当前 workspace 时会报告错误。
     #[test]
     fn validator_reports_focus_window_not_in_current_workspace() {
@@ -663,6 +885,26 @@ mod tests {
             report.issues.iter().any(|issue| {
                 issue.kind == ValidationIssueKind::FocusWindowNotInCurrentWorkspace
             })
+        );
+    }
+
+    /// 验证 focus.window 必须等于当前 focus.slot 对外暴露的 active window。
+    #[test]
+    fn validator_reports_focus_window_not_active_in_focused_slot() {
+        let mut state = State::new();
+        let other_window = state.compositor.workspaces[0]
+            .slot_window(1)
+            .expect("默认 slot 1 必须包含窗口");
+        state.compositor.focus.window = Some(other_window);
+
+        let report = state.validate();
+
+        // 窗口虽然属于当前 workspace，但不能冒充另一个 slot 的焦点窗口。
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| { issue.kind == ValidationIssueKind::FocusWindowNotActiveInSlot })
         );
     }
 
@@ -732,6 +974,28 @@ mod tests {
                 .iter()
                 .any(|issue| { issue.kind == ValidationIssueKind::SurfaceReferencesDeadWindow })
         );
+    }
+
+    /// 验证 dead surface 不得继续绑定 alive 且仍在 workspace live path 的窗口。
+    #[test]
+    fn validator_reports_dead_surface_references_alive_workspace_window() {
+        let mut state = State::new();
+        let window = state
+            .compositor
+            .focus
+            .window
+            .expect("默认状态必须包含焦点窗口");
+        let surface = state
+            .surfaces
+            .register_for_window(window, SurfaceRole::XdgToplevel);
+        assert!(state.surfaces.mark_dead(surface));
+
+        let report = state.validate();
+
+        // tombstone 可以保存历史 ID，但 dead protocol 对象不能支撑 workspace live path。
+        assert!(report.issues.iter().any(|issue| {
+            issue.kind == ValidationIssueKind::DeadSurfaceReferencesAliveWorkspaceWindow
+        }));
     }
 
     /// 验证存活但尚未绑定窗口的 surface 是合法生命周期中间状态。

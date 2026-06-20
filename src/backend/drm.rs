@@ -4,6 +4,8 @@
 //! DRM connector、GBM、EGL 或 Smithay backend。后续接入真实硬件后，可以在保持
 //! `CompositorState` 集中持有 backend 的前提下替换这里的内部实现。
 //! backend 属于进程运行期资源，不参与 session 序列化或恢复。
+//!
+//! Boundary: 构造或初始化这个 stub 不表示设备已打开、输出已发现或渲染器已就绪。
 
 /// compositor 当前使用的最小 DRM backend stub。
 ///
@@ -23,8 +25,7 @@ impl DrmBackend {
     ///
     /// 当前只打印初始化日志，表示 compositor 已进入 backend 启动阶段。
     /// 真实设备资源仍应由未来 Smithay/DRM/GBM 实现负责。
-    ///
-    /// TODO: 后续接入真实 Smithay DRM backend 后，在这里完成设备、输出与渲染资源初始化。
+    /// Contract: 在接入系统资源前，这个方法不得暗示设备、输出或渲染能力可用。
     pub fn init(&mut self) {
         println!("[Backend] DRM initialized");
     }

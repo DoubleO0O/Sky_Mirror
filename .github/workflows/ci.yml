@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    name: Linux Rust validation
+    runs-on: ubuntu-latest
+    env:
+      XDG_RUNTIME_DIR: /tmp/sky-mirror-runtime
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libxkbcommon-dev
+
+      - name: Prepare Wayland runtime directory
+        run: install -d -m 700 "$XDG_RUNTIME_DIR"
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run default tests
+        run: cargo test
+
+      - name: Check Smithay probe
+        run: cargo check --features smithay-probe
+
+      - name: Test Smithay probe
+        run: cargo test --features smithay-probe
+
+      - name: Check Smithay Linux adapter
+        run: cargo check --features smithay-linux
+
+      - name: Test Smithay Linux adapter
+        run: cargo test --features smithay-linux

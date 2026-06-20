@@ -1,8 +1,9 @@
 //! Wayland Display 的 feature-gated 编译探针。
 //!
 //! 本模块只在 Linux 上启用 `smithay-linux` feature 时编译。当前阶段只验证
-//! 可以构造 Wayland server `Display` 并取得 `DisplayHandle`。这里不创建监听
-//! socket、不接 xdg-shell、不注册 compositor global，也不接收真实 client。
+//! 可以构造 Wayland server `Display`、取得 `DisplayHandle`，并为 Linux runtime
+//! proof 执行一次 client dispatch。这里不创建监听 socket、不接 xdg-shell、
+//! 不注册 compositor global，也不把 dispatch 解释为完整 compositor 事件循环。
 //!
 //! 未来真实 Wayland callback 仍然必须先转换为 `BackendEvent`，再通过
 //! `CoreRuntimeBridge` 进入核心状态，不能直接修改 workspace 或注册表。
@@ -65,6 +66,15 @@ impl SmithayWaylandDisplayProbe {
     /// 该方法只验证 handle 路径可用，不用 handle 注册任何 protocol global。
     pub fn display_handle(&self) -> DisplayHandle {
         self.display.handle()
+    }
+
+    /// 执行一次 Wayland backend client dispatch，并返回处理的 request 数量。
+    ///
+    /// 该 Linux-only seam 只用于让 backend 观察真实 peer EOF，从而触发其持有的
+    /// `ClientData::disconnected`。callback 仍只能写 adapter session event，不能访问
+    /// core；本方法也不注册 protocol global 或启动长期 compositor loop。
+    pub(crate) fn dispatch_clients_once(&mut self) -> std::io::Result<usize> {
+        self.display.dispatch_clients(&mut self.state)
     }
 
     /// 返回当前是否仍然只是 probe 模式。

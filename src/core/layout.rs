@@ -53,20 +53,37 @@ impl LayoutEngine {
     /// 根据 workspace 当前布局模式计算所有可见窗口的位置。
     ///
     /// Empty slot 不产生 placement；Single 返回其窗口；Stack 通过
-    /// `slot_window()` 只返回 active window。返回顺序与 slot 顺序一致。
+    /// `slot_window()` 只返回 active window。该兼容入口不接收焦点信息，
+    /// 会按固定 slot 顺序选择 Fullscreen 窗口；现有调用方无需修改。
     pub fn compute_workspace(workspace: &Workspace, output: OutputSize) -> Vec<WindowPlacement> {
+        // 旧 interface 保持可用，并把新增焦点语义集中交给同一个实现维护。
+        // None 表示调用方没有提供 focused slot，Fullscreen 会回退到第一个 occupied slot。
+        Self::compute_workspace_with_focus(workspace, None, output)
+    }
+
+    /// 根据 workspace、可选 focused slot 和输出尺寸计算可见窗口的位置。
+    ///
+    /// Fullscreen 优先显示 `focus_slot` 中的 active window；focused slot 为空、
+    /// 无效或未提供时，按固定 slot 顺序回退到第一个 occupied slot。Split 与 Grid
+    /// 保持原有几何规则，不因 focused slot 改变 placement 数量或顺序。
+    pub fn compute_workspace_with_focus(
+        workspace: &Workspace,
+        focus_slot: Option<u8>,
+        output: OutputSize,
+    ) -> Vec<WindowPlacement> {
         match workspace.layout {
-            // Fullscreen 只显示 slot 0，并占满整个输出。
+            // Fullscreen 只显示 resolved slot 的 active window，并占满整个输出。
+            // slot 选择统一封装在 helper 中，避免焦点与 fallback 规则散落到调用方。
             LayoutMode::Fullscreen => {
-                // slot 0 没有可见窗口时，没有任何内容需要布局。
-                let Some(window) = workspace.slot_window(0) else {
+                let Some((slot, window)) = Self::fullscreen_window(workspace, focus_slot) else {
+                    // 空 workspace 没有 occupied slot，返回空 placement 且不制造占位窗口。
                     return Vec::new();
                 };
 
                 vec![WindowPlacement {
                     window,
                     workspace: workspace.id,
-                    slot: 0,
+                    slot,
                     rect: Rect {
                         x: 0,
                         y: 0,
@@ -158,13 +175,80 @@ impl LayoutEngine {
             }
         }
     }
+
+    /// 解析 Fullscreen 应显示的 slot 与 active window。
+    ///
+    /// 先尝试调用方提供的 focused slot；如果它为空或无效，再按 workspace 固定
+    /// slot 顺序寻找第一个 occupied slot。所有窗口都经 `slot_window()` 读取，
+    /// 因此 Stack 只会返回 active window，隐藏的 stack 成员不会泄漏到布局结果。
+    fn fullscreen_window(workspace: &Workspace, focus_slot: Option<u8>) -> Option<(u8, WindowId)> {
+        if let Some(slot) = focus_slot {
+            if let Some(window) = workspace.slot_window(slot) {
+                // focused slot 可见时立即返回，保证 keyboard focus 与 Fullscreen 画面一致。
+                return Some((slot, window));
+            }
+        }
+
+        // focused slot 为空、无效或未提供时，使用固定 slot 顺序提供确定性 fallback。
+        // `slot_window()` 同时处理 Empty、Single 和 Stack active window 三种内容。
+        workspace.slots.iter().find_map(|slot| {
+            workspace
+                .slot_window(slot.id)
+                .map(|window| (slot.id, window))
+        })
+    }
 }
 
 // 布局测试只验证纯几何计算，不启动 backend、EventLoop 或 renderer。
 #[cfg(test)]
 mod tests {
-    use super::{LayoutEngine, OutputSize, Rect};
+    use super::{LayoutEngine, OutputSize, Rect, WindowPlacement};
     use crate::core::workspace::{LayoutMode, Workspace};
+
+    /// 返回布局测试统一使用的输出尺寸。
+    ///
+    /// 集中测试尺寸可以让各个 focused slot 用例只表达焦点语义，避免重复的几何噪音。
+    fn test_output() -> OutputSize {
+        OutputSize {
+            width: 1920,
+            height: 1080,
+        }
+    }
+
+    /// 创建四个固定 slot 都已占用的 Fullscreen workspace。
+    ///
+    /// 窗口 ID 与 slot ID 保持稳定对应，便于断言 focused slot 最终选择的窗口。
+    fn fullscreen_workspace_with_four_windows() -> Workspace {
+        let mut workspace = Workspace::new(0);
+        for window in 1..=4 {
+            workspace.assign_window(window);
+        }
+        workspace.layout = LayoutMode::Fullscreen;
+        workspace
+    }
+
+    /// 断言 Fullscreen 只生成一个覆盖完整输出的 placement。
+    ///
+    /// 该 helper 同时检查 slot、窗口和几何，确保 focus-aware 选择不会破坏全屏尺寸语义。
+    fn assert_fullscreen_placement(
+        placements: &[WindowPlacement],
+        expected_slot: u8,
+        expected_window: u64,
+    ) {
+        // Fullscreen 无论选中哪个 slot，都只能暴露一个可见窗口。
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].slot, expected_slot);
+        assert_eq!(placements[0].window, expected_window);
+        assert_eq!(
+            placements[0].rect,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            }
+        );
+    }
 
     /// 验证 Fullscreen 只布局 slot 0，并让其覆盖完整输出。
     #[test]
@@ -197,6 +281,96 @@ mod tests {
                 height: 1080,
             }
         );
+    }
+
+    /// 验证 focus-aware Fullscreen 在聚焦 slot 0 时显示 slot 0。
+    #[test]
+    fn fullscreen_with_focused_slot_zero_places_slot_zero() {
+        let workspace = fullscreen_workspace_with_four_windows();
+
+        let placements =
+            LayoutEngine::compute_workspace_with_focus(&workspace, Some(0), test_output());
+
+        // focused slot 0 中的窗口 1 必须成为唯一可见窗口。
+        assert_fullscreen_placement(&placements, 0, 1);
+    }
+
+    /// 验证 focus-aware Fullscreen 在聚焦 slot 1 时显示 slot 1。
+    #[test]
+    fn fullscreen_with_focused_slot_one_places_slot_one() {
+        let workspace = fullscreen_workspace_with_four_windows();
+
+        let placements =
+            LayoutEngine::compute_workspace_with_focus(&workspace, Some(1), test_output());
+
+        // focused slot 1 中的窗口 2 必须成为唯一可见窗口。
+        assert_fullscreen_placement(&placements, 1, 2);
+    }
+
+    /// 验证 focus-aware Fullscreen 在聚焦 slot 2 时显示 slot 2。
+    #[test]
+    fn fullscreen_with_focused_slot_two_places_slot_two() {
+        let workspace = fullscreen_workspace_with_four_windows();
+
+        let placements =
+            LayoutEngine::compute_workspace_with_focus(&workspace, Some(2), test_output());
+
+        // focused slot 2 中的窗口 3 必须成为唯一可见窗口。
+        assert_fullscreen_placement(&placements, 2, 3);
+    }
+
+    /// 验证 focus-aware Fullscreen 在聚焦 slot 3 时显示 slot 3。
+    #[test]
+    fn fullscreen_with_focused_slot_three_places_slot_three() {
+        let workspace = fullscreen_workspace_with_four_windows();
+
+        let placements =
+            LayoutEngine::compute_workspace_with_focus(&workspace, Some(3), test_output());
+
+        // focused slot 3 中的窗口 4 必须成为唯一可见窗口。
+        assert_fullscreen_placement(&placements, 3, 4);
+    }
+
+    /// 验证 focused slot 为空时回退到第一个 occupied slot。
+    #[test]
+    fn fullscreen_with_empty_focused_slot_falls_back_to_first_occupied_slot() {
+        let mut workspace = fullscreen_workspace_with_four_windows();
+        workspace.remove_window(1);
+
+        let placements =
+            LayoutEngine::compute_workspace_with_focus(&workspace, Some(0), test_output());
+
+        // slot 0 已空，fallback 必须选择按固定顺序遇到的第一个 occupied slot 1。
+        assert_fullscreen_placement(&placements, 1, 2);
+    }
+
+    /// 验证空 workspace 在 Fullscreen 下安全返回空 placement。
+    #[test]
+    fn fullscreen_with_empty_workspace_returns_no_placement() {
+        let workspace = Workspace::new(0);
+
+        let placements =
+            LayoutEngine::compute_workspace_with_focus(&workspace, Some(3), test_output());
+
+        // 没有任何 active window 时不能制造占位窗口，也不能发生 panic。
+        assert!(placements.is_empty());
+    }
+
+    /// 验证 focused slot 为 Stack 时只显示其 active window。
+    #[test]
+    fn fullscreen_with_focused_stack_places_only_active_window() {
+        let mut workspace = Workspace::new(0);
+        for window in 1..=5 {
+            workspace.assign_window(window);
+        }
+        workspace.layout = LayoutMode::Fullscreen;
+
+        let placements =
+            LayoutEngine::compute_workspace_with_focus(&workspace, Some(0), test_output());
+
+        // 第五个窗口进入 slot 0 stack 后成为 active，旧窗口 1 必须保持隐藏。
+        assert_fullscreen_placement(&placements, 0, 5);
+        assert!(placements.iter().all(|placement| placement.window != 1));
     }
 
     /// 验证 Split 在奇数宽度下把余数分配给右侧区域。

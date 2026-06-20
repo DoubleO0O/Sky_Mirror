@@ -26,7 +26,8 @@ pub struct EventLoop {
     event_loop: CalloopEventLoop<'static, State>,
     /// 当前 MVP 使用的 tick-based 临时输入源。
     ///
-    /// TODO: 后续接入真实 Smithay keyboard/libinput 后，用真实事件源替换该模拟器。
+    /// Boundary: 它只产生核心 `InputEvent`；系统输入接入时应替换事件来源，
+    /// 而不是绕过既有 Action/State 分发链路。
     input: InputSimulator,
     /// 消费 RenderFrame 的占位 renderer。
     ///

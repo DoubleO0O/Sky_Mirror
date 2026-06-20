@@ -2,6 +2,9 @@
 //!
 //! 本模块只运行既有 mock 场景和管线，并把完整报告压缩为便于回归比较的
 //! 快照。快照不会替代完整报告，也不会提交任何状态变化。
+//!
+//! Contract snapshot 不等于运行时 readiness：它只冻结纯数据场景的可比较结果，
+//! 不证明协议 dispatch、surface 生命周期或核心接纳已经接通。
 
 use crate::smithay_backend::{
     surface_admission_pipeline::{

@@ -2,6 +2,9 @@
 //!
 //! 本模块把 Smithay probe 与 Linux 资源探针转换为后端中立的结构化报告。
 //! 它不持有核心 `State`，不提交 `BackendEvent`，也不会启动 compositor。
+//!
+//! Diagnostic-only invariant: 报告中的资源和 skeleton 边界只描述可观测状态，
+//! 不授予 client accept、protocol dispatch、real surface 或 GPU 能力。
 
 use std::{fmt, path::PathBuf};
 
@@ -18,7 +21,7 @@ use crate::smithay_backend::{
 
 /// 后端启动模式。
 ///
-/// 当前阶段只有纯探针模式；即使 Linux Display 和 socket 已构造，也不会接收
+/// 唯一模式是纯探针模式；即使 Linux Display 和 socket 已构造，也不会接收
 /// client、注册协议 global 或进入真实 compositor 主循环。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendBootstrapMode {
@@ -30,7 +33,7 @@ pub enum BackendBootstrapMode {
 ///
 /// 字段只描述已经实现并可由当前实例提供的能力。纯数据 surface 生命周期边界
 /// 与真实 Wayland surface 接入是两项独立能力，后者和 GPU 渲染必须保持为
-/// `false`。
+/// `false`，除非对应执行路径和验收契约同时存在。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendRuntimeCapabilities {
     /// 是否能够构造 Wayland Display。
@@ -153,6 +156,183 @@ pub enum BackendRuntimeDiagnostic {
         /// 当前 Rust 目标操作系统名称。
         platform: &'static str,
     },
+
+    /// Linux adapter 仅提供 event pump skeleton 边界。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterEventPumpSkeleton {
+        /// 是否提供 event pump 边界。
+        has_event_pump_boundary: bool,
+
+        /// 是否支持执行一次纯计数 skeleton tick。
+        pumps_once: bool,
+
+        /// 是否运行真实事件循环。
+        runs_event_loop: bool,
+
+        /// 是否接受客户端。
+        accepts_clients: bool,
+
+        /// 是否分发协议事件。
+        dispatches_protocol_events: bool,
+
+        /// 是否注册协议 global。
+        registers_protocol_globals: bool,
+    },
+
+    /// Linux adapter 只提供 protocol global 计划，尚未执行注册。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterProtocolGlobalPlan {
+        /// global 计划数量。
+        planned_count: usize,
+
+        /// 已注册 global 数量。
+        registered_count: usize,
+
+        /// 当前计划是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
+
+    /// Linux adapter 只建立了 protocol global registration skeleton ledger。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterProtocolGlobalRegistrationSkeleton {
+        /// 是否已经尝试 registration skeleton。
+        attempted: bool,
+
+        /// 进入 registration skeleton 状态的 global 数量。
+        skeleton_registered_count: usize,
+
+        /// 真实注册的 global 数量。
+        real_registered_count: usize,
+
+        /// 当前 registration 状态是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
+
+    /// Linux adapter 只记录被拒绝的 inert protocol request observations。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterInertProtocolRequestLedger {
+        /// 已观察请求数量。
+        observed_count: usize,
+
+        /// 被明确拒绝为 unsupported 的请求数量。
+        rejected_unsupported_count: usize,
+
+        /// 当前 ledger 是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
+
+    /// Linux adapter 只记录被拒绝的纯数据 client session observations。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterClientSessionLedger {
+        /// 已观察 client session 数量。
+        observed_count: usize,
+
+        /// 被明确拒绝为 unsupported 的 client session 数量。
+        rejected_unsupported_count: usize,
+
+        /// 是否接受真实 client。
+        accepts_clients: bool,
+
+        /// 当前 ledger 是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
+
+    /// Linux adapter 提供纯数据 activation gate，且全部真实能力被阻止。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterActivationGatePresent {
+        /// gate 中的 target 总数。
+        report_count: usize,
+
+        /// 被阻止激活的 target 数量。
+        blocked_count: usize,
+
+        /// 允许激活的 target 数量。
+        allowed_count: usize,
+
+        /// 是否接受真实 client。
+        accepts_clients: bool,
+
+        /// 是否注册真实 protocol global。
+        registers_protocol_globals: bool,
+
+        /// 是否分发真实协议事件。
+        dispatches_protocol_events: bool,
+
+        /// 是否支持真实 Wayland surface。
+        supports_real_wayland_surfaces: bool,
+
+        /// 是否支持 GPU 渲染。
+        supports_gpu_rendering: bool,
+
+        /// 当前 gate 是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
+
+    /// Linux adapter 只记录被 gate 阻止的纯数据 activation attempts。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterActivationAttemptLedgerPresent {
+        /// 已观察 attempt 数量。
+        observed_count: usize,
+
+        /// 被明确阻止的 attempt 数量。
+        blocked_count: usize,
+
+        /// 允许激活的 attempt 数量。
+        allowed_count: usize,
+
+        /// 当前 ledger 是否仍然只属于 skeleton。
+        skeleton_only: bool,
+    },
+
+    /// Linux adapter 的真实 global registration 可行性仍被明确阻止。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterRealGlobalRegistrationFeasibility {
+        /// 是否已经执行过可行性 attempt。
+        attempted: bool,
+
+        /// 被阻止的 global 数量。
+        blocked_count: usize,
+
+        /// 真实注册成功的 global 数量。
+        real_registered_count: usize,
+
+        /// 真实 global registration 是否已启用。
+        registration_enabled: bool,
+
+        /// 是否接受真实 client。
+        accepts_clients: bool,
+
+        /// 是否分发真实协议事件。
+        dispatches_protocol_events: bool,
+
+        /// 当前报告是否仍然只属于 skeleton 可行性边界。
+        skeleton_only: bool,
+    },
+
+    /// Linux adapter 的 protocol global handler 边界仍为纯数据 blocked 报告。
+    #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+    AdapterGlobalHandlerBoundaryPresent {
+        /// handler 报告数量。
+        report_count: usize,
+
+        /// 已安全建立边界的 handler 数量。
+        ready_count: usize,
+
+        /// 被可行性边界阻止的 handler 数量。
+        blocked_count: usize,
+
+        /// 是否注册真实 protocol global。
+        registers_protocol_globals: bool,
+
+        /// 是否分发真实协议事件。
+        dispatches_protocol_events: bool,
+
+        /// 是否接受真实 client。
+        accepts_clients: bool,
+
+        /// 当前报告是否仍然只属于 skeleton 可行性边界。
+        skeleton_only: bool,
+    },
 }
 
 impl fmt::Display for BackendRuntimeDiagnostic {
@@ -179,6 +359,130 @@ impl fmt::Display for BackendRuntimeDiagnostic {
             Self::UnsupportedPlatform { platform } => {
                 write!(formatter, "当前平台不支持 Linux 后端: {platform}")
             }
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterEventPumpSkeleton {
+                has_event_pump_boundary,
+                pumps_once,
+                runs_event_loop,
+                accepts_clients,
+                dispatches_protocol_events,
+                registers_protocol_globals,
+            } => write!(
+                formatter,
+                "adapter event pump skeleton: boundary={has_event_pump_boundary}, \
+                 pumps_once={pumps_once}, event_loop={runs_event_loop}, clients={accepts_clients}, \
+                 protocol_events={dispatches_protocol_events}, globals={registers_protocol_globals}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterProtocolGlobalPlan {
+                planned_count,
+                registered_count,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter protocol global plan: planned={planned_count}, \
+                 registered={registered_count}, skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterProtocolGlobalRegistrationSkeleton {
+                attempted,
+                skeleton_registered_count,
+                real_registered_count,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter protocol global registration skeleton: attempted={attempted}, \
+                 skeleton_registered={skeleton_registered_count}, \
+                 real_registered={real_registered_count}, skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterInertProtocolRequestLedger {
+                observed_count,
+                rejected_unsupported_count,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter inert protocol request ledger: observed={observed_count}, \
+                 rejected_unsupported={rejected_unsupported_count}, \
+                 skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterClientSessionLedger {
+                observed_count,
+                rejected_unsupported_count,
+                accepts_clients,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter client session ledger: observed={observed_count}, \
+                 rejected_unsupported={rejected_unsupported_count}, \
+                 accepts_clients={accepts_clients}, skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterActivationGatePresent {
+                report_count,
+                blocked_count,
+                allowed_count,
+                accepts_clients,
+                registers_protocol_globals,
+                dispatches_protocol_events,
+                supports_real_wayland_surfaces,
+                supports_gpu_rendering,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter activation gate: reports={report_count}, blocked={blocked_count}, \
+                 allowed={allowed_count}, clients={accepts_clients}, \
+                 globals={registers_protocol_globals}, \
+                 protocol_events={dispatches_protocol_events}, \
+                 real_surfaces={supports_real_wayland_surfaces}, \
+                 gpu_rendering={supports_gpu_rendering}, skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterActivationAttemptLedgerPresent {
+                observed_count,
+                blocked_count,
+                allowed_count,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter activation attempt ledger: observed={observed_count}, \
+                 blocked={blocked_count}, allowed={allowed_count}, \
+                 skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterRealGlobalRegistrationFeasibility {
+                attempted,
+                blocked_count,
+                real_registered_count,
+                registration_enabled,
+                accepts_clients,
+                dispatches_protocol_events,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter real global registration feasibility: attempted={attempted}, \
+                 blocked={blocked_count}, real_registered={real_registered_count}, \
+                 enabled={registration_enabled}, clients={accepts_clients}, \
+                 protocol_events={dispatches_protocol_events}, \
+                 skeleton_only={skeleton_only}"
+            ),
+            #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+            Self::AdapterGlobalHandlerBoundaryPresent {
+                report_count,
+                ready_count,
+                blocked_count,
+                registers_protocol_globals,
+                dispatches_protocol_events,
+                accepts_clients,
+                skeleton_only,
+            } => write!(
+                formatter,
+                "adapter global handler boundary: reports={report_count}, ready={ready_count}, \
+                 blocked={blocked_count}, globals={registers_protocol_globals}, \
+                 protocol_events={dispatches_protocol_events}, clients={accepts_clients}, \
+                 skeleton_only={skeleton_only}"
+            ),
         }
     }
 }
@@ -186,7 +490,8 @@ impl fmt::Display for BackendRuntimeDiagnostic {
 /// 后端运行时门面报告。
 ///
 /// 报告只描述启动资源和能力，不包含 workspace、focus、scene 或渲染帧，也不会
-/// 修改任何核心状态。
+/// 修改任何核心状态。`ProbeOnly` 与保守 capability 字段是报告契约的一部分：
+/// socket 名称或 adapter diagnostic 存在不能提升真实运行能力。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendRuntimeReport {
     /// 后端实现名称。
@@ -252,13 +557,113 @@ impl From<&SmithayLinuxRuntimeProbe> for BackendRuntimeReport {
 
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 impl From<&SmithayLinuxAdapterSkeleton> for BackendRuntimeReport {
-    /// 从 Phase 48A adapter skeleton 创建保守的后端中立报告。
+    /// 从 adapter event pump skeleton 创建保守的后端中立报告。
+    ///
+    /// Boundary invariant: 转换只读取 snapshot，并保持 `ProbeOnly`。报告沿用 Linux
+    /// 资源探针能力，adapter 的 plan/ledger 信息仅追加为 diagnostic，不把真实
+    /// surface 或 GPU capability 提升为 `true`。
     fn from(adapter: &SmithayLinuxAdapterSkeleton) -> Self {
-        linux_resource_report(
+        let snapshot = adapter.snapshot();
+        let capabilities = snapshot.capabilities;
+        let mut report = linux_resource_report(
             "smithay-linux-adapter-skeleton",
             BackendBootstrapMode::ProbeOnly,
-            adapter.socket_name_string(),
-        )
+            snapshot.socket_name,
+        );
+        report
+            .diagnostics
+            .push(BackendRuntimeDiagnostic::AdapterEventPumpSkeleton {
+                has_event_pump_boundary: capabilities.has_event_pump_boundary,
+                pumps_once: capabilities.pumps_once,
+                runs_event_loop: capabilities.runs_event_loop,
+                accepts_clients: capabilities.accepts_clients,
+                dispatches_protocol_events: capabilities.dispatches_protocol_events,
+                registers_protocol_globals: capabilities.registers_protocol_globals,
+            });
+        report
+            .diagnostics
+            .push(BackendRuntimeDiagnostic::AdapterProtocolGlobalPlan {
+                planned_count: snapshot.global_plan.planned_count,
+                registered_count: snapshot.global_plan.registered_count,
+                skeleton_only: snapshot.global_plan.skeleton_only,
+            });
+        let registration = snapshot.global_registration_report.as_ref();
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterProtocolGlobalRegistrationSkeleton {
+                attempted: registration.is_some(),
+                skeleton_registered_count: registration
+                    .map_or(0, |report| report.skeleton_registered_count),
+                real_registered_count: registration
+                    .map_or(0, |report| report.real_registered_count),
+                skeleton_only: registration.map_or(true, |report| report.skeleton_only),
+            },
+        );
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterInertProtocolRequestLedger {
+                observed_count: snapshot.protocol_request_ledger.observed_count,
+                rejected_unsupported_count: snapshot
+                    .protocol_request_ledger
+                    .rejected_unsupported_count,
+                skeleton_only: snapshot.protocol_request_ledger.skeleton_only,
+            },
+        );
+        report
+            .diagnostics
+            .push(BackendRuntimeDiagnostic::AdapterClientSessionLedger {
+                observed_count: snapshot.client_session_ledger.observed_count,
+                rejected_unsupported_count: snapshot
+                    .client_session_ledger
+                    .rejected_unsupported_count,
+                accepts_clients: capabilities.accepts_clients,
+                skeleton_only: snapshot.client_session_ledger.skeleton_only,
+            });
+        report
+            .diagnostics
+            .push(BackendRuntimeDiagnostic::AdapterActivationGatePresent {
+                report_count: snapshot.activation_gate.reports.len(),
+                blocked_count: snapshot.activation_gate.blocked_count,
+                allowed_count: snapshot.activation_gate.allowed_count,
+                accepts_clients: capabilities.accepts_clients,
+                registers_protocol_globals: capabilities.registers_protocol_globals,
+                dispatches_protocol_events: capabilities.dispatches_protocol_events,
+                supports_real_wayland_surfaces: capabilities.supports_real_wayland_surfaces,
+                supports_gpu_rendering: capabilities.supports_gpu_rendering,
+                skeleton_only: snapshot.activation_gate.skeleton_only,
+            });
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterActivationAttemptLedgerPresent {
+                observed_count: snapshot.activation_attempt_ledger.observed_count,
+                blocked_count: snapshot.activation_attempt_ledger.blocked_count,
+                allowed_count: snapshot.activation_attempt_ledger.allowed_count,
+                skeleton_only: snapshot.activation_attempt_ledger.skeleton_only,
+            },
+        );
+        let real_registration = snapshot.real_global_registration_report.as_ref();
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterRealGlobalRegistrationFeasibility {
+                attempted: real_registration.is_some(),
+                blocked_count: real_registration.map_or(0, |report| report.blocked_kinds.len()),
+                real_registered_count: real_registration
+                    .map_or(0, |report| report.real_registered_count),
+                registration_enabled: capabilities.registers_protocol_globals,
+                accepts_clients: capabilities.accepts_clients,
+                dispatches_protocol_events: capabilities.dispatches_protocol_events,
+                skeleton_only: real_registration.map_or(true, |report| report.skeleton_only),
+            },
+        );
+        report.diagnostics.push(
+            BackendRuntimeDiagnostic::AdapterGlobalHandlerBoundaryPresent {
+                report_count: snapshot.global_handler_boundary.reports.len(),
+                ready_count: snapshot.global_handler_boundary.ready_count,
+                blocked_count: snapshot.global_handler_boundary.blocked_count,
+                registers_protocol_globals: capabilities.registers_protocol_globals,
+                dispatches_protocol_events: capabilities.dispatches_protocol_events,
+                accepts_clients: capabilities.accepts_clients,
+                skeleton_only: snapshot.global_handler_boundary.skeleton_only,
+            },
+        );
+
+        report
     }
 }
 

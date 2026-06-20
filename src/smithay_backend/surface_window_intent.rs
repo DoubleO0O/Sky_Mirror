@@ -3,6 +3,7 @@
 //! 本模块只把 surface 最终记录规划为后端中立的窗口候选意图。它不会构造
 //! `BackendEvent` 或核心命令，不会调用 driver，也不会修改任何核心状态。
 //! 这些意图只是未来接入边界的候选数据，不表示窗口已经进入 compositor。
+//! `BackendWindowCandidateId` 也不是核心 `WindowId`，相同数值不能跨层替代类型。
 
 use crate::smithay_backend::{
     surface_lifecycle::{
@@ -33,7 +34,8 @@ impl BackendWindowCandidateId {
 
 /// Surface 最终状态对应的窗口候选意图。
 ///
-/// 所有变体都是纯数据，不包含核心窗口类型、真实 surface 或系统资源。
+/// 所有变体都是纯数据，不包含核心窗口类型、真实 surface 或系统资源。生成
+/// `Create`、`Hide` 或 `Close` 只表示候选意图，不表示对应动作已经执行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendWindowCandidateIntent {
     /// 为已映射 surface 创建候选窗口。

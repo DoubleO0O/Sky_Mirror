@@ -88,7 +88,7 @@ impl BackendEventReplayer {
     /// 回放一组后端事件。
     ///
     /// 每个事件都会按输入顺序执行：
-    /// `BackendEvent -> CoreCommand -> State::handle_command() -> ValidationReport`。
+    /// `BackendEvent -> CoreCommand -> State::handle_command_with_validation()`。
     /// 每一步执行后立即验证，但不会自动修复状态或打印报告。
     pub fn replay(
         state: &mut State,
@@ -98,8 +98,9 @@ impl BackendEventReplayer {
 
         for event in events {
             let command = BackendEventTranslator::translate(event.clone());
-            let result = state.handle_command(command.clone());
-            let validation = state.validate();
+
+            // 每一步复用 State 的统一 seam，确保 runtime 与 replay 使用相同 post-command 时序。
+            let (result, validation) = state.handle_command_with_validation(command.clone());
 
             steps.push(BackendReplayStep {
                 event,
@@ -117,8 +118,13 @@ impl BackendEventReplayer {
 mod tests {
     use super::BackendEventReplayer;
     use crate::core::{
-        backend_event::BackendEvent, command::CommandResult, state::State, surface::SurfaceRole,
-        validator::ValidationIssueKind, window::WindowKind,
+        backend_event::BackendEvent,
+        client::ClientKind,
+        command::{CommandResult, CoreCommand},
+        state::State,
+        surface::SurfaceRole,
+        validator::ValidationIssueKind,
+        window::WindowKind,
     };
 
     /// 验证空事件序列会生成有效且干净的空报告。
@@ -132,6 +138,70 @@ mod tests {
         assert!(report.steps.is_empty());
         assert!(report.is_valid());
         assert!(report.is_clean());
+    }
+
+    /// 验证 client connect/disconnect 可以通过 replay public seam 完成 clean 生命周期。
+    #[test]
+    fn backend_replay_runs_client_connect_disconnect_tracer() {
+        let mut state = State::new();
+
+        let report = BackendEventReplayer::replay(
+            &mut state,
+            vec![
+                BackendEvent::ClientConnected {
+                    client: Some(42),
+                    kind: ClientKind::WaylandPlaceholder,
+                    name: Some("replay-client".to_string()),
+                },
+                BackendEvent::ClientDisconnected { client: 42 },
+            ],
+        );
+
+        assert_eq!(report.steps.len(), 2);
+
+        // 每个 BackendEvent 都必须先翻译成 CoreCommand，再由 State seam 修改 registry。
+        assert_eq!(
+            report.steps[0].command,
+            CoreCommand::RegisterClient {
+                client: Some(42),
+                kind: ClientKind::WaylandPlaceholder,
+                name: Some("replay-client".to_string()),
+            }
+        );
+        assert_eq!(
+            report.steps[0].result,
+            CommandResult::ClientRegistered {
+                client: 42,
+                registered: true,
+            }
+        );
+        assert_eq!(report.steps[1].command, CoreCommand::CloseClient(42));
+        assert_eq!(
+            report.steps[1].result,
+            CommandResult::ClientClosed {
+                client: 42,
+                marked_dead: true,
+                dead_surfaces: Vec::new(),
+                closed_windows: Vec::new(),
+                removed_from_workspace_count: 0,
+                marked_window_dead_count: 0,
+            }
+        );
+
+        // alive client 无 surface 以及随后保留 dead tombstone 都是合法状态。
+        assert!(report.steps.iter().all(|step| step.validation.is_clean()));
+        assert!(report.is_clean());
+        assert!(!state.clients.is_alive(42));
+        assert!(
+            !state
+                .debug_bundle()
+                .snapshot
+                .clients
+                .iter()
+                .find(|record| record.id == 42)
+                .expect("replay 结束后必须保留 client tombstone")
+                .alive
+        );
     }
 
     /// 验证 surface 创建、map 和关闭事件可以按顺序完成完整生命周期。

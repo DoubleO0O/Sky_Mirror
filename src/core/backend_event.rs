@@ -41,7 +41,8 @@ pub enum BackendEvent {
 
     /// 后端发现一个 Wayland client 断开。
     ///
-    /// 当前阶段只关闭 client 占位记录，不级联关闭 surface 或 window。
+    /// 该事件只表达外部断开事实；翻译后的 CloseClient 命令由 State 统一级联
+    /// 收束 client、surface、window、workspace 和 focus 的纯数据生命周期。
     ClientDisconnected {
         /// 断开的 client ID。
         client: ClientId,
@@ -314,6 +315,15 @@ mod tests {
 
         // surface 生命周期事件不能被错误翻译为按 WindowId 关闭。
         assert_eq!(command, CoreCommand::CloseSurface(42));
+    }
+
+    /// 验证窗口关闭事实会转换为按 WindowId 清理的核心命令。
+    #[test]
+    fn backend_event_window_closed_translates_to_close_window() {
+        let command = BackendEventTranslator::translate(BackendEvent::WindowClosed { window: 42 });
+
+        // 翻译器只保留纯数据 identity，不得直接读取或修改 workspace、focus 或 registry。
+        assert_eq!(command, CoreCommand::CloseWindow(42));
     }
 
     /// 验证输出尺寸变化会复用现有 ResizeOutput Action 语义。

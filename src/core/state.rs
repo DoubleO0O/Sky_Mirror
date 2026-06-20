@@ -77,8 +77,8 @@ impl CompositorState {
         // backend 初始化必须发生在运行阶段，而不是纯状态构造阶段。
         self.backend.init();
 
-        // 标记 compositor 已进入主循环。
-        // TODO: 后续增加退出 Action 时，应通过统一状态方法把该字段设回 false。
+        // Lifecycle invariant: `running` 只在集中状态边界修改；退出路径也必须通过
+        // 对应的统一状态操作更新它，不能由 backend 或 renderer 直接写入。
         self.running = true;
     }
 
@@ -120,10 +120,15 @@ impl CompositorState {
 
     /// 为当前 workspace 计算窗口 placement。
     ///
-    /// 如果 current_workspace ID 无效，则返回空列表；计算过程不修改状态。
+    /// 当前 `FocusState.slot` 会作为 Fullscreen 的优先可见 slot；如果该 slot 为空，
+    /// LayoutEngine 会回退到第一个 occupied slot。current_workspace ID 无效时返回空列表。
     pub fn current_layout(&self, output: OutputSize) -> Vec<WindowPlacement> {
         self.current_workspace()
-            .map(|workspace| LayoutEngine::compute_workspace(workspace, output))
+            .map(|workspace| {
+                // State 是同时拥有 workspace 与 FocusState 的最小 seam，因此由这里传递焦点。
+                // LayoutEngine 仍只消费纯数据，不读取或修改全局 compositor 状态。
+                LayoutEngine::compute_workspace_with_focus(workspace, Some(self.focus.slot), output)
+            })
             .unwrap_or_default()
     }
 
@@ -927,6 +932,22 @@ impl State {
         CommandHandler::handle(self, command)
     }
 
+    /// 处理命令并返回执行结果与命令后的状态验证报告。
+    ///
+    /// validation 只用于观测，不自动修复、拒绝或回滚命令产生的状态。
+    pub fn handle_command_with_validation(
+        &mut self,
+        command: CoreCommand,
+    ) -> (CommandResult, ValidationReport) {
+        // 旧命令入口继续是唯一状态修改 seam，兼容调用方无需迁移。
+        let result = self.handle_command(command);
+
+        // 命令完成后只读观察最终状态；报告不会修复、拒绝或回滚命令结果。
+        let validation = self.validate();
+
+        (result, validation)
+    }
+
     /// 暴露 workspace 切换的薄封装。
     ///
     /// 实际状态修改仍由 CompositorState 完成。
@@ -1062,10 +1083,17 @@ mod tests {
     use std::fs;
 
     use super::{CompositorState, State};
-    use crate::core::render::RenderCommand;
     use crate::core::session::{
         SessionFocus, SessionLayoutMode, SessionSlot, SessionSlotContent, SessionState,
         SessionWorkspace,
+    };
+    use crate::core::{
+        command::{CommandResult, CoreCommand},
+        layout::OutputSize,
+        render::RenderCommand,
+        surface::SurfaceRole,
+        validator::ValidationIssueKind,
+        workspace::LayoutMode,
     };
 
     /// 验证关闭焦点窗口后，CompositorState 会刷新到下一个已占用 slot。
@@ -1113,6 +1141,120 @@ mod tests {
 
         // workspace 删除成功后，同一 WindowId 的 metadata 必须标记为 dead。
         assert!(!state.registry.is_alive(focused));
+    }
+
+    /// 验证关闭非焦点窗口不会错误改变当前焦点。
+    #[test]
+    fn close_non_focused_window_preserves_focus() {
+        let mut state = State::new();
+        let focus_before = state.compositor.focus;
+        let non_focused = state
+            .compositor
+            .current_workspace()
+            .and_then(|workspace| workspace.slot_window(1))
+            .expect("默认 slot 1 必须包含非焦点窗口");
+
+        let result = state.close_window(non_focused);
+
+        assert!(result.removed_from_workspace);
+        assert!(result.marked_dead);
+
+        // 非焦点 slot 的生命周期变化不能让当前有效焦点漂移到其他窗口。
+        assert_eq!(state.compositor.focus, focus_before);
+        assert!(!state.registry.is_alive(non_focused));
+    }
+
+    /// 验证关闭焦点窗口后 Fullscreen 不会继续绘制 dead window。
+    #[test]
+    fn close_window_removes_dead_window_from_fullscreen_render_frame() {
+        let mut state = State::new();
+        let closed = state
+            .compositor
+            .focus
+            .window
+            .expect("默认状态必须包含焦点窗口");
+
+        let result = state.close_window(closed);
+        let frame = state.current_render_frame_for_current_output();
+
+        assert!(result.removed_from_workspace);
+        assert!(result.marked_dead);
+        assert!(!state.registry.is_alive(closed));
+
+        // focus 必须重新解析到合法 slot/window，不能继续指向已经销毁的 WindowId。
+        assert!(state.compositor.focus.slot < 4);
+        assert_ne!(state.compositor.focus.window, Some(closed));
+
+        // Fullscreen 只能从 workspace 可见引用生成命令，因此 dead window 不得残留。
+        assert!(frame.commands.iter().all(|command| {
+            let RenderCommand::DrawWindow { window, .. } = command;
+            *window != closed
+        }));
+        assert!(state.validate().is_valid());
+    }
+
+    /// 验证命令边界可以同时返回执行结果和命令后的结构化 validation report。
+    #[test]
+    fn handle_command_with_validation_reports_post_command_state() {
+        let mut state = State::new();
+        let window = state
+            .compositor
+            .focus
+            .window
+            .expect("默认状态必须包含焦点窗口");
+
+        let (result, validation) =
+            state.handle_command_with_validation(CoreCommand::CloseWindow(window));
+
+        let CommandResult::WindowClosed {
+            window: closed,
+            removed_from_workspace,
+            marked_dead,
+            ..
+        } = result
+        else {
+            panic!("CloseWindow 必须保留原有 WindowClosed 结果");
+        };
+
+        // validation 必须在命令完成后生成，因此已经关闭的窗口不能残留在 live path。
+        assert_eq!(closed, window);
+        assert!(removed_from_workspace);
+        assert!(marked_dead);
+        assert!(validation.is_clean());
+        assert_eq!(validation, state.validate());
+    }
+
+    /// 验证 command validation 只观察错误，不会自动修复损坏状态。
+    #[test]
+    fn handle_command_with_validation_does_not_repair_invalid_state() {
+        let mut state = State::new();
+        let surface = state.register_surface(SurfaceRole::XdgToplevel);
+        assert!(state.surfaces.bind_window(surface, 999));
+
+        let before = state
+            .surfaces
+            .get(surface)
+            .expect("损坏 surface 记录必须存在")
+            .clone();
+
+        let (_, validation) = state.handle_command_with_validation(CoreCommand::Validate);
+
+        // 结构化报告必须暴露错误，而不是只依赖 Validate 命令返回的文本。
+        assert!(
+            validation
+                .issues
+                .iter()
+                .any(|issue| { issue.kind == ValidationIssueKind::SurfaceReferencesMissingWindow })
+        );
+
+        // validation 是只读观测；非法绑定必须保持原样，交给明确的状态命令处理。
+        assert_eq!(
+            state
+                .surfaces
+                .get(surface)
+                .expect("validation 后记录必须继续存在"),
+            &before
+        );
     }
 
     /// 验证成功加载 session 后会重建 registry，不保留默认 mock metadata。
@@ -1187,5 +1329,42 @@ mod tests {
 
         // 默认 mock 窗口在初始状态下必须处于存活状态。
         assert!(metadata.alive);
+    }
+
+    /// 验证 Fullscreen 渲染链路显示当前 focused slot，而不是固定显示 slot 0。
+    #[test]
+    fn fullscreen_render_frame_uses_focused_slot() {
+        let mut compositor = CompositorState::new();
+        compositor.assign_window_to_current_workspace(1);
+        compositor.assign_window_to_current_workspace(2);
+        compositor.set_current_layout(LayoutMode::Fullscreen);
+        compositor.focus_slot(1);
+
+        let frame = compositor.current_render_frame(OutputSize {
+            width: 1920,
+            height: 1080,
+        });
+
+        // Fullscreen 渲染帧只能包含当前 focused slot 的一个窗口。
+        assert_eq!(frame.commands.len(), 1);
+        let RenderCommand::DrawWindow {
+            window,
+            focused,
+            rect,
+            ..
+        } = &frame.commands[0];
+
+        // focused slot 1 对应窗口 2；该窗口必须既可见又保持 focused 标记。
+        assert_eq!(*window, 2);
+        assert!(*focused);
+        assert_eq!(
+            *rect,
+            crate::core::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            }
+        );
     }
 }

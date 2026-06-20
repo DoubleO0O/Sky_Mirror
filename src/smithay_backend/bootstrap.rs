@@ -1,7 +1,7 @@
 //! Smithay Display 与 Wayland socket 的组合探针。
 //!
-//! 本模块只在 Linux 上启用 `smithay-linux` feature 时编译。当前阶段只验证
-//! Display 探针和 socket 探针可以被同一个 bootstrap 结构同时持有。
+//! 本模块只在 Linux 上启用 `smithay-linux` feature 时编译，用于验证 Display
+//! 探针和 socket 探针可以被同一个 bootstrap 结构同时持有。
 //!
 //! 该组合探针不会把 socket 加入 calloop，不接收或注册真实 client，也不会创建
 //! `SurfaceId` 或 `WindowId`。未来真实 client 连接仍然必须先经过后端驱动边界，
@@ -16,8 +16,8 @@ use crate::smithay_backend::{
 
 /// Smithay bootstrap 当前运行模式。
 ///
-/// 当前阶段只允许 `ProbeOnly`，表示 Display 和 socket 仅被构造出来，
-/// 但不会进入真实 compositor 事件循环。
+/// 唯一模式 `ProbeOnly` 表示 Display 和 socket 仅被构造出来，但不会进入真实
+/// compositor 事件循环。资源所有权与运行能力是两个独立事实。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmithayBootstrapMode {
     /// 纯探针模式。
@@ -109,7 +109,7 @@ impl SmithayBootstrapProbe {
         self.socket.mode()
     }
 
-    /// 返回当前阶段说明。
+    /// 返回稳定的探针模式说明，供日志和测试使用。
     pub fn mode_description(&self) -> &'static str {
         "smithay-bootstrap-probe-only"
     }

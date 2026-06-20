@@ -92,8 +92,8 @@ impl InputSimulator {
     /// KeybindingMap 只负责返回输入事件，不产生 Action，也不访问全局状态。
     /// 这里模拟的是“按下 Super + 指定按键”，用于验证真实键盘尚未接入时的映射链路。
     ///
-    /// TODO: 后续接入真实 Smithay keyboard 后，应使用真实 key event 和 modifier 状态
-    /// 构造 KeyChord，并替换当前固定使用 Super 修饰键的模拟入口。
+    /// Contract: 真实键盘来源应从实际 key/modifier 状态构造 `KeyChord`，但仍通过
+    /// 相同的 `KeybindingMap` 和 `InputEvent` 边界提交语义输入。
     fn simulate_key(&self, key: Key) -> Option<InputEvent> {
         self.keybindings.resolve(KeyChord::super_key(key))
     }
@@ -109,7 +109,7 @@ impl InputSimulator {
         // 优先恢复到默认虚拟输出尺寸。
         //
         // ResizeOutput 不是键盘快捷键语义，因此不经过 KeybindingMap。
-        // TODO: 后续接入真实 backend/output 后，应由真实输出模式变化事件替换该分支。
+        // Boundary: 系统 output 接入后只替换事件来源，仍提交相同的 ResizeOutput。
         if self.tick % 900 == 0 {
             return Some(InputEvent::ResizeOutput {
                 width: 1920,
@@ -120,7 +120,7 @@ impl InputSimulator {
         // 模拟一次较小输出模式，验证布局和 RenderFrame 会使用 OutputState。
         //
         // 与上一个 resize 分支相同，这里直接产生 InputEvent，而不是伪装成键盘按键。
-        // TODO: 真实 output resize 接入后删除该 tick 模拟，保留相同 InputEvent 边界。
+        // 该分支属于确定性测试输入，不表示系统 output mode 已发生变化。
         if self.tick % 600 == 0 {
             return Some(InputEvent::ResizeOutput {
                 width: 1366,
@@ -162,8 +162,7 @@ impl InputSimulator {
         }
 
         // 当前 tick 没有命中任何模拟输入，EventLoop 继续等待下一轮。
-        //
-        // TODO: 后续接入真实 Smithay keyboard 后，应由真实键盘事件替换该 tick 逻辑。
+        // 无事件是正常轮询结果，不是输入 backend 错误。
         None
     }
 }
