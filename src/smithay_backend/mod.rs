@@ -562,10 +562,6 @@ mod nested_socket_probe_gate_tests {
         }
 
         for conservative in [
-            "runtime_orchestrator_available: false",
-            "start_run_stop_available: false",
-            "external_stop_supported: false",
-            "clean_shutdown_supported: false",
             "long_running_loop_available: false",
             "accepts_clients: false",
             "runtime_accept_loop_started: false",
@@ -592,6 +588,43 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !production_code.contains(&forbidden),
                 "runtime orchestrator 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Linux lifecycle proof 通过后，只允许上调已被证明的 orchestration capability。
+    #[test]
+    fn runtime_orchestrator_proof_capabilities_are_precise() {
+        let source = include_str!("nested_runtime_orchestrator.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+
+        for proven in [
+            "runtime_orchestrator_available: true",
+            "start_run_stop_available: true",
+            "external_stop_supported: true",
+            "clean_shutdown_supported: true",
+        ] {
+            assert!(
+                production.contains(proven),
+                "C 路线缺少 Linux proof 支持的 capability: {proven}"
+            );
+        }
+
+        for still_unproven in [
+            "long_running_loop_available: false",
+            "accepts_clients: false",
+            "runtime_accept_loop_started: false",
+            "protocol_dispatch_started: false",
+            "surface_support: false",
+            "shell_role_support: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production.contains(still_unproven),
+                "C 路线不得上调未证明 capability: {still_unproven}"
             );
         }
     }

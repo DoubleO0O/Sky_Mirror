@@ -79,19 +79,16 @@ impl NestedRuntimeOrchestratorReadinessReport {
     }
 }
 
-/// 返回 Phase 51N B 路线的保守 orchestration readiness。
-#[must_use = "orchestration interface 不能代替 Linux lifecycle proof"]
+/// 返回 Phase 51N C 路线的精确 orchestration readiness。
+#[must_use = "orchestration proof 不能代替完整 compositor runtime"]
 pub fn nested_runtime_orchestrator_readiness_report() -> NestedRuntimeOrchestratorReadinessReport {
     NestedRuntimeOrchestratorReadinessReport {
-        blockers: vec![
-            NestedRuntimeOrchestratorBlocker::MissingLinuxLifecycleProof,
-            NestedRuntimeOrchestratorBlocker::MissingCompleteRuntimeLoop,
-        ],
+        blockers: vec![NestedRuntimeOrchestratorBlocker::MissingCompleteRuntimeLoop],
         orchestration_boundary_defined: true,
-        runtime_orchestrator_available: false,
-        start_run_stop_available: false,
-        external_stop_supported: false,
-        clean_shutdown_supported: false,
+        runtime_orchestrator_available: true,
+        start_run_stop_available: true,
+        external_stop_supported: true,
+        clean_shutdown_supported: true,
         long_running_loop_available: false,
         accepts_clients: false,
         runtime_accept_loop_started: false,
@@ -478,23 +475,20 @@ mod tests {
         }
     }
 
-    /// B 路线只声明 orchestration interface，不预先声称 Linux lifecycle proof。
+    /// C 路线只上调 Linux CI 已证明的 start/run/stop capability。
     #[test]
-    fn runtime_orchestrator_keeps_complete_runtime_capabilities_false() {
+    fn runtime_orchestrator_linux_proof_capabilities_are_precise() {
         let report = nested_runtime_orchestrator_readiness_report();
 
         assert_eq!(
             report.blockers,
-            vec![
-                NestedRuntimeOrchestratorBlocker::MissingLinuxLifecycleProof,
-                NestedRuntimeOrchestratorBlocker::MissingCompleteRuntimeLoop,
-            ]
+            vec![NestedRuntimeOrchestratorBlocker::MissingCompleteRuntimeLoop]
         );
         assert!(report.orchestration_boundary_defined);
-        assert!(!report.runtime_orchestrator_available);
-        assert!(!report.start_run_stop_available);
-        assert!(!report.external_stop_supported);
-        assert!(!report.clean_shutdown_supported);
+        assert!(report.runtime_orchestrator_available);
+        assert!(report.start_run_stop_available);
+        assert!(report.external_stop_supported);
+        assert!(report.clean_shutdown_supported);
         assert!(!report.long_running_loop_available);
         assert!(!report.accepts_clients);
         assert!(!report.runtime_accept_loop_started);
@@ -503,7 +497,7 @@ mod tests {
         assert!(!report.shell_role_support);
         assert!(!report.render_support);
         assert!(!report.input_support);
-        assert!(!report.is_start_run_stop_ready());
+        assert!(report.is_start_run_stop_ready());
     }
 
     /// start 必须真实创建 loop，并从 Created 转换到 Started。
@@ -674,7 +668,10 @@ mod tests {
         assert!(report.errors.is_empty());
         assert!(report.is_clean_shutdown());
         assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Stopped);
-        assert!(!report.readiness.runtime_orchestrator_available);
+        assert!(report.readiness.runtime_orchestrator_available);
+        assert!(report.readiness.start_run_stop_available);
+        assert!(report.readiness.external_stop_supported);
+        assert!(report.readiness.clean_shutdown_supported);
         assert!(!report.readiness.long_running_loop_available);
     }
 
