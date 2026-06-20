@@ -432,6 +432,13 @@ impl NestedRealAcceptFlow {
         &self.socket_name
     }
 
+    /// 返回可唤醒本 flow calloop poll 的 cloneable signal。
+    ///
+    /// signal 只中断 event-loop wait，不接触 callback data、Display 或 core state。
+    pub(crate) fn loop_signal(&self) -> calloop::LoopSignal {
+        self.event_loop.get_signal()
+    }
+
     /// 运行一轮 accept callback，并把成功 insertion 的 connected event 提交到 core。
     ///
     /// `timeout` 只控制本轮 poll 等待；本方法不会进入长期运行循环。callback 只写

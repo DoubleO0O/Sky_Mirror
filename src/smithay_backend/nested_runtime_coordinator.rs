@@ -202,6 +202,11 @@ impl NestedRuntimeCoordinator {
         self.flow.socket_name()
     }
 
+    /// 返回只用于唤醒 accept-source poll 的 cloneable calloop signal。
+    pub(crate) fn loop_signal(&self) -> smithay::reexports::calloop::LoopSignal {
+        self.flow.loop_signal()
+    }
+
     /// 执行一次 accept/connected → Display dispatch → disconnected lifecycle pump。
     ///
     /// accept 与 dispatch 错误会进入 report；coordinator 不 panic，也不会绕过既有

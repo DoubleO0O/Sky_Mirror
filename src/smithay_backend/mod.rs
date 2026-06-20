@@ -298,7 +298,7 @@ pub use nested_runtime_coordinator::{
 pub use nested_runtime_loop::{
     NestedRuntimeLoop, NestedRuntimeLoopBlocker, NestedRuntimeLoopConfig, NestedRuntimeLoopError,
     NestedRuntimeLoopExitReason, NestedRuntimeLoopReadinessReport, NestedRuntimeLoopReport,
-    NestedRuntimeLoopStopHandle, nested_runtime_loop_readiness_report,
+    NestedRuntimeLoopStopHandle, NestedRuntimeWakeupReport, nested_runtime_loop_readiness_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -610,6 +610,67 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 production.contains(conservative),
                 "C 路线越级上调了未证明 capability: {conservative}"
+            );
+        }
+    }
+
+    /// 验证 wakeup boundary 使用真实 calloop signal，不以轮询或 core mutation 伪造中断。
+    #[test]
+    fn nested_runtime_wakeup_source_preserves_interrupt_seam() {
+        let source = include_str!("nested_runtime_loop.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "pub struct NestedRuntimeWakeupReport",
+            "pub fn request_stop_and_wakeup",
+            "pub fn is_waiting",
+            "LoopSignal",
+            ".wakeup()",
+            "NestedRuntimeLoopExitReason::Interrupted",
+            "wait_interrupted",
+            "elapsed_before_exit",
+            "exited_before_timeout",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "runtime wakeup 缺少必要 interrupt seam token: {required}"
+            );
+        }
+
+        for conservative in [
+            "wakeup_supported: false",
+            "interruptible_wait_available: false",
+            "stop_can_interrupt_wait: false",
+            "long_running_loop_available: false",
+            "runtime_accept_loop_started: false",
+            "protocol_dispatch_started: false",
+            "surface_support: false",
+            "render_support: false",
+        ] {
+            assert!(
+                production_code.contains(conservative),
+                "B 路线缺少保守 wakeup capability: {conservative}"
+            );
+        }
+
+        for forbidden in [
+            "thread::sleep".to_owned(),
+            "spin_loop".to_owned(),
+            ["State", "::handle_command"].concat(),
+            [".", "clients"].concat(),
+            [".", "surfaces"].concat(),
+            [".", "registry"].concat(),
+        ] {
+            assert!(
+                !production_code.contains(&forbidden),
+                "runtime wakeup 生产代码包含禁止 token: {forbidden}"
             );
         }
     }
