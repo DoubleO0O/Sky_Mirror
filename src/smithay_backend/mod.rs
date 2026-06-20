@@ -538,6 +538,32 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// 验证 Phase 51J-C runtime proof 必须真实关闭 peer 并 dispatch Display。
+    #[test]
+    fn runtime_disconnect_proof_source_requires_peer_close_and_display_dispatch() {
+        let display_source = include_str!("wayland_display.rs");
+        let accept_source = include_str!("real_accept_flow.rs");
+
+        // Display probe 只暴露一次真实 backend dispatch，不允许用 kill_client 伪造断开。
+        assert!(display_source.contains("pub(crate) fn dispatch_clients_once"));
+        assert!(display_source.contains("self.display.dispatch_clients(&mut self.state)"));
+        assert!(!display_source.contains("kill_client"));
+
+        // Linux-only test 必须按 peer close -> dispatch -> queue -> bridge 顺序取证。
+        for required in [
+            "fn runtime_disconnect_callback_closes_core_client()",
+            "drop(client_stream);",
+            ".dispatch_wayland_clients_once()",
+            ".bridge_pending_disconnects(&mut state)",
+            "NestedClientSessionEventKind::Disconnected",
+        ] {
+            assert!(
+                accept_source.contains(required),
+                "runtime disconnect proof 缺少必要 token: {required}"
+            );
+        }
+    }
+
     /// 验证真实 accept connected flow 的模块声明与公共导出都保持 Linux-only。
     #[test]
     fn real_accept_connected_flow_is_linux_only() {

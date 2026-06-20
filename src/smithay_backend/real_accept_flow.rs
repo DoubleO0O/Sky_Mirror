@@ -496,6 +496,11 @@ impl NestedRealAcceptFlow {
         )
     }
 
+    // 只让 Display backend 观察真实 socket readiness/EOF；callback 不直接接触 core。
+    fn dispatch_wayland_clients_once(&mut self) -> std::io::Result<usize> {
+        self.display.dispatch_clients_once()
+    }
+
     /// 只读访问 persistent backend-client/session mapping。
     pub fn mapping(&self) -> &NestedAcceptedClientMapping {
         &self.loop_data.mapping
@@ -575,11 +580,15 @@ mod tests {
         bridge_connected_events, nested_real_accept_connected_bridge_readiness_report,
     };
     use crate::{
-        core::{runtime_bridge::NestedClientSessionBridgeOutcome, state::State},
+        core::{
+            backend_event::BackendEvent, command::CoreCommand,
+            runtime_bridge::NestedClientSessionBridgeOutcome, state::State,
+        },
         smithay_backend::{
             client_insert::NestedClientInsertCompileBoundary,
             client_session::{
-                NestedClientSessionEvent, NestedClientSessionEventLog, NestedClientSessionId,
+                NestedClientSessionEvent, NestedClientSessionEventKind,
+                NestedClientSessionEventLog, NestedClientSessionId,
             },
             test_support::{assert_runtime_dir, unique_socket_name},
         },
@@ -799,5 +808,78 @@ mod tests {
         assert!(state.clients.is_alive(core_clients[0]));
         assert!(!report.readiness.accepts_clients);
         assert!(!report.readiness.real_accept_loop_available);
+    }
+
+    /// Linux-only 真实证明：peer close 经 Display dispatch 触发 callback 并关闭 core client。
+    #[test]
+    fn runtime_disconnect_callback_closes_core_client() {
+        // Arrange：真实 socket callback 必须先完成 accept、insert、session mapping 与 core register。
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("runtime-disconnect-callback");
+        let mut flow = NestedRealAcceptFlow::with_socket_name(&socket_name)
+            .expect("真实 accept flow 必须绑定 socket 并注册 callback source");
+        let runtime_dir =
+            std::env::var_os("XDG_RUNTIME_DIR").expect("Linux Smithay 测试需要 XDG_RUNTIME_DIR");
+        let socket_path = Path::new(&runtime_dir).join(flow.socket_name());
+        let client_stream =
+            UnixStream::connect(socket_path).expect("测试 peer 必须连接真实 Wayland socket");
+        let mut state = State::new();
+        let connected = flow
+            .pump_once(&mut state, Duration::from_secs(1))
+            .expect("event loop 必须处理真实 listening socket readiness");
+        let session = connected.connected_records[0]
+            .session
+            .expect("真实 insertion record 必须保留 session identity");
+        let core_client = connected.registered_core_clients()[0];
+        assert!(state.clients.is_alive(core_client));
+        assert_eq!(flow.mapping().len(), 1);
+        assert_eq!(flow.active_core_session_count(), 1);
+
+        // Act：只关闭真实 peer；随后 Display dispatch 从 EOF 触发 ClientData callback。
+        // callback 只能把 session event 写入队列，core close 仍由 coordinator bridge 执行。
+        drop(client_stream);
+        flow.dispatch_wayland_clients_once()
+            .expect("Display 必须处理 peer EOF 并触发 disconnect callback");
+        assert_eq!(
+            flow.loop_data.insert_boundary.event_queue().len(),
+            1,
+            "真实 callback 必须先产生一个待 bridge 的 Disconnected event"
+        );
+        let disconnected = flow.bridge_pending_disconnects(&mut state);
+
+        // Assert：record/session、既有 event-command seam、mapping cleanup 与 validation 同时成立。
+        assert_eq!(disconnected.disconnected_count(), 1);
+        assert_eq!(disconnected.disconnected_records[0].session, Some(session));
+        assert_eq!(
+            disconnected.disconnected_records[0].kind,
+            NestedClientSessionEventKind::Disconnected
+        );
+        assert_eq!(disconnected.closed_core_clients(), vec![core_client]);
+        let NestedClientSessionBridgeOutcome::Disconnected { runtime, .. } =
+            &disconnected.bridge_outcomes[0]
+        else {
+            panic!("真实 callback record 必须生成 Disconnected outcome");
+        };
+        assert_eq!(
+            runtime.event,
+            BackendEvent::ClientDisconnected {
+                client: core_client
+            }
+        );
+        assert_eq!(runtime.command, CoreCommand::CloseClient(core_client));
+        assert!(runtime.validation.is_clean());
+        assert_eq!(disconnected.all_observed_validations_clean, Some(true));
+        assert_eq!(disconnected.removed_backend_mapping_count, 1);
+        assert!(flow.mapping().is_empty());
+        assert_eq!(flow.active_core_session_count(), 0);
+        assert!(!state.clients.is_alive(core_client));
+        assert!(state.clients.get(core_client).is_some());
+        assert!(state.validate().is_clean());
+
+        // callback event 已被消费；重复 pump 不会制造第二次 close。
+        let duplicate = flow.bridge_pending_disconnects(&mut state);
+        assert_eq!(duplicate.disconnected_count(), 0);
+        assert!(duplicate.closed_core_clients().is_empty());
+        assert!(state.validate().is_clean());
     }
 }
