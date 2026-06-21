@@ -80,6 +80,9 @@ pub mod linux_runtime;
 /// Linux-only xdg-shell global 与 request-handler 的编译边界；不注册真实 global。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_xdg_shell;
+/// Linux-only Smithay toplevel ObjectId 到 AdapterToplevelId 的 ownership registry。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_xdg_toplevel_identity;
 /// Linux-only accept/dispatch/disconnect lifecycle 的单次 pump coordinator。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod nested_runtime_coordinator;
@@ -148,6 +151,8 @@ pub mod wayland_socket;
 /// 窗口候选意图到核心接纳动作的纯数据预检层。
 #[cfg(feature = "smithay-probe")]
 pub mod window_admission_preview;
+/// Adapter-owned xdg toplevel identity registry 的跨平台纯数据事务核心。
+pub mod xdg_toplevel_identity;
 
 // 这些 re-export 构成 feature 模块的公共门面；二进制入口当前不直接消费全部类型。
 #[allow(unused_imports)]
@@ -302,6 +307,14 @@ pub use linux_xdg_shell::{
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_xdg_toplevel_identity::{
+    LinuxXdgToplevelIdentityBlocker, LinuxXdgToplevelIdentityKey,
+    LinuxXdgToplevelIdentityOperationError, LinuxXdgToplevelIdentityReadinessReport,
+    LinuxXdgToplevelIdentityRegistry, LinuxXdgToplevelIdentitySourceError,
+    linux_xdg_toplevel_identity_readiness_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_runtime_coordinator::{
     NestedRuntimeCoordinator, NestedRuntimeCoordinatorBlocker,
     NestedRuntimeCoordinatorReadinessReport, NestedRuntimePumpError, NestedRuntimePumpErrorKind,
@@ -426,6 +439,8 @@ pub use window_admission_preview::{
     BackendWindowAdmissionPreviewAction, BackendWindowAdmissionPreviewReport,
     BackendWindowAdmissionPreviewWarning, WindowAdmissionPreviewPlanner,
 };
+#[allow(unused_imports)]
+pub use xdg_toplevel_identity::{XdgToplevelIdentityError, XdgToplevelIdentityMapping};
 
 #[cfg(feature = "smithay-probe")]
 use crate::core::{
@@ -1621,6 +1636,83 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 production_code.contains(conservative_field),
                 "xdg-shell compile seam 缺少保守真值: {conservative_field}"
+            );
+        }
+    }
+
+    /// 验证 xdg toplevel identity mapping 的声明与导出严格保持 Linux-only。
+    #[test]
+    fn linux_xdg_toplevel_identity_mapping_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod linux_xdg_toplevel_identity;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub use linux_xdg_toplevel_identity::{")
+            .collect::<Vec<_>>();
+
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 Linux identity wrapper 只保存 ObjectId key，不触发 ledger/core/input。
+    #[test]
+    fn linux_xdg_toplevel_identity_keeps_production_boundary_conservative() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/smithay_backend/linux_xdg_toplevel_identity.rs");
+        let source = std::fs::read_to_string(path).expect("Phase 52F Linux identity 模块必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "ObjectId",
+            "ToplevelSurface",
+            ".xdg_toplevel().id()",
+            "IdentitySourceNotStable",
+            "SmithayIdentityUnavailable",
+            "identity_mapping_available: true",
+            "identity_source_stable: true",
+            "ledger_unmap_invoked: false",
+            "callback_observed: false",
+            "real_xdg_shell_runtime_available: false",
+            "protocol_dispatch_started: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "Phase 52F identity wrapper 缺少边界证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "ToplevelSurface>",
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent",
+            "CoreCommand",
+            "crate::core",
+            "SeatHandler",
+            "XdgShellState::new",
+        ] {
+            assert!(
+                !production_code.contains(forbidden),
+                "Phase 52F identity wrapper 包含禁止生产 token: {forbidden}"
             );
         }
     }
