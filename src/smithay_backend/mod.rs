@@ -77,6 +77,9 @@ pub mod linux_handler_probe;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only xdg-shell global 与 request-handler 的编译边界；不注册真实 global。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_xdg_shell;
 /// Linux-only accept/dispatch/disconnect lifecycle 的单次 pump coordinator。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod nested_runtime_coordinator;
@@ -291,6 +294,12 @@ pub use linux_handler_probe::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_xdg_shell::{
+    LinuxXdgShellCompileBlocker, LinuxXdgShellCompileReport, LinuxXdgShellStateSkeleton,
+    linux_xdg_shell_readiness_report,
+};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_runtime_coordinator::{
@@ -1545,6 +1554,73 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !production_code.contains(&forbidden),
                 "nested socket flow 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// 验证 xdg-shell 编译边界的声明与导出都严格保持 Linux-only。
+    #[test]
+    fn linux_xdg_shell_compile_boundary_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod linux_xdg_shell;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub use linux_xdg_shell::{")
+            .collect::<Vec<_>>();
+
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 Linux-only handler 只建立编译形状，不触发 ledger 或核心 mutation。
+    #[test]
+    fn linux_xdg_shell_boundary_does_not_trigger_ledger_unmap() {
+        let source = include_str!("linux_xdg_shell.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for forbidden in [
+            "SurfaceXdgAdmissionLedger",
+            ".unmap_toplevel(",
+            "BackendEvent::ToplevelUnmapped",
+            "CoreCommand::DetachWindowFromSurface",
+            "State::detach_window_from_surface",
+            "SurfaceRegistry",
+            "WindowRegistry",
+            "Workspace",
+        ] {
+            assert!(
+                !production_code.contains(forbidden),
+                "xdg-shell compile seam 包含禁止生产调用: {forbidden}"
+            );
+        }
+
+        for conservative_field in [
+            "xdg_unmap_callback_observed: false",
+            "ledger_unmap_invoked_from_linux_boundary: false",
+            "real_xdg_shell_runtime_available: false",
+            "protocol_dispatch_started: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production_code.contains(conservative_field),
+                "xdg-shell compile seam 缺少保守真值: {conservative_field}"
             );
         }
     }
