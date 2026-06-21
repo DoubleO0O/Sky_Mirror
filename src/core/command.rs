@@ -7,7 +7,7 @@
 use crate::core::{
     action::Action,
     client::{ClientId, ClientKind},
-    state::State,
+    state::{DetachWindowFromSurfaceError, DetachWindowFromSurfaceResult, State},
     surface::{SurfaceId, SurfaceRole},
     window::WindowKind,
     workspace::WindowId,
@@ -120,10 +120,23 @@ pub enum CoreCommand {
         kind: WindowKind,
     },
 
+    /// 将逻辑窗口从仍存活的 surface 上 detach。
+    ///
+    /// 该命令用于 core 纯数据 toplevel unmap：结束 WindowId 的 active 生命周期，
+    /// 清除精确 `SurfaceId -> WindowId` link，但不得关闭 SurfaceId。它与
+    /// terminal `CloseWindow` 不是同义命令。
+    DetachWindowFromSurface {
+        /// 应继续保持存活的 surface identity。
+        surface: SurfaceId,
+
+        /// 应被 detach 并结束 active 生命周期的 window identity。
+        window: WindowId,
+    },
+
     /// 关闭指定逻辑窗口。
     ///
-    /// 与 CloseFocusedWindow 不同，该命令用于未来 client unmap / destroy：
-    /// 外部系统已经知道具体 WindowId，因此不依赖当前焦点。
+    /// 与 toplevel detach 不同，这是 terminal close：它会结束窗口以及绑定
+    /// surface 的生命周期。外部系统已经知道具体 WindowId，因此不依赖当前焦点。
     CloseWindow(WindowId),
 
     /// 关闭或销毁指定 surface。
@@ -227,6 +240,18 @@ pub enum CommandResult {
 
         /// surface 是否成功绑定到窗口。
         bound: bool,
+    },
+
+    /// Toplevel detach 的成功结果或结构化拒绝原因。
+    ToplevelDetached {
+        /// 请求 detach 的 surface identity。
+        surface: SurfaceId,
+
+        /// 请求 detach 的 window identity。
+        window: WindowId,
+
+        /// 成功时包含 workspace/window cleanup；拒绝时不修改 State。
+        result: Result<DetachWindowFromSurfaceResult, DetachWindowFromSurfaceError>,
     },
 
     /// 指定窗口已关闭或已标记为 dead。
@@ -371,7 +396,16 @@ impl CommandHandler {
                     bound: result.bound,
                 }
             }
-            // 外部 unmap/destroy 已知具体 ID，不依赖当前焦点。
+            // Toplevel unmap 通过 State 统一验证 pair 并协调 link/workspace/focus/window。
+            CoreCommand::DetachWindowFromSurface { surface, window } => {
+                let result = state.detach_window_from_surface(surface, window);
+                CommandResult::ToplevelDetached {
+                    surface,
+                    window,
+                    result,
+                }
+            }
+            // Terminal close 已知具体 WindowId，不依赖当前焦点，并保留原有 surface cascade。
             CoreCommand::CloseWindow(window) => {
                 let result = state.close_window(window);
                 CommandResult::WindowClosed {
@@ -975,6 +1009,41 @@ mod tests {
                 .window_ids()
                 .contains(&window)
         );
+    }
+
+    /// 验证 detach command 清理 window/link，但保持 surface alive。
+    #[test]
+    fn command_detach_toplevel_keeps_surface_alive() {
+        let mut state = State::new();
+        let surface = state.register_surface(SurfaceRole::XdgToplevel);
+        let mapped = state.handle_command(CoreCommand::RegisterWindowForSurface {
+            surface,
+            title: "Detached".to_string(),
+            app_id: None,
+            kind: WindowKind::WaylandPlaceholder,
+        });
+        let CommandResult::WindowRegisteredForSurface { window, .. } = mapped else {
+            panic!("测试 surface 必须成功 map 成窗口");
+        };
+
+        let result = state.handle_command(CoreCommand::DetachWindowFromSurface { surface, window });
+        let CommandResult::ToplevelDetached {
+            surface: detached_surface,
+            window: detached_window,
+            result: Ok(detached),
+        } = result
+        else {
+            panic!("detach command 必须返回成功的 ToplevelDetached");
+        };
+
+        assert_eq!(detached_surface, surface);
+        assert_eq!(detached_window, window);
+        assert!(detached.removed_from_workspace);
+        assert!(detached.marked_window_dead);
+        assert!(state.surfaces.is_alive(surface));
+        assert_eq!(state.surfaces.window_for_surface(surface), None);
+        assert!(!state.registry.is_alive(window));
+        assert!(state.validate().is_clean());
     }
 
     /// 验证关闭 surface 命令会结束 surface 并同步关闭绑定窗口。

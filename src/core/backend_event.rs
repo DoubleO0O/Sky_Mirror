@@ -88,6 +88,18 @@ pub enum BackendEvent {
         kind: WindowKind,
     },
 
+    /// 已映射 toplevel 被 unmap，但底层 surface 仍保持存活。
+    ///
+    /// 该纯数据事实只携带已知 ID，不代表真实 XDG callback 或 protocol dispatch
+    /// 已经接入；core 会验证精确 link 后 detach WindowId。
+    ToplevelUnmapped {
+        /// 仍应保持存活的 surface identity。
+        surface: SurfaceId,
+
+        /// 需要从 surface detach 并结束 active 生命周期的窗口 identity。
+        window: WindowId,
+    },
+
     /// 已存在 surface 与一个已存在窗口建立绑定。
     SurfaceBoundToWindow {
         /// 已存在的 surface ID。
@@ -97,13 +109,13 @@ pub enum BackendEvent {
         window: WindowId,
     },
 
-    /// surface 被 unmap 或 destroy。
+    /// surface 被 terminal close 或 destroy。
     SurfaceClosed {
         /// 被关闭的 surface ID。
         surface: SurfaceId,
     },
 
-    /// 后端请求关闭指定窗口。
+    /// 后端请求 terminal close 指定窗口及其绑定 surface。
     WindowClosed {
         /// 被关闭的逻辑窗口 ID。
         window: WindowId,
@@ -174,6 +186,9 @@ impl BackendEventTranslator {
                 app_id,
                 kind,
             },
+            BackendEvent::ToplevelUnmapped { surface, window } => {
+                CoreCommand::DetachWindowFromSurface { surface, window }
+            }
             BackendEvent::SurfaceBoundToWindow { surface, window } => {
                 CoreCommand::BindSurfaceToWindow { surface, window }
             }
@@ -315,6 +330,23 @@ mod tests {
 
         // surface 生命周期事件不能被错误翻译为按 WindowId 关闭。
         assert_eq!(command, CoreCommand::CloseSurface(42));
+    }
+
+    /// 验证 toplevel unmap 事实会保留精确 surface/window pair。
+    #[test]
+    fn backend_event_toplevel_unmapped_translates_to_detach_window_from_surface() {
+        let command = BackendEventTranslator::translate(BackendEvent::ToplevelUnmapped {
+            surface: 42,
+            window: 7,
+        });
+
+        assert_eq!(
+            command,
+            CoreCommand::DetachWindowFromSurface {
+                surface: 42,
+                window: 7,
+            }
+        );
     }
 
     /// 验证窗口关闭事实会转换为按 WindowId 清理的核心命令。

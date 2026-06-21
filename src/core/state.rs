@@ -520,6 +520,60 @@ pub struct CloseWindowResult {
     pub dead_surfaces: usize,
 }
 
+/// 从存活 surface detach 逻辑窗口后的核心状态修改结果。
+///
+/// WindowRegistry 继续保留 dead tombstone 供诊断；“移除窗口”表示 workspace/focus
+/// 不再引用该 ID，且窗口不再 active。surface 记录与 `alive` 状态保持不变。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetachWindowFromSurfaceResult {
+    /// 是否从任意 workspace 中移除了窗口引用。
+    pub removed_from_workspace: bool,
+
+    /// 是否在 WindowRegistry 中成功将窗口标记为 dead。
+    pub marked_window_dead: bool,
+}
+
+/// Toplevel detach 在修改核心状态前发现的结构化拒绝原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetachWindowFromSurfaceError {
+    /// 请求的 SurfaceId 不存在。
+    UnknownSurface {
+        /// 未找到的 surface identity。
+        surface: SurfaceId,
+    },
+    /// SurfaceId 存在但已经结束生命周期。
+    SurfaceNotAlive {
+        /// 已经 dead 的 surface identity。
+        surface: SurfaceId,
+    },
+    /// 请求的 WindowId 不存在。
+    UnknownWindow {
+        /// 未找到的 window identity。
+        window: WindowId,
+    },
+    /// WindowId 存在但已经结束生命周期，例如重复 detach。
+    WindowNotAlive {
+        /// 已经 dead 的 window identity。
+        window: WindowId,
+    },
+    /// SurfaceId 当前没有绑定到请求的 WindowId。
+    SurfaceWindowMismatch {
+        /// 请求 detach 的 surface identity。
+        surface: SurfaceId,
+        /// 请求 detach 的 window identity。
+        requested_window: WindowId,
+        /// surface 当前实际绑定的窗口；未绑定时为 None。
+        bound_window: Option<WindowId>,
+    },
+    /// 另一个存活 surface 也绑定了目标 WindowId，无法安全结束窗口。
+    WindowBoundToOtherSurface {
+        /// 被多个 surface 引用的 window identity。
+        window: WindowId,
+        /// 阻止本次 detach 的另一个存活 surface identity。
+        other_surface: SurfaceId,
+    },
+}
+
 /// 关闭 client 后的纯数据级联结果。
 ///
 /// 该结果不代表真实 Wayland client 已经被 display 移除，只表示核心占位模型
@@ -831,10 +885,81 @@ impl State {
         return closed;
     }
 
+    /// 将逻辑窗口从存活 surface 上 detach，并清理窗口的 active core 状态。
+    ///
+    /// detach 与 [`State::close_window`] 的 terminal close 语义不同：本方法会
+    /// 清除 `SurfaceId -> WindowId` link、移除 workspace/focus 引用并结束窗口，
+    /// 但必须保持 surface alive。它只表达 core ID 生命周期，不代表真实
+    /// `xdg_toplevel` unmap callback 已接入。
+    ///
+    /// # Errors
+    ///
+    /// surface/window 不存在、已经 dead，或当前 link 与请求 pair 不匹配时，
+    /// 在任何 mutation 之前返回 [`DetachWindowFromSurfaceError`]。
+    pub fn detach_window_from_surface(
+        &mut self,
+        surface: SurfaceId,
+        window: WindowId,
+    ) -> Result<DetachWindowFromSurfaceResult, DetachWindowFromSurfaceError> {
+        let Some(surface_record) = self.surfaces.get(surface) else {
+            return Err(DetachWindowFromSurfaceError::UnknownSurface { surface });
+        };
+        if !surface_record.alive {
+            return Err(DetachWindowFromSurfaceError::SurfaceNotAlive { surface });
+        }
+
+        let Some(window_record) = self.registry.get(window) else {
+            return Err(DetachWindowFromSurfaceError::UnknownWindow { window });
+        };
+        if !window_record.alive {
+            return Err(DetachWindowFromSurfaceError::WindowNotAlive { window });
+        }
+
+        let bound_window = surface_record.window;
+        if bound_window != Some(window) {
+            return Err(DetachWindowFromSurfaceError::SurfaceWindowMismatch {
+                surface,
+                requested_window: window,
+                bound_window,
+            });
+        }
+
+        if let Some(other_surface) = self
+            .surfaces
+            .records()
+            .iter()
+            .find(|record| record.id != surface && record.alive && record.window == Some(window))
+            .map(|record| record.id)
+        {
+            return Err(DetachWindowFromSurfaceError::WindowBoundToOtherSurface {
+                window,
+                other_surface,
+            });
+        }
+
+        // 所有可失败预检已完成；先清除精确 link，后续窗口清理不得杀死 surface。
+        if !self.surfaces.detach_window(surface, window) {
+            return Err(DetachWindowFromSurfaceError::SurfaceWindowMismatch {
+                surface,
+                requested_window: window,
+                bound_window: self.surfaces.window_for_surface(surface),
+            });
+        }
+
+        // CompositorState 统一修复 workspace/slot/stack/focus；registry 只保存 tombstone。
+        let removed_from_workspace = self.compositor.remove_window(window);
+        let marked_window_dead = self.registry.mark_dead(window);
+
+        Ok(DetachWindowFromSurfaceResult {
+            removed_from_workspace,
+            marked_window_dead,
+        })
+    }
+
     /// 关闭指定窗口，并同步更新 workspace 与 registry。
     ///
-    /// 该方法用于未来 Wayland client unmap / destroy 事件，不依赖当前焦点，
-    /// 因此可以关闭任意已知 WindowId。
+    /// 这是 terminal close seam，会同步结束绑定 surface；toplevel unmap 必须调用
+    /// `detach_window_from_surface`。本方法不依赖当前焦点，可关闭任意已知 WindowId。
     pub fn close_window(&mut self, window: WindowId) -> CloseWindowResult {
         // CompositorState 负责移除全部 workspace 引用并按需刷新焦点。
         let removed_from_workspace = self.compositor.remove_window(window);
@@ -854,7 +979,7 @@ impl State {
 
     /// 关闭指定 surface，并在它绑定窗口时同步关闭窗口。
     ///
-    /// 该方法用于未来 Wayland surface destroy / unmap 事件。
+    /// 该方法用于未来 Wayland surface terminal close / destroy 事件。
     /// CloseSurface 的输入是 SurfaceId；CloseWindow 的输入是 WindowId。
     /// 本阶段只修改纯数据生命周期，不持有或销毁真实 Smithay surface。
     pub fn close_surface(&mut self, surface: SurfaceId) -> CloseSurfaceResult {
@@ -1082,7 +1207,7 @@ impl State {
 mod tests {
     use std::fs;
 
-    use super::{CompositorState, State};
+    use super::{CompositorState, DetachWindowFromSurfaceError, State};
     use crate::core::session::{
         SessionFocus, SessionLayoutMode, SessionSlot, SessionSlotContent, SessionState,
         SessionWorkspace,
@@ -1191,6 +1316,175 @@ mod tests {
             *window != closed
         }));
         assert!(state.validate().is_valid());
+    }
+
+    /// 验证 toplevel detach 会清理 WindowId，同时保持 SurfaceId 存活。
+    #[test]
+    fn detach_toplevel_keeps_surface_alive_and_cleans_window_state() {
+        let mut state = State::new();
+        let surface = state.register_surface(SurfaceRole::XdgToplevel);
+        let mapped = state.register_window_for_surface(
+            surface,
+            "Detached".to_string(),
+            Some("sky-mirror.detach".to_string()),
+            crate::core::window::WindowKind::WaylandPlaceholder,
+        );
+        assert!(mapped.bound);
+
+        state.compositor.focus.set_slot(3);
+        state.compositor.refresh_focus();
+        assert_eq!(state.compositor.focus.window, Some(mapped.window));
+
+        let result = state
+            .detach_window_from_surface(surface, mapped.window)
+            .expect("精确 surface/window pair 必须能够 detach");
+
+        assert!(result.removed_from_workspace);
+        assert!(result.marked_window_dead);
+        assert!(state.surfaces.is_alive(surface));
+        assert_eq!(state.surfaces.window_for_surface(surface), None);
+        assert!(!state.registry.is_alive(mapped.window));
+        assert!(
+            state
+                .compositor
+                .workspaces
+                .iter()
+                .all(|workspace| { !workspace.window_ids().contains(&mapped.window) })
+        );
+        assert_ne!(state.compositor.focus.window, Some(mapped.window));
+        assert!(state.validate().is_clean());
+    }
+
+    /// 验证 mismatched surface/window pair 会在任何 mutation 前结构化拒绝。
+    #[test]
+    fn detach_toplevel_rejects_mismatched_surface_window() {
+        let mut state = State::new();
+        let first_surface = state.register_surface(SurfaceRole::XdgToplevel);
+        let first = state.register_window_for_surface(
+            first_surface,
+            "first".to_string(),
+            None,
+            crate::core::window::WindowKind::WaylandPlaceholder,
+        );
+        let second_surface = state.register_surface(SurfaceRole::XdgToplevel);
+        let second = state.register_window_for_surface(
+            second_surface,
+            "second".to_string(),
+            None,
+            crate::core::window::WindowKind::WaylandPlaceholder,
+        );
+
+        let error = state
+            .detach_window_from_surface(first_surface, second.window)
+            .expect_err("不匹配 pair 必须被拒绝");
+
+        assert_eq!(
+            error,
+            DetachWindowFromSurfaceError::SurfaceWindowMismatch {
+                surface: first_surface,
+                requested_window: second.window,
+                bound_window: Some(first.window),
+            }
+        );
+        assert_eq!(
+            state.surfaces.window_for_surface(first_surface),
+            Some(first.window)
+        );
+        assert!(state.registry.is_alive(first.window));
+        assert!(state.registry.is_alive(second.window));
+        assert!(state.validate().is_clean());
+    }
+
+    /// 验证共享 WindowId 的其他 surface 不会被遗留为 dead-window 引用。
+    #[test]
+    fn detach_toplevel_rejects_window_bound_to_another_surface() {
+        let mut state = State::new();
+        let surface = state.register_surface(SurfaceRole::XdgToplevel);
+        let mapped = state.register_window_for_surface(
+            surface,
+            "shared".to_string(),
+            None,
+            crate::core::window::WindowKind::WaylandPlaceholder,
+        );
+        let other_surface = state.register_surface(SurfaceRole::XdgPopup);
+        assert!(state.bind_surface_to_window(other_surface, mapped.window));
+
+        let error = state
+            .detach_window_from_surface(surface, mapped.window)
+            .expect_err("共享 window link 必须在 mutation 前被拒绝");
+
+        assert_eq!(
+            error,
+            DetachWindowFromSurfaceError::WindowBoundToOtherSurface {
+                window: mapped.window,
+                other_surface,
+            }
+        );
+        assert_eq!(
+            state.surfaces.window_for_surface(surface),
+            Some(mapped.window)
+        );
+        assert_eq!(
+            state.surfaces.window_for_surface(other_surface),
+            Some(mapped.window)
+        );
+        assert!(state.registry.is_alive(mapped.window));
+        assert!(state.validate().is_clean());
+    }
+
+    /// 验证 unknown surface/window 与 duplicate detach 都安全返回结构化错误。
+    #[test]
+    fn detach_toplevel_rejects_unknown_and_duplicate_requests() {
+        let mut state = State::new();
+        let known_window = state.compositor.focus.window.expect("默认窗口必须存在");
+        assert_eq!(
+            state.detach_window_from_surface(999, known_window),
+            Err(DetachWindowFromSurfaceError::UnknownSurface { surface: 999 })
+        );
+
+        let surface = state.register_surface(SurfaceRole::XdgToplevel);
+        assert_eq!(
+            state.detach_window_from_surface(surface, 999),
+            Err(DetachWindowFromSurfaceError::UnknownWindow { window: 999 })
+        );
+
+        let mapped = state.register_window_for_surface(
+            surface,
+            "duplicate".to_string(),
+            None,
+            crate::core::window::WindowKind::WaylandPlaceholder,
+        );
+        state
+            .detach_window_from_surface(surface, mapped.window)
+            .expect("首次 detach 必须成功");
+        assert_eq!(
+            state.detach_window_from_surface(surface, mapped.window),
+            Err(DetachWindowFromSurfaceError::WindowNotAlive {
+                window: mapped.window,
+            })
+        );
+        assert!(state.surfaces.is_alive(surface));
+        assert!(state.validate().is_clean());
+    }
+
+    /// 验证旧 CloseWindow 仍保持 terminal window+surface 级联语义。
+    #[test]
+    fn close_window_still_marks_bound_surface_dead() {
+        let mut state = State::new();
+        let surface = state.register_surface(SurfaceRole::XdgToplevel);
+        let mapped = state.register_window_for_surface(
+            surface,
+            "terminal".to_string(),
+            None,
+            crate::core::window::WindowKind::WaylandPlaceholder,
+        );
+
+        let result = state.close_window(mapped.window);
+
+        assert_eq!(result.dead_surfaces, 1);
+        assert!(!state.surfaces.is_alive(surface));
+        assert!(!state.registry.is_alive(mapped.window));
+        assert!(state.validate().is_clean());
     }
 
     /// 验证命令边界可以同时返回执行结果和命令后的结构化 validation report。
