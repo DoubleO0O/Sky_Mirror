@@ -20,6 +20,7 @@ use smithay::wayland::shell::xdg::{
     XdgShellState, XdgShellSurfaceUserData, XdgSurfaceUserData, XdgWmBaseUserData,
 };
 
+use super::linux_xdg_toplevel_identity::LinuxXdgToplevelIdentityRegistry;
 use super::wayland_display::SmithayWaylandState;
 
 /// Wayland display 内部持有的 Linux-only xdg-shell handler state。
@@ -31,6 +32,7 @@ use super::wayland_display::SmithayWaylandState;
 pub struct LinuxXdgShellStateSkeleton {
     wayland_state: SmithayWaylandState,
     xdg_shell_state: Option<XdgShellState>,
+    toplevel_identities: LinuxXdgToplevelIdentityRegistry,
 }
 
 impl LinuxXdgShellStateSkeleton {
@@ -39,12 +41,21 @@ impl LinuxXdgShellStateSkeleton {
         Self {
             wayland_state: SmithayWaylandState::new(),
             xdg_shell_state: None,
+            toplevel_identities: LinuxXdgToplevelIdentityRegistry::new(),
         }
     }
 
     /// 返回既有 Wayland probe state 的只读视图。
     pub(crate) const fn wayland_state(&self) -> &SmithayWaylandState {
         &self.wayland_state
+    }
+
+    /// 返回 adapter-owned toplevel identity registry 的只读视图。
+    ///
+    /// Phase 52F 不从 protocol handler 调用该 registry；这里只明确未来 callback
+    /// 所属的 state owner，mapping ownership 不等于 callback observed。
+    pub(crate) const fn toplevel_identity_registry(&self) -> &LinuxXdgToplevelIdentityRegistry {
+        &self.toplevel_identities
     }
 
     /// 返回已初始化的 xdg-shell helper state。
