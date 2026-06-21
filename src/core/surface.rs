@@ -178,6 +178,24 @@ impl SurfaceRegistry {
         true
     }
 
+    /// 精确解除已有 surface 与窗口的纯数据 link。
+    ///
+    /// 只有 `SurfaceId` 存在且当前正好绑定到给定 `WindowId` 时才会清空 link。
+    /// detach 不等于关闭 surface，因此不会修改 `alive`；真实 XDG unmap callback
+    /// 仍属于未来 protocol adapter/runtime，而不属于本纯数据 registry。
+    pub fn detach_window(&mut self, surface: SurfaceId, window: WindowId) -> bool {
+        let Some(record) = self.surfaces.iter_mut().find(|record| record.id == surface) else {
+            return false;
+        };
+
+        if record.window != Some(window) {
+            return false;
+        }
+
+        record.window = None;
+        true
+    }
+
     /// 将已有 surface 绑定到 client。
     ///
     /// 该方法只写入 `ClientId -> SurfaceId` 的纯数据归属，不创建窗口，
@@ -439,6 +457,32 @@ mod tests {
 
         // 不存在的 SurfaceId 不得产生虚假成功结果。
         assert!(!registry.bind_window(999, 7));
+    }
+
+    /// 验证精确 detach 只移除窗口 link，并保持 surface 存活。
+    #[test]
+    fn surface_registry_detach_window_keeps_surface_alive() {
+        let mut registry = SurfaceRegistry::new();
+        let surface = registry.register_surface(SurfaceRole::XdgToplevel);
+        assert!(registry.bind_window(surface, 7));
+
+        assert!(registry.detach_window(surface, 7));
+
+        assert!(registry.is_alive(surface));
+        assert_eq!(registry.window_for_surface(surface), None);
+    }
+
+    /// 验证错误 WindowId 不会解除原有 surface-window link。
+    #[test]
+    fn surface_registry_detach_window_rejects_mismatch_without_mutation() {
+        let mut registry = SurfaceRegistry::new();
+        let surface = registry.register_surface(SurfaceRole::XdgToplevel);
+        assert!(registry.bind_window(surface, 7));
+
+        assert!(!registry.detach_window(surface, 8));
+
+        assert!(registry.is_alive(surface));
+        assert_eq!(registry.window_for_surface(surface), Some(7));
     }
 
     /// 验证关闭窗口时会标记全部绑定 surface 为 dead。

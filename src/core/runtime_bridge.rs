@@ -844,6 +844,44 @@ mod tests {
         assert!(!state.registry.is_alive(mapped_window));
     }
 
+    /// 验证 toplevel unmap 通过完整 bridge detach window 并保留 surface。
+    #[test]
+    fn runtime_bridge_detach_toplevel_keeps_surface_alive() {
+        let mut state = State::new();
+        let surface = state.register_surface(SurfaceRole::XdgToplevel);
+        let mapped = state.handle_command(CoreCommand::RegisterWindowForSurface {
+            surface,
+            title: "Detached".to_string(),
+            app_id: None,
+            kind: WindowKind::WaylandPlaceholder,
+        });
+        let CommandResult::WindowRegisteredForSurface { window, .. } = mapped else {
+            panic!("测试 surface 必须成功 map 成窗口");
+        };
+
+        let runtime = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ToplevelUnmapped { surface, window },
+        );
+
+        assert_eq!(
+            runtime.command,
+            CoreCommand::DetachWindowFromSurface { surface, window }
+        );
+        assert!(matches!(
+            runtime.result,
+            CommandResult::ToplevelDetached {
+                surface: result_surface,
+                window: result_window,
+                result: Ok(_),
+            } if result_surface == surface && result_window == window
+        ));
+        assert!(runtime.validation.is_clean());
+        assert!(state.surfaces.is_alive(surface));
+        assert_eq!(state.surfaces.window_for_surface(surface), None);
+        assert!(!state.registry.is_alive(window));
+    }
+
     /// 验证 client connection 通过 runtime public seam 自动分配 ID 并进入诊断快照。
     #[test]
     fn runtime_bridge_client_connected_auto_allocates_id_and_updates_diagnostics() {
