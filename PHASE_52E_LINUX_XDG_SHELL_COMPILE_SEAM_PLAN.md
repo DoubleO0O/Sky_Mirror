@@ -30,10 +30,12 @@ The boundary is available only under:
 The display's private state is now `LinuxXdgShellStateSkeleton`, which combines
 the unchanged public `SmithayWaylandState` with an `Option<XdgShellState>`.
 The option remains `None`, preserving the old public state shape while placing
-future protocol ownership next to the display. The `delegate_xdg_shell!`
-expansion establishes Smithay's real
-`GlobalDispatch` and request `Dispatch` type implementations, while the
-`XdgShellHandler` implementation identifies where future callbacks belong.
+future protocol ownership next to the display. Smithay delegation macros
+establish the real `GlobalDispatch` and non-popup request `Dispatch` type
+implementations, while the `XdgShellHandler` implementation identifies where
+future callbacks belong. Popup gets only a fail-closed compile handler because
+Smithay's full xdg-shell macro requires `SeatHandler`; Phase 52E must not invent
+input/seat state merely to satisfy that transitive bound.
 
 Phase 52E deliberately does **not** call `XdgShellState::new`. That call would
 create the `xdg_wm_base` global and would cross from compile proof into runtime
@@ -87,6 +89,8 @@ xdg-shell runtime, rendering, keyboard/pointer/seat, DRM, GBM, or libinput.
   to the pure-data ledger.
 - `MissingLedgerCallerOwnership`: no Linux runtime owner currently holds and
   invokes the ledger from protocol callbacks.
+- `MissingPopupSeatHandlerBoundary`: Smithay's normal popup delegation requires
+  `SeatHandler`; this phase intentionally does not implement input/seat.
 
 ## 7. Verification Strategy
 

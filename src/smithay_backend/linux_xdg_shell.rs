@@ -5,11 +5,19 @@
 //! `LinuxXdgShellStateSkeleton`，但不调用 `XdgShellState::new`，因此不会注册
 //! global、不会收到真实 request，也不会触发 admission ledger 或核心状态变更。
 
-use smithay::delegate_xdg_shell;
+use smithay::reexports::wayland_protocols::xdg::shell::server::{
+    xdg_popup::{self, XdgPopup},
+    xdg_positioner::XdgPositioner,
+    xdg_surface::XdgSurface,
+    xdg_toplevel::XdgToplevel,
+    xdg_wm_base::XdgWmBase,
+};
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
+use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle};
 use smithay::utils::Serial;
 use smithay::wayland::shell::xdg::{
-    PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+    PopupSurface, PositionerState, ToplevelSurface, XdgPositionerUserData, XdgShellHandler,
+    XdgShellState, XdgShellSurfaceUserData, XdgSurfaceUserData, XdgWmBaseUserData,
 };
 
 use super::wayland_display::SmithayWaylandState;
@@ -62,6 +70,8 @@ pub enum LinuxXdgShellCompileBlocker {
     MissingToplevelLifecycleBridge,
     /// Linux adapter 尚未取得 admission ledger 的明确调用所有权。
     MissingLedgerCallerOwnership,
+    /// Smithay popup delegation 依赖 `SeatHandler`，本阶段禁止跨入 input/seat。
+    MissingPopupSeatHandlerBoundary,
 }
 
 /// Linux-only xdg-shell 编译边界的保守能力报告。
@@ -112,6 +122,7 @@ pub fn linux_xdg_shell_readiness_report() -> LinuxXdgShellCompileReport {
             LinuxXdgShellCompileBlocker::MissingAdapterToplevelIdentityMapping,
             LinuxXdgShellCompileBlocker::MissingToplevelLifecycleBridge,
             LinuxXdgShellCompileBlocker::MissingLedgerCallerOwnership,
+            LinuxXdgShellCompileBlocker::MissingPopupSeatHandlerBoundary,
         ],
     }
 }
@@ -150,9 +161,39 @@ impl XdgShellHandler for LinuxXdgShellStateSkeleton {
     }
 }
 
-// 宏只生成真实 Smithay GlobalDispatch / Dispatch trait 实现。由于本阶段不创建
-// XdgShellState，display 上没有 xdg-shell global，生成实现不会开始 protocol runtime。
-delegate_xdg_shell!(LinuxXdgShellStateSkeleton);
+// Smithay 的全量 delegate_xdg_shell! 会让 popup dispatch 要求 SeatHandler。
+// 本阶段逐项生成 global 与非 popup request delegation，避免为编译证明伪造 input。
+smithay::reexports::wayland_server::delegate_global_dispatch!(LinuxXdgShellStateSkeleton: [
+    XdgWmBase: ()
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(LinuxXdgShellStateSkeleton: [
+    XdgWmBase: XdgWmBaseUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(LinuxXdgShellStateSkeleton: [
+    XdgPositioner: XdgPositionerUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(LinuxXdgShellStateSkeleton: [
+    XdgSurface: XdgSurfaceUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(LinuxXdgShellStateSkeleton: [
+    XdgToplevel: XdgShellSurfaceUserData
+] => XdgShellState);
+
+impl Dispatch<XdgPopup, XdgShellSurfaceUserData> for LinuxXdgShellStateSkeleton {
+    fn request(
+        _state: &mut Self,
+        _client: &Client,
+        _resource: &XdgPopup,
+        _request: xdg_popup::Request,
+        _data: &XdgShellSurfaceUserData,
+        _display_handle: &DisplayHandle,
+        _data_init: &mut DataInit<'_, Self>,
+    ) {
+        // 该实现只关闭 Smithay 类型图中的 popup trait 缺口。真实 global 尚未注册，
+        // 所以生产中不可达；若未来误启动，必须 fail closed，不能静默伪装 popup/input。
+        panic!("Phase 52E 不处理真实 xdg_popup request；SeatHandler 尚未接入")
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -199,6 +240,7 @@ mod tests {
                 LinuxXdgShellCompileBlocker::MissingAdapterToplevelIdentityMapping,
                 LinuxXdgShellCompileBlocker::MissingToplevelLifecycleBridge,
                 LinuxXdgShellCompileBlocker::MissingLedgerCallerOwnership,
+                LinuxXdgShellCompileBlocker::MissingPopupSeatHandlerBoundary,
             ]
         );
     }
