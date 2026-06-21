@@ -77,6 +77,9 @@ pub mod linux_handler_probe;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only xdg lifecycle callback-like signal到 identity lookup observation boundary。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_xdg_lifecycle_observation;
 /// Linux-only xdg-shell global 与 request-handler 的编译边界；不注册真实 global。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_xdg_shell;
@@ -151,6 +154,8 @@ pub mod wayland_socket;
 /// 窗口候选意图到核心接纳动作的纯数据预检层。
 #[cfg(feature = "smithay-probe")]
 pub mod window_admission_preview;
+/// XDG toplevel lifecycle identity lookup 的跨平台纯数据 observation report。
+pub mod xdg_lifecycle_observation;
 /// Adapter-owned xdg toplevel identity registry 的跨平台纯数据事务核心。
 pub mod xdg_toplevel_identity;
 
@@ -301,6 +306,12 @@ pub use linux_handler_probe::{
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_xdg_lifecycle_observation::{
+    LinuxXdgToplevelLifecycleBlocker, LinuxXdgToplevelLifecycleReadinessReport,
+    linux_xdg_toplevel_lifecycle_readiness_report, observe_toplevel_lifecycle,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_xdg_shell::{
     LinuxXdgShellCompileBlocker, LinuxXdgShellCompileReport, LinuxXdgShellStateSkeleton,
     linux_xdg_shell_readiness_report,
@@ -438,6 +449,11 @@ pub use wayland_socket::{SmithayWaylandSocketProbe, SmithayWaylandSocketProbeMod
 pub use window_admission_preview::{
     BackendWindowAdmissionPreviewAction, BackendWindowAdmissionPreviewReport,
     BackendWindowAdmissionPreviewWarning, WindowAdmissionPreviewPlanner,
+};
+#[allow(unused_imports)]
+pub use xdg_lifecycle_observation::{
+    XdgToplevelLifecycleObservation, XdgToplevelLifecycleObservationError,
+    XdgToplevelLifecycleObservationReport, XdgToplevelLifecycleSignal,
 };
 #[allow(unused_imports)]
 pub use xdg_toplevel_identity::{XdgToplevelIdentityError, XdgToplevelIdentityMapping};
@@ -1713,6 +1729,97 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !production_code.contains(forbidden),
                 "Phase 52F identity wrapper 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// 验证 lifecycle callback identity lookup 模块严格保持 Linux-only。
+    #[test]
+    fn linux_xdg_lifecycle_observation_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub mod linux_xdg_lifecycle_observation;")
+            .collect::<Vec<_>>();
+        let reexport_lines = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == "pub use linux_xdg_lifecycle_observation::{")
+            .collect::<Vec<_>>();
+
+        assert_eq!(module_lines.len(), 1);
+        assert_eq!(reexport_lines.len(), 1);
+        assert_eq!(lines[module_lines[0].0 - 1], required_gate);
+        assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
+    }
+
+    /// 验证 callback observation 只读 lookup 并保持 ledger/core/runtime capability false。
+    #[test]
+    fn linux_xdg_lifecycle_observation_keeps_production_boundary_conservative() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let observation_source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_xdg_lifecycle_observation.rs"),
+        )
+        .expect("Phase 52G Linux observation 模块必须存在");
+        let shell_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_xdg_shell.rs"))
+                .expect("Linux xdg-shell handler 模块必须存在");
+        let production = observation_source
+            .split_once("#[cfg(test)]")
+            .map_or(observation_source.as_str(), |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "ToplevelSurface",
+            "observe_toplevel_lifecycle",
+            ".lookup_toplevel(toplevel)",
+            "callback_identity_lookup_available: true",
+            "callback_observed: false",
+            "ledger_unmap_invoked: false",
+            "core_detach_invoked: false",
+            "real_xdg_shell_runtime_available: false",
+            "protocol_dispatch_started: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "Phase 52G observation 缺少边界证据: {required}"
+            );
+        }
+
+        for required in [
+            "fn toplevel_destroyed(&mut self, surface: ToplevelSurface)",
+            "observe_toplevel_lifecycle(",
+            "last_toplevel_lifecycle_observation",
+        ] {
+            assert!(
+                shell_source.contains(required),
+                "xdg-shell handler 缺少 observation wiring: {required}"
+            );
+        }
+
+        for forbidden in [
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent",
+            "CoreCommand",
+            "crate::core",
+            ".remove(",
+            "SeatHandler",
+            "XdgShellState::new",
+        ] {
+            assert!(
+                !production_code.contains(forbidden),
+                "Phase 52G observation 包含禁止生产 token: {forbidden}"
             );
         }
     }

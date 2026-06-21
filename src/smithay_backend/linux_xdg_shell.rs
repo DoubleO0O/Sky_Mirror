@@ -20,8 +20,12 @@ use smithay::wayland::shell::xdg::{
     XdgShellState, XdgShellSurfaceUserData, XdgSurfaceUserData, XdgWmBaseUserData,
 };
 
+use super::linux_xdg_lifecycle_observation::observe_toplevel_lifecycle;
 use super::linux_xdg_toplevel_identity::LinuxXdgToplevelIdentityRegistry;
 use super::wayland_display::SmithayWaylandState;
+use super::xdg_lifecycle_observation::{
+    XdgToplevelLifecycleObservationReport, XdgToplevelLifecycleSignal,
+};
 
 /// Wayland display 内部持有的 Linux-only xdg-shell handler state。
 ///
@@ -33,6 +37,7 @@ pub struct LinuxXdgShellStateSkeleton {
     wayland_state: SmithayWaylandState,
     xdg_shell_state: Option<XdgShellState>,
     toplevel_identities: LinuxXdgToplevelIdentityRegistry,
+    last_toplevel_lifecycle_observation: Option<XdgToplevelLifecycleObservationReport>,
 }
 
 impl LinuxXdgShellStateSkeleton {
@@ -42,6 +47,7 @@ impl LinuxXdgShellStateSkeleton {
             wayland_state: SmithayWaylandState::new(),
             xdg_shell_state: None,
             toplevel_identities: LinuxXdgToplevelIdentityRegistry::new(),
+            last_toplevel_lifecycle_observation: None,
         }
     }
 
@@ -56,6 +62,16 @@ impl LinuxXdgShellStateSkeleton {
     /// 所属的 state owner，mapping ownership 不等于 callback observed。
     pub(crate) const fn toplevel_identity_registry(&self) -> &LinuxXdgToplevelIdentityRegistry {
         &self.toplevel_identities
+    }
+
+    /// 返回最近一次 callback-like lifecycle identity lookup 报告。
+    ///
+    /// `Some` 只说明 handler 方法执行了 observation helper；报告中的
+    /// `callback_observed` 仍需独立 runtime proof，不能由本 accessor 推导为 true。
+    pub fn last_toplevel_lifecycle_observation(
+        &self,
+    ) -> Option<&XdgToplevelLifecycleObservationReport> {
+        self.last_toplevel_lifecycle_observation.as_ref()
     }
 
     /// 返回已初始化的 xdg-shell helper state。
@@ -165,10 +181,17 @@ impl XdgShellHandler for LinuxXdgShellStateSkeleton {
         // 这里只满足 Smithay trait 的编译形状，不处理真实 popup request。
     }
 
-    fn toplevel_destroyed(&mut self, _surface: ToplevelSurface) {
-        // 这是未来 identity hook 点，但当前没有 AdapterToplevelId 映射。
-        // 因此不得调用 SurfaceXdgAdmissionLedger::unmap_toplevel，也不得声称
-        // 已观察到真实 callback。
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        // Handler 只读取 adapter-owned registry 并保存 observation report。
+        // Mapping 保持不变；本阶段不得调用 ledger/core，也不得把 wiring 当作
+        // 已证明的真实 runtime callback observation。
+        let report = observe_toplevel_lifecycle(
+            &self.toplevel_identities,
+            XdgToplevelLifecycleSignal::ToplevelDestroyed,
+            &surface,
+            None,
+        );
+        self.last_toplevel_lifecycle_observation = Some(report);
     }
 }
 
