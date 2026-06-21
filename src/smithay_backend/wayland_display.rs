@@ -2,13 +2,16 @@
 //!
 //! 本模块只在 Linux 上启用 `smithay-linux` feature 时编译。当前阶段只验证
 //! 可以构造 Wayland server `Display`、取得 `DisplayHandle`，并为 Linux runtime
-//! proof 执行一次 client dispatch。这里不创建监听 socket、不接 xdg-shell、
-//! 不注册 compositor global，也不把 dispatch 解释为完整 compositor 事件循环。
+//! proof 执行一次 client dispatch。这里不创建监听 socket；虽然内部 state 具备
+//! xdg-shell trait 编译形状，但不注册任何 shell/compositor global，也不把 dispatch
+//! 解释为完整 compositor 事件循环。
 //!
 //! 未来真实 Wayland callback 仍然必须先转换为 `BackendEvent`，再通过
 //! `CoreRuntimeBridge` 进入核心状态，不能直接修改 workspace 或注册表。
 
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
+
+use super::linux_xdg_shell::LinuxXdgShellStateSkeleton;
 
 /// Smithay 和 Wayland server 侧的最小状态占位。
 ///
@@ -34,19 +37,19 @@ impl SmithayWaylandState {
 
 /// Wayland Display 编译探针。
 ///
-/// 该结构持有一个 `wayland_server::Display<SmithayWaylandState>`，用于确认
-/// feature-gated Wayland server 类型可以构造。它不创建 socket、不处理 client，
-/// 也不注册 xdg-shell。
+/// 该结构持有一个 `wayland_server::Display<LinuxXdgShellStateSkeleton>`，用于确认
+/// feature-gated Wayland server 与 xdg-shell handler owner 的类型可以组合。它不创建
+/// socket、不处理 shell request，也不注册 xdg-shell global。
 pub struct SmithayWaylandDisplayProbe {
     /// Wayland server display。
     ///
     /// 当前只用于编译和构造验证，不参与主事件循环。
-    display: Display<SmithayWaylandState>,
+    display: Display<LinuxXdgShellStateSkeleton>,
 
     /// 与 display 配套的最小状态占位。
     ///
     /// 真实 compositor 后续会在这里保存 Smithay protocol helper state。
-    state: SmithayWaylandState,
+    state: LinuxXdgShellStateSkeleton,
 }
 
 impl SmithayWaylandDisplayProbe {
@@ -55,8 +58,8 @@ impl SmithayWaylandDisplayProbe {
     /// 如果 Wayland display 初始化失败，直接把错误向上传递给调用方。
     /// 该过程不会创建 socket、协议 global 或真实 surface。
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let display = Display::<SmithayWaylandState>::new()?;
-        let state = SmithayWaylandState::new();
+        let display = Display::<LinuxXdgShellStateSkeleton>::new()?;
+        let state = LinuxXdgShellStateSkeleton::new();
 
         Ok(Self { display, state })
     }
@@ -79,7 +82,7 @@ impl SmithayWaylandDisplayProbe {
 
     /// 返回当前是否仍然只是 probe 模式。
     pub fn is_probe_only(&self) -> bool {
-        self.state.probe_only
+        self.state.wayland_state().probe_only
     }
 
     /// 返回当前模式说明。
