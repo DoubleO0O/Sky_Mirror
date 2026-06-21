@@ -396,7 +396,9 @@ pub use surface_xdg_admission::{
     AdapterSurfaceId, AdapterToplevelId, ProtocolObjectId, SurfaceAdmissionIntent,
     SurfaceAdmissionMapping, SurfaceXdgAdmissionBlocker, SurfaceXdgAdmissionError,
     SurfaceXdgAdmissionLedger, SurfaceXdgAdmissionReadinessReport, SurfaceXdgAdmissionReport,
-    ToplevelAdmissionMapping, XdgToplevelAdmissionIntent, surface_xdg_admission_readiness_report,
+    SurfaceXdgLifecycleReadinessReport, SurfaceXdgRemovalError, SurfaceXdgRemovalReport,
+    ToplevelAdmissionMapping, XdgToplevelAdmissionIntent, XdgToplevelUnmapIntent,
+    surface_xdg_admission_readiness_report, surface_xdg_lifecycle_readiness_report,
 };
 #[allow(unused_imports)]
 #[cfg(feature = "smithay-probe")]
