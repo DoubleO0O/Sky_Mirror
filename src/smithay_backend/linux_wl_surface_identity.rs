@@ -1,0 +1,521 @@
+//! Linux-only controlled `wl_surface` creation 与 adapter identity proof。
+//!
+//! 真实 Wayland object 只在本模块和配对 handler state 内出现。对外 report 只包含
+//! 纯数据 identity/capability；本模块不 bind xdg-shell、不调用 admission ledger/core，
+//! 也不进入 render/input。
+
+use std::{
+    collections::HashMap,
+    io,
+    os::unix::net::UnixStream,
+    sync::mpsc::{self, RecvTimeoutError},
+    thread,
+    time::{Duration, Instant},
+};
+
+use smithay::reexports::wayland_server::{Resource, backend::ObjectId};
+use wayland_client::{
+    Connection, Dispatch, QueueHandle,
+    globals::{GlobalListContents, registry_queue_init},
+    protocol::{wl_compositor::WlCompositor, wl_registry::WlRegistry, wl_surface::WlSurface},
+};
+
+use super::{
+    client_insert::NestedClientInsertCompileBoundary,
+    client_session::{NestedClientSessionEvent, NestedClientSessionId},
+    surface_xdg_admission::{AdapterSurfaceId, ProtocolObjectId},
+    wayland_display::SmithayWaylandDisplayProbe,
+};
+
+const CONTROLLED_SESSION_ID: u64 = 53;
+const CONTROLLED_PROOF_TIMEOUT: Duration = Duration::from_secs(5);
+const SERVER_PUMP_WAIT: Duration = Duration::from_millis(1);
+
+/// Adapter 层分配的纯数据 surface identity key。
+///
+/// 该 key 不保存 `WlSurface`/`ObjectId`，也不是 core `SurfaceId`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SurfaceIdentityKey(u64);
+
+impl SurfaceIdentityKey {
+    /// 返回 adapter 内部单调分配的非零数值。
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// Server surface object 与 adapter 纯数据 identity 的只读映射结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdapterSurfaceIdentityMapping {
+    /// Adapter-only surface identity；不得作为 core `SurfaceId` 使用。
+    pub adapter_surface_id: AdapterSurfaceId,
+    /// Adapter-only 稳定 key。
+    pub surface_identity_key: SurfaceIdentityKey,
+}
+
+/// 从 server object 建立 adapter identity 时的结构化错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceIdentityError {
+    /// Smithay resource 没有可用 object identity。
+    SmithayIdentityUnavailable,
+    /// Adapter 的单调 identity 空间耗尽。
+    AdapterIdentityExhausted,
+}
+
+/// 真实 server `ObjectId` 到纯数据 identity 的 adapter-owned registry。
+///
+/// `ObjectId` 仅作为 adapter 内部 key；公开 mapping 不泄漏 Smithay 类型。重复观察
+/// 同一 surface 返回原 mapping，不会重复分配 identity。
+#[derive(Debug)]
+pub(crate) struct LinuxWlSurfaceIdentityRegistry {
+    next_identity: u64,
+    mappings: HashMap<ObjectId, AdapterSurfaceIdentityMapping>,
+    observation_count: usize,
+    last_observation: Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>>,
+}
+
+impl LinuxWlSurfaceIdentityRegistry {
+    pub(crate) fn new() -> Self {
+        Self {
+            next_identity: 1,
+            mappings: HashMap::new(),
+            observation_count: 0,
+            last_observation: None,
+        }
+    }
+
+    pub(crate) fn observe_surface(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError> {
+        self.observation_count = self.observation_count.saturating_add(1);
+        let object_id = surface.id();
+        if object_id.is_null() {
+            let error = SurfaceIdentityError::SmithayIdentityUnavailable;
+            self.last_observation = Some(Err(error));
+            return Err(error);
+        }
+        if let Some(mapping) = self.mappings.get(&object_id).copied() {
+            self.last_observation = Some(Ok(mapping));
+            return Ok(mapping);
+        }
+
+        let value = self.next_identity;
+        let protocol_object_id =
+            ProtocolObjectId::new(value).ok_or(SurfaceIdentityError::AdapterIdentityExhausted)?;
+        self.next_identity = value
+            .checked_add(1)
+            .ok_or(SurfaceIdentityError::AdapterIdentityExhausted)?;
+        let mapping = AdapterSurfaceIdentityMapping {
+            adapter_surface_id: AdapterSurfaceId::new(protocol_object_id),
+            surface_identity_key: SurfaceIdentityKey(value),
+        };
+        self.mappings.insert(object_id, mapping);
+        self.last_observation = Some(Ok(mapping));
+        Ok(mapping)
+    }
+
+    pub(crate) fn observation_count(&self) -> usize {
+        self.observation_count
+    }
+
+    pub(crate) fn last_observation(
+        &self,
+    ) -> Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>> {
+        self.last_observation
+    }
+}
+
+impl Default for LinuxWlSurfaceIdentityRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Controlled `wl_surface` proof 的结构化 blocker。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlledWlSurfaceCreationBlocker {
+    /// Server 尚未显式初始化 `wl_compositor` owner。
+    MissingServerWlCompositorOwner,
+    /// Client 未能先 bind `wl_compositor`，因此禁止创建 surface。
+    MissingClientWlCompositorBind,
+}
+
+/// Controlled surface proof 中可定位的操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlledWlSurfaceCreationOperation {
+    /// 创建受控 Unix endpoint pair。
+    CreateControlledEndpoint,
+    /// 插入 server endpoint。
+    InsertServerClient,
+    /// 创建 client connection。
+    CreateClientConnection,
+    /// 创建 registry/event queue。
+    InitializeRegistryQueue,
+    /// 完成 surface request roundtrip。
+    CompleteSurfaceRoundtrip,
+    /// 驱动 server request dispatch。
+    DispatchServerClients,
+    /// flush server events。
+    FlushServerClients,
+}
+
+/// Controlled surface creation proof 的纯数据错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlledWlSurfaceCreationError {
+    /// 前置 capability 尚未满足。
+    Blocked(ControlledWlSurfaceCreationBlocker),
+    /// 受控 session identity 无效。
+    InvalidControlledSessionIdentity,
+    /// I/O 操作失败。
+    Io {
+        /// 失败阶段。
+        operation: ControlledWlSurfaceCreationOperation,
+        /// 标准 I/O 错误类别。
+        kind: io::ErrorKind,
+    },
+    /// wayland-client 操作失败。
+    ClientProtocol {
+        /// 失败阶段。
+        operation: ControlledWlSurfaceCreationOperation,
+    },
+    /// Server insertion 未产生预期 owner evidence。
+    MissingNestedClientDataOwnerEvidence,
+    /// Client 成功返回，但 server 没有观察到新 surface。
+    MissingServerSurfaceObservation,
+    /// Server 观察到了 surface，但 adapter identity 分配被结构化拒绝。
+    SurfaceIdentity(SurfaceIdentityError),
+    /// Client proof thread 提前断开。
+    ClientThreadDisconnected,
+    /// Client proof thread panic。
+    ClientThreadPanicked,
+    /// 有界 proof 超时。
+    TimedOut,
+}
+
+/// Linux-only controlled `wl_surface` creation proof 报告。
+///
+/// `wl_surface_created` 只表示受控 request 被 server 观察；不表示 xdg role、core
+/// registration、commit/renderability 或完整 compositor runtime。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlledWlSurfaceCreationReport {
+    /// Server-side `wl_compositor` owner 是否存在。
+    pub server_wl_compositor_owner_available: bool,
+    /// Server-side `wl_compositor` 是否显式初始化。
+    pub server_wl_compositor_initialized: bool,
+    /// Inserted client 是否持有独立 compositor state。
+    pub per_client_compositor_state_available: bool,
+    /// 是否创建受控 endpoint pair。
+    pub controlled_endpoint_created: bool,
+    /// Server endpoint 是否通过现有 insertion seam 插入。
+    pub server_client_inserted: bool,
+    /// 是否创建 wayland-client connection。
+    pub client_connection_created: bool,
+    /// 是否创建 client event queue。
+    pub event_queue_created: bool,
+    /// Registry discovery roundtrip 是否完成。
+    pub registry_roundtrip_completed: bool,
+    /// Client 是否成功 bind `wl_compositor`。
+    pub client_bound_wl_compositor: bool,
+    /// Client 是否尝试 create_surface request。
+    pub wl_surface_create_attempted: bool,
+    /// Controlled client 是否创建 `wl_surface`。
+    pub wl_surface_created: bool,
+    /// Server `new_surface` handler 是否观察到该 boundary。
+    pub server_surface_observed: bool,
+    /// Adapter 是否为 server object 分配纯数据 identity。
+    pub adapter_surface_identity_allocated: bool,
+    /// 分配出的 adapter-only surface ID；不是 core `SurfaceId`。
+    pub adapter_surface_id: AdapterSurfaceId,
+    /// 分配出的 adapter-only identity key。
+    pub surface_identity_key: SurfaceIdentityKey,
+    /// Adapter identity key 是否可用。
+    pub surface_identity_key_available: bool,
+    /// Client 是否 bind xdg-shell；本阶段固定为 false。
+    pub client_bound_xdg_wm_base: bool,
+    /// 是否创建 xdg surface；本阶段固定为 false。
+    pub xdg_surface_created: bool,
+    /// 是否创建 xdg toplevel；本阶段固定为 false。
+    pub xdg_toplevel_created: bool,
+    /// 是否已有 xdg surface lifecycle。
+    pub xdg_surface_lifecycle_available: bool,
+    /// 是否已有 xdg toplevel lifecycle。
+    pub xdg_toplevel_lifecycle_available: bool,
+    /// 是否调用 admission ledger admit。
+    pub ledger_admit_invoked: bool,
+    /// 是否调用 admission ledger unmap。
+    pub ledger_unmap_invoked: bool,
+    /// 是否调用 core register。
+    pub core_register_invoked: bool,
+    /// 是否调用 core detach。
+    pub core_detach_invoked: bool,
+    /// 是否分配 core `WindowId`。
+    pub window_id_allocated: bool,
+    /// 是否运行本 proof 的有界 protocol dispatch。
+    pub protocol_dispatch_started: bool,
+    /// Render 是否可用。
+    pub render_support: bool,
+    /// Input 是否可用。
+    pub input_support: bool,
+    /// 是否已有真实 compositor runtime。
+    pub real_compositor_runtime_available: bool,
+    /// 是否已有真实 xdg-shell runtime。
+    pub real_xdg_shell_runtime_available: bool,
+    /// 成功报告中未解决的 blockers。
+    pub blockers: Vec<ControlledWlSurfaceCreationBlocker>,
+}
+
+#[derive(Debug, Default)]
+struct ControlledSurfaceClientState;
+
+impl Dispatch<WlRegistry, GlobalListContents> for ControlledSurfaceClientState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlRegistry,
+        _event: wayland_client::protocol::wl_registry::Event,
+        _data: &GlobalListContents,
+        _connection: &Connection,
+        _queue_handle: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+wayland_client::delegate_noop!(ControlledSurfaceClientState: ignore WlCompositor);
+wayland_client::delegate_noop!(ControlledSurfaceClientState: ignore WlSurface);
+
+/// 证明 controlled client 创建 `wl_surface` 且 server adapter 分配纯数据 identity。
+///
+/// 本函数只使用内部 stream pair，不连接系统 Wayland session socket。Surface creation
+/// 不等于 xdg surface/window，不得调用 ledger/core，也不提供 render/input 能力。
+pub fn controlled_wl_surface_creation_report(
+    server: &mut SmithayWaylandDisplayProbe,
+) -> Result<ControlledWlSurfaceCreationReport, ControlledWlSurfaceCreationError> {
+    if !server.is_wl_compositor_global_initialized() {
+        return Err(ControlledWlSurfaceCreationError::Blocked(
+            ControlledWlSurfaceCreationBlocker::MissingServerWlCompositorOwner,
+        ));
+    }
+
+    let observations_before = server.wl_surface_observation_count();
+    let (server_stream, client_stream) =
+        UnixStream::pair().map_err(|error| ControlledWlSurfaceCreationError::Io {
+            operation: ControlledWlSurfaceCreationOperation::CreateControlledEndpoint,
+            kind: error.kind(),
+        })?;
+    let session = NestedClientSessionId::new(CONTROLLED_SESSION_ID)
+        .ok_or(ControlledWlSurfaceCreationError::InvalidControlledSessionIdentity)?;
+    let mut insertion = NestedClientInsertCompileBoundary::new(server.display_handle());
+    let _server_client = insertion
+        .insert_client(server_stream, session)
+        .map_err(|error| ControlledWlSurfaceCreationError::Io {
+            operation: ControlledWlSurfaceCreationOperation::InsertServerClient,
+            kind: error.kind(),
+        })?;
+    if insertion.event_queue().drain_connected()
+        != vec![NestedClientSessionEvent::Connected { session }]
+    {
+        return Err(ControlledWlSurfaceCreationError::MissingNestedClientDataOwnerEvidence);
+    }
+
+    let (result_sender, result_receiver) = mpsc::channel();
+    let client_thread = thread::spawn(move || {
+        let result = run_controlled_surface_client(client_stream);
+        let _ = result_sender.send(result);
+    });
+
+    let deadline = Instant::now() + CONTROLLED_PROOF_TIMEOUT;
+    let client_result = loop {
+        server
+            .dispatch_clients_once()
+            .map_err(|error| ControlledWlSurfaceCreationError::Io {
+                operation: ControlledWlSurfaceCreationOperation::DispatchServerClients,
+                kind: error.kind(),
+            })?;
+        server
+            .flush_clients_once()
+            .map_err(|error| ControlledWlSurfaceCreationError::Io {
+                operation: ControlledWlSurfaceCreationOperation::FlushServerClients,
+                kind: error.kind(),
+            })?;
+
+        match result_receiver.recv_timeout(SERVER_PUMP_WAIT) {
+            Ok(result) => break result,
+            Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+            Err(RecvTimeoutError::Timeout) => {
+                return Err(ControlledWlSurfaceCreationError::TimedOut);
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return match client_thread.join() {
+                    Ok(()) => Err(ControlledWlSurfaceCreationError::ClientThreadDisconnected),
+                    Err(_) => Err(ControlledWlSurfaceCreationError::ClientThreadPanicked),
+                };
+            }
+        }
+    };
+
+    client_thread
+        .join()
+        .map_err(|_| ControlledWlSurfaceCreationError::ClientThreadPanicked)?;
+    client_result?;
+
+    if server.wl_surface_observation_count() <= observations_before {
+        return Err(ControlledWlSurfaceCreationError::MissingServerSurfaceObservation);
+    }
+    let mapping = server
+        .last_wl_surface_identity_observation()
+        .ok_or(ControlledWlSurfaceCreationError::MissingServerSurfaceObservation)?
+        .map_err(ControlledWlSurfaceCreationError::SurfaceIdentity)?;
+
+    Ok(ControlledWlSurfaceCreationReport {
+        server_wl_compositor_owner_available: true,
+        server_wl_compositor_initialized: true,
+        per_client_compositor_state_available: true,
+        controlled_endpoint_created: true,
+        server_client_inserted: true,
+        client_connection_created: true,
+        event_queue_created: true,
+        registry_roundtrip_completed: true,
+        client_bound_wl_compositor: true,
+        wl_surface_create_attempted: true,
+        wl_surface_created: true,
+        server_surface_observed: true,
+        adapter_surface_identity_allocated: true,
+        adapter_surface_id: mapping.adapter_surface_id,
+        surface_identity_key: mapping.surface_identity_key,
+        surface_identity_key_available: true,
+        client_bound_xdg_wm_base: false,
+        xdg_surface_created: false,
+        xdg_toplevel_created: false,
+        xdg_surface_lifecycle_available: false,
+        xdg_toplevel_lifecycle_available: false,
+        ledger_admit_invoked: false,
+        ledger_unmap_invoked: false,
+        core_register_invoked: false,
+        core_detach_invoked: false,
+        window_id_allocated: false,
+        protocol_dispatch_started: true,
+        render_support: false,
+        input_support: false,
+        real_compositor_runtime_available: false,
+        real_xdg_shell_runtime_available: false,
+        blockers: Vec::new(),
+    })
+}
+
+fn run_controlled_surface_client(
+    client_stream: UnixStream,
+) -> Result<(), ControlledWlSurfaceCreationError> {
+    let connection = Connection::from_socket(client_stream).map_err(|_| {
+        ControlledWlSurfaceCreationError::ClientProtocol {
+            operation: ControlledWlSurfaceCreationOperation::CreateClientConnection,
+        }
+    })?;
+    let (globals, mut event_queue) =
+        registry_queue_init::<ControlledSurfaceClientState>(&connection).map_err(|_| {
+            ControlledWlSurfaceCreationError::ClientProtocol {
+                operation: ControlledWlSurfaceCreationOperation::InitializeRegistryQueue,
+            }
+        })?;
+    let queue_handle = event_queue.handle();
+    let compositor = globals
+        .bind::<WlCompositor, _, _>(&queue_handle, 1..=5, ())
+        .map_err(|_| {
+            ControlledWlSurfaceCreationError::Blocked(
+                ControlledWlSurfaceCreationBlocker::MissingClientWlCompositorBind,
+            )
+        })?;
+    // 52O 首次允许 controlled create_surface；保留 proxy 直到 roundtrip 完成，
+    // 但不 commit、不赋 xdg role，也不把真实 object 交给 core。
+    let _surface = compositor.create_surface(&queue_handle, ());
+    let mut client_state = ControlledSurfaceClientState;
+    event_queue.roundtrip(&mut client_state).map_err(|_| {
+        ControlledWlSurfaceCreationError::ClientProtocol {
+            operation: ControlledWlSurfaceCreationOperation::CompleteSurfaceRoundtrip,
+        }
+    })?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ControlledWlSurfaceCreationBlocker, ControlledWlSurfaceCreationError,
+        controlled_wl_surface_creation_report,
+    };
+    use crate::smithay_backend::wayland_display::SmithayWaylandDisplayProbe;
+
+    #[test]
+    fn controlled_wl_surface_creation_requires_server_owner() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+
+        assert_eq!(
+            controlled_wl_surface_creation_report(&mut server),
+            Err(ControlledWlSurfaceCreationError::Blocked(
+                ControlledWlSurfaceCreationBlocker::MissingServerWlCompositorOwner,
+            ))
+        );
+    }
+
+    #[test]
+    fn controlled_wl_surface_creation_observes_server_surface_boundary() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 compositor owner 必须初始化");
+
+        let report = controlled_wl_surface_creation_report(&mut server)
+            .expect("controlled surface proof 必须完成");
+
+        assert!(report.server_wl_compositor_owner_available);
+        assert!(report.server_wl_compositor_initialized);
+        assert!(report.per_client_compositor_state_available);
+        assert!(report.controlled_endpoint_created);
+        assert!(report.server_client_inserted);
+        assert!(report.client_connection_created);
+        assert!(report.event_queue_created);
+        assert!(report.registry_roundtrip_completed);
+        assert!(report.client_bound_wl_compositor);
+        assert!(report.wl_surface_create_attempted);
+        assert!(report.wl_surface_created);
+        assert!(report.server_surface_observed);
+        assert!(report.adapter_surface_identity_allocated);
+        assert!(report.surface_identity_key_available);
+        assert_eq!(
+            report.adapter_surface_id.value(),
+            report.surface_identity_key.value()
+        );
+        assert!(!report.client_bound_xdg_wm_base);
+        assert!(!report.xdg_surface_created);
+        assert!(!report.xdg_toplevel_created);
+        assert!(!report.xdg_surface_lifecycle_available);
+        assert!(!report.xdg_toplevel_lifecycle_available);
+        assert!(!report.ledger_admit_invoked);
+        assert!(!report.ledger_unmap_invoked);
+        assert!(!report.core_register_invoked);
+        assert!(!report.core_detach_invoked);
+        assert!(!report.window_id_allocated);
+        assert!(report.protocol_dispatch_started);
+        assert!(!report.render_support);
+        assert!(!report.input_support);
+        assert!(!report.real_compositor_runtime_available);
+        assert!(!report.real_xdg_shell_runtime_available);
+        assert!(report.blockers.is_empty());
+    }
+
+    #[test]
+    fn controlled_wl_surface_creation_allocates_distinct_adapter_identities() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 compositor owner 必须初始化");
+
+        let first = controlled_wl_surface_creation_report(&mut server)
+            .expect("首个 controlled surface proof 必须完成");
+        let second = controlled_wl_surface_creation_report(&mut server)
+            .expect("第二个 controlled surface proof 必须完成");
+
+        assert_ne!(first.adapter_surface_id, second.adapter_surface_id);
+        assert_ne!(first.surface_identity_key, second.surface_identity_key);
+    }
+}
