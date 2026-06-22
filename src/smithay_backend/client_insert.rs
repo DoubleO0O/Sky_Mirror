@@ -19,6 +19,7 @@ use smithay::reexports::wayland_server::{
     Client, DisplayHandle,
     backend::{ClientData, ClientId, DisconnectReason},
 };
+use smithay::wayland::compositor::CompositorClientState;
 
 use super::client_session::{NestedClientSessionEvent, NestedClientSessionId};
 
@@ -114,17 +115,30 @@ impl NestedClientCallbackEventQueue {
 pub struct NestedClientDataOwner {
     session: NestedClientSessionId,
     events: NestedClientCallbackEventQueue,
+    compositor_state: CompositorClientState,
 }
 
 impl NestedClientDataOwner {
     /// 为指定 adapter session 创建 callback owner。
     pub fn new(session: NestedClientSessionId, events: NestedClientCallbackEventQueue) -> Self {
-        Self { session, events }
+        Self {
+            session,
+            events,
+            compositor_state: CompositorClientState::default(),
+        }
     }
 
     /// 返回该 Wayland client 对应的 adapter session identity。
     pub fn session(&self) -> NestedClientSessionId {
         self.session
+    }
+
+    /// 返回该 client 独占的 Smithay compositor state。
+    ///
+    /// 每个 client 必须持有独立 state，才能让 Smithay 在断开连接时自动清理其
+    /// surface transaction queue；该 accessor 不创建 surface，也不访问 core。
+    pub(crate) fn compositor_state(&self) -> &CompositorClientState {
+        &self.compositor_state
     }
 
     // owner 只知道 adapter session，不保存或猜测 core ClientId。
@@ -326,6 +340,19 @@ mod tests {
             events.drain(),
             vec![NestedClientSessionEvent::Disconnected { session }]
         );
+    }
+
+    /// 验证每个 client data owner 都持有独立的 compositor state。
+    #[test]
+    fn client_data_owner_owns_per_client_compositor_state() {
+        let events = NestedClientCallbackEventQueue::new();
+        let first = NestedClientDataOwner::new(session(58), events.clone());
+        let second = NestedClientDataOwner::new(session(59), events);
+
+        assert!(!std::ptr::eq(
+            first.compositor_state(),
+            second.compositor_state()
+        ));
     }
 
     /// 验证 connected-only drain 不会提前消费 Phase 51J-A 的 disconnect callback。

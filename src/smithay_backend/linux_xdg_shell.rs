@@ -13,13 +13,20 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::{
     xdg_wm_base::XdgWmBase,
 };
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle};
 use smithay::utils::Serial;
+use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgPositionerUserData, XdgShellHandler,
     XdgShellState, XdgShellSurfaceUserData, XdgSurfaceUserData, XdgWmBaseUserData,
 };
 
+use super::client_insert::NestedClientDataOwner;
+use super::linux_wl_compositor::{
+    LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
+    build_linux_wl_compositor_readiness_report,
+};
 use super::linux_xdg_lifecycle_observation::observe_toplevel_lifecycle;
 use super::linux_xdg_toplevel_identity::LinuxXdgToplevelIdentityRegistry;
 use super::wayland_display::SmithayWaylandState;
@@ -36,6 +43,7 @@ use super::xdg_lifecycle_observation::{
 pub struct LinuxXdgShellStateSkeleton {
     wayland_state: SmithayWaylandState,
     xdg_shell_state: Option<XdgShellState>,
+    compositor_state: Option<CompositorState>,
     toplevel_identities: LinuxXdgToplevelIdentityRegistry,
     last_toplevel_lifecycle_observation: Option<XdgToplevelLifecycleObservationReport>,
 }
@@ -102,6 +110,7 @@ impl LinuxXdgShellStateSkeleton {
         Self {
             wayland_state: SmithayWaylandState::new(),
             xdg_shell_state: None,
+            compositor_state: None,
             toplevel_identities: LinuxXdgToplevelIdentityRegistry::new(),
             last_toplevel_lifecycle_observation: None,
         }
@@ -184,6 +193,41 @@ impl LinuxXdgShellStateSkeleton {
             input_support: false,
             blockers,
         }
+    }
+
+    /// 返回当前 owner 是否已经持有 `wl_compositor` global state。
+    pub(crate) const fn is_wl_compositor_global_initialized(&self) -> bool {
+        self.compositor_state.is_some()
+    }
+
+    /// 使用与 handler state 配对的 display handle 显式初始化 `wl_compositor`。
+    ///
+    /// 真实 Smithay owner 只能存在于 Linux-only adapter 层。方法保持 crate-private，
+    /// 由同时持有 display/state 的外层 owner 传入自己的 handle，避免错配 display。
+    pub(crate) fn initialize_wl_compositor_global(
+        &mut self,
+        display_handle: &DisplayHandle,
+    ) -> Result<LinuxWlCompositorReadinessReport, LinuxWlCompositorGlobalInitError> {
+        if self.compositor_state.is_some() {
+            return Err(LinuxWlCompositorGlobalInitError::AlreadyInitialized);
+        }
+
+        // 构造完成后再写入 Option；重复初始化会在 mutation 前结构化拒绝。
+        let compositor_state = CompositorState::new::<LinuxXdgShellStateSkeleton>(display_handle);
+        self.compositor_state = Some(compositor_state);
+
+        Ok(self.wl_compositor_readiness_report())
+    }
+
+    /// 返回当前 `wl_compositor` owner readiness，不执行任何 mutation。
+    pub(crate) fn wl_compositor_readiness_report(&self) -> LinuxWlCompositorReadinessReport {
+        build_linux_wl_compositor_readiness_report(self.is_wl_compositor_global_initialized())
+    }
+
+    fn wl_compositor_state_mut(&mut self) -> &mut CompositorState {
+        self.compositor_state
+            .as_mut()
+            .expect("wl_compositor global 必须先由配对 display owner 显式初始化")
     }
 
     /// 返回已初始化的 xdg-shell helper state。
@@ -307,6 +351,28 @@ impl XdgShellHandler for LinuxXdgShellStateSkeleton {
     }
 }
 
+impl CompositorHandler for LinuxXdgShellStateSkeleton {
+    fn compositor_state(&mut self) -> &mut CompositorState {
+        self.wl_compositor_state_mut()
+    }
+
+    fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
+        // Smithay 的 trait 要求返回与 Client 同生命周期的引用；现有 insertion seam
+        // 保证所有 client 都安装 NestedClientDataOwner，而不是共享全局/fake state。
+        client
+            .get_data::<NestedClientDataOwner>()
+            .map(NestedClientDataOwner::compositor_state)
+            .expect("Wayland client 必须由 NestedClientDataOwner 插入")
+    }
+
+    fn commit(&mut self, _surface: &WlSurface) {
+        // delegate wiring 只建立 server dispatch boundary。本阶段不记录 identity、
+        // 不创建 xdg lifecycle，也不触发 admission ledger 或 core mutation。
+    }
+}
+
+smithay::delegate_compositor!(LinuxXdgShellStateSkeleton);
+
 // Smithay 的全量 delegate_xdg_shell! 会让 popup dispatch 要求 SeatHandler。
 // 本阶段逐项生成 global 与非 popup request delegation，避免为编译证明伪造 input。
 smithay::reexports::wayland_server::delegate_global_dispatch!(LinuxXdgShellStateSkeleton: [
@@ -346,7 +412,11 @@ mod tests {
     use smithay::reexports::wayland_protocols::xdg::shell::server::{
         xdg_toplevel::XdgToplevel, xdg_wm_base::XdgWmBase,
     };
+    use smithay::reexports::wayland_server::protocol::{
+        wl_compositor::WlCompositor, wl_surface::WlSurface,
+    };
     use smithay::reexports::wayland_server::{Dispatch, GlobalDispatch};
+    use smithay::wayland::compositor::{CompositorHandler, SurfaceUserData};
     use smithay::wayland::shell::xdg::{XdgShellHandler, XdgShellSurfaceUserData};
 
     use super::LinuxXdgShellStateSkeleton;
@@ -362,6 +432,18 @@ mod tests {
         assert_handler::<LinuxXdgShellStateSkeleton>();
         assert_global::<LinuxXdgShellStateSkeleton>();
         assert_toplevel_dispatch::<LinuxXdgShellStateSkeleton>();
+    }
+
+    /// 编译期证明 compositor handler、global 与 surface dispatch 已连接。
+    #[test]
+    fn linux_wl_compositor_handler_traits_compile_for_wayland_state() {
+        fn assert_handler<T: CompositorHandler>() {}
+        fn assert_global<T: GlobalDispatch<WlCompositor, ()>>() {}
+        fn assert_surface_dispatch<T: Dispatch<WlSurface, SurfaceUserData>>() {}
+
+        assert_handler::<LinuxXdgShellStateSkeleton>();
+        assert_global::<LinuxXdgShellStateSkeleton>();
+        assert_surface_dispatch::<LinuxXdgShellStateSkeleton>();
     }
 
     /// 编译边界不得夸大 callback、runtime、dispatch、render 或 input。
