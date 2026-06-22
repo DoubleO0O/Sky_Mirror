@@ -313,7 +313,8 @@ pub use linux_xdg_lifecycle_observation::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_xdg_shell::{
-    LinuxXdgShellCompileBlocker, LinuxXdgShellCompileReport, LinuxXdgShellStateSkeleton,
+    LinuxXdgShellCompileBlocker, LinuxXdgShellCompileReport, LinuxXdgShellGlobalBlocker,
+    LinuxXdgShellGlobalInitError, LinuxXdgShellGlobalInitReport, LinuxXdgShellStateSkeleton,
     linux_xdg_shell_readiness_report,
 };
 #[allow(unused_imports)]
@@ -1820,6 +1821,132 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !production_code.contains(forbidden),
                 "Phase 52G observation 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// 验证 Phase 52I global owner 只存在于 Linux-only 编译边界。
+    #[test]
+    fn linux_xdg_shell_global_owner_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let shell_module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_xdg_shell;")
+            .expect("Linux xdg-shell module 必须存在");
+        let shell_reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_xdg_shell::{")
+            .expect("Linux xdg-shell re-export 必须存在");
+
+        assert_eq!(lines[shell_module.0 - 1], required_gate);
+        assert_eq!(lines[shell_reexport.0 - 1], required_gate);
+    }
+
+    /// 验证显式 global 初始化由 display owner 驱动，且不越界启动 runtime。
+    #[test]
+    fn linux_xdg_shell_global_owner_source_is_explicit_and_conservative() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let shell_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_xdg_shell.rs"))
+                .expect("Linux xdg-shell handler 模块必须存在");
+        let display_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/wayland_display.rs"))
+                .expect("Linux Wayland display owner 模块必须存在");
+        let shell_production = shell_source
+            .split_once("#[cfg(test)]")
+            .map_or(shell_source.as_str(), |(production, _)| production);
+        let display_production = display_source
+            .split_once("#[cfg(test)]")
+            .map_or(display_source.as_str(), |(production, _)| production);
+        let shell_code = shell_production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let display_code = display_production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let init_code = shell_code
+            .split_once("pub(crate) fn initialize_xdg_shell_global")
+            .and_then(|(_, tail)| tail.split_once("fn xdg_shell_state_mut"))
+            .map(|(init, _)| init)
+            .expect("Phase 52I crate-private init 边界必须可定位");
+        let display_init_code = display_code
+            .split_once("pub fn initialize_xdg_shell_global")
+            .and_then(|(_, tail)| tail.split_once("pub fn is_xdg_shell_global_initialized"))
+            .map(|(init, _)| init)
+            .expect("Phase 52I public owner init 边界必须可定位");
+
+        for required in [
+            "LinuxXdgShellGlobalInitError",
+            "LinuxXdgShellGlobalInitReport",
+            "LinuxXdgShellGlobalBlocker",
+            "pub(crate) fn initialize_xdg_shell_global",
+            "XdgShellState::new::<LinuxXdgShellStateSkeleton>(display_handle)",
+            "is_xdg_shell_global_initialized",
+            "xdg_shell_state_new_invoked: initialized",
+            "xdg_shell_global_initialized: initialized",
+            "xdg_shell_state_owned: initialized",
+            "client_harness_available: false",
+            "new_toplevel_registration_owner_available: false",
+            "callback_observed: false",
+            "ledger_unmap_invoked: false",
+            "core_detach_invoked: false",
+            "protocol_dispatch_started: false",
+            "real_xdg_shell_runtime_available: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                shell_code.contains(required),
+                "Phase 52I shell owner 缺少边界证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub fn initialize_xdg_shell_global",
+            "self.display.handle()",
+            "self.state.initialize_xdg_shell_global(&display_handle)",
+            "pub fn is_xdg_shell_global_initialized",
+            "pub fn xdg_shell_global_readiness_report",
+        ] {
+            assert!(
+                display_code.contains(required),
+                "Phase 52I display owner 缺少显式初始化证据: {required}"
+            );
+        }
+
+        let constructor = display_code
+            .split_once("pub fn new()")
+            .and_then(|(_, tail)| tail.split_once("pub fn display_handle"))
+            .map(|(constructor, _)| constructor)
+            .expect("Display owner constructor 边界必须可定位");
+        assert!(
+            !constructor.contains("initialize_xdg_shell_global"),
+            "Display constructor 不得自动初始化 xdg-shell global"
+        );
+
+        for forbidden in [
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent::ToplevelUnmapped",
+            "CoreCommand::DetachWindowFromSurface",
+            "SeatHandler",
+            ".dispatch_clients(",
+            ".insert_client(",
+            ".register_toplevel(",
+            "observe_toplevel_lifecycle(",
+        ] {
+            assert!(
+                !init_code.contains(forbidden) && !display_init_code.contains(forbidden),
+                "Phase 52I production owner 包含禁止 token: {forbidden}"
             );
         }
     }

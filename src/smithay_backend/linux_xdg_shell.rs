@@ -2,8 +2,8 @@
 //!
 //! 本模块只在 Linux + `smithay-linux` 下可见。它把 Smithay 的真实
 //! `XdgShellHandler` / `GlobalDispatch` / `Dispatch` trait 实现定位到 display 内部的
-//! `LinuxXdgShellStateSkeleton`，但不调用 `XdgShellState::new`，因此不会注册
-//! global、不会收到真实 request，也不会触发 admission ledger 或核心状态变更。
+//! `LinuxXdgShellStateSkeleton`。Phase 52I 允许配对 display owner 显式调用
+//! `XdgShellState::new`；构造时仍不自动初始化，也不把 global 初始化解释为 dispatch。
 
 use smithay::reexports::wayland_protocols::xdg::shell::server::{
     xdg_popup::{self, XdgPopup},
@@ -29,15 +29,71 @@ use super::xdg_lifecycle_observation::{
 
 /// Wayland display 内部持有的 Linux-only xdg-shell handler state。
 ///
-/// 该类型把既有公开 `SmithayWaylandState` 与未来 `XdgShellState` 所有权组合起来，
-/// 避免修改旧 public struct 的字段形状。`xdg_shell_state` 当前保持 `None`，所以
-/// handler trait 可编译并不意味着 xdg-shell global 已注册。
+/// 该类型把既有公开 `SmithayWaylandState` 与 `XdgShellState` 所有权组合起来。
+/// 默认构造保持 `None`，只有配对 display owner 的显式调用才会初始化 global；
+/// handler trait 可编译或 global 已初始化都不意味着 protocol dispatch 已启动。
 #[derive(Debug, Default)]
 pub struct LinuxXdgShellStateSkeleton {
     wayland_state: SmithayWaylandState,
     xdg_shell_state: Option<XdgShellState>,
     toplevel_identities: LinuxXdgToplevelIdentityRegistry,
     last_toplevel_lifecycle_observation: Option<XdgToplevelLifecycleObservationReport>,
+}
+
+/// Linux-only xdg-shell global 显式初始化的结构化错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxXdgShellGlobalInitError {
+    /// 当前 owner 已持有 `XdgShellState`；重复注册同一 global 被拒绝。
+    AlreadyInitialized,
+}
+
+/// Phase 52I global owner 之后仍未满足的 runtime 前置条件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxXdgShellGlobalBlocker {
+    /// 配对 display owner 尚未执行显式初始化。
+    MissingExplicitInitialization,
+    /// 尚无受控 xdg client/toplevel lifecycle harness。
+    MissingControlledClientHarness,
+    /// `new_toplevel` 尚无 identity registration owner。
+    MissingNewToplevelRegistrationOwner,
+    /// 尚无 dispatch 驱动的 callback observed proof。
+    MissingDispatchDrivenCallbackProof,
+}
+
+/// Linux-only xdg-shell global owner 的精确初始化/readiness 报告。
+///
+/// Global 初始化只表示 owner 持有 `XdgShellState`。它不表示协议 dispatch、
+/// callback、client harness、完整 runtime、render 或 input 已经可用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxXdgShellGlobalInitReport {
+    /// Display 与 handler state 的配对 owner 是否存在。
+    pub global_owner_available: bool,
+    /// 是否已经成功调用 `XdgShellState::new`。
+    pub xdg_shell_state_new_invoked: bool,
+    /// xdg-shell global 是否已经由 Smithay 创建。
+    pub xdg_shell_global_initialized: bool,
+    /// 配对 handler state 是否持有创建出的 `XdgShellState`。
+    pub xdg_shell_state_owned: bool,
+    /// 是否存在受控 client/toplevel lifecycle harness。
+    pub client_harness_available: bool,
+    /// `new_toplevel` 是否已有 runtime identity registration owner。
+    pub new_toplevel_registration_owner_available: bool,
+    /// 是否已证明真实 callback invocation。
+    pub callback_observed: bool,
+    /// Global 初始化层是否调用 admission ledger unmap。
+    pub ledger_unmap_invoked: bool,
+    /// Global 初始化层是否调用 core detach。
+    pub core_detach_invoked: bool,
+    /// 是否已启动 protocol request dispatch。
+    pub protocol_dispatch_started: bool,
+    /// 是否已有可用的真实 xdg-shell runtime。
+    pub real_xdg_shell_runtime_available: bool,
+    /// render 是否可用。
+    pub render_support: bool,
+    /// input 是否可用。
+    pub input_support: bool,
+    /// 当前仍未满足的后续前置条件。
+    pub blockers: Vec<LinuxXdgShellGlobalBlocker>,
 }
 
 impl LinuxXdgShellStateSkeleton {
@@ -72,6 +128,62 @@ impl LinuxXdgShellStateSkeleton {
         &self,
     ) -> Option<&XdgToplevelLifecycleObservationReport> {
         self.last_toplevel_lifecycle_observation.as_ref()
+    }
+
+    /// 返回当前 owner 是否已经持有 xdg-shell global state。
+    pub(crate) const fn is_xdg_shell_global_initialized(&self) -> bool {
+        self.xdg_shell_state.is_some()
+    }
+
+    /// 使用与 handler state 配对的 display handle 显式初始化 xdg-shell global。
+    ///
+    /// 本方法保持 crate-private，外部调用方不能注入任意 `DisplayHandle`。公开入口由
+    /// `SmithayWaylandDisplayProbe` 提供，并固定使用其自身 display 的 handle。
+    pub(crate) fn initialize_xdg_shell_global(
+        &mut self,
+        display_handle: &DisplayHandle,
+    ) -> Result<LinuxXdgShellGlobalInitReport, LinuxXdgShellGlobalInitError> {
+        if self.xdg_shell_state.is_some() {
+            return Err(LinuxXdgShellGlobalInitError::AlreadyInitialized);
+        }
+
+        // Smithay 0.7 的初始化是不可失败构造；先完成构造再写入 Option，避免留下
+        // 对调用方可见的半初始化 owner state。
+        let xdg_shell_state = XdgShellState::new::<LinuxXdgShellStateSkeleton>(display_handle);
+        self.xdg_shell_state = Some(xdg_shell_state);
+
+        Ok(self.xdg_shell_global_readiness_report())
+    }
+
+    /// 返回当前 global owner 的保守 readiness，不执行任何 mutation。
+    pub(crate) fn xdg_shell_global_readiness_report(&self) -> LinuxXdgShellGlobalInitReport {
+        let initialized = self.is_xdg_shell_global_initialized();
+        let mut blockers = Vec::new();
+        if !initialized {
+            blockers.push(LinuxXdgShellGlobalBlocker::MissingExplicitInitialization);
+        }
+        blockers.extend([
+            LinuxXdgShellGlobalBlocker::MissingControlledClientHarness,
+            LinuxXdgShellGlobalBlocker::MissingNewToplevelRegistrationOwner,
+            LinuxXdgShellGlobalBlocker::MissingDispatchDrivenCallbackProof,
+        ]);
+
+        LinuxXdgShellGlobalInitReport {
+            global_owner_available: true,
+            xdg_shell_state_new_invoked: initialized,
+            xdg_shell_global_initialized: initialized,
+            xdg_shell_state_owned: initialized,
+            client_harness_available: false,
+            new_toplevel_registration_owner_available: false,
+            callback_observed: false,
+            ledger_unmap_invoked: false,
+            core_detach_invoked: false,
+            protocol_dispatch_started: false,
+            real_xdg_shell_runtime_available: false,
+            render_support: false,
+            input_support: false,
+            blockers,
+        }
     }
 
     /// 返回已初始化的 xdg-shell helper state。
