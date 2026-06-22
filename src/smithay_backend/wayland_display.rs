@@ -11,6 +11,9 @@
 
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 
+use super::linux_wl_compositor::{
+    LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
+};
 use super::linux_xdg_shell::{
     LinuxXdgShellGlobalInitError, LinuxXdgShellGlobalInitReport, LinuxXdgShellStateSkeleton,
 };
@@ -96,6 +99,27 @@ impl SmithayWaylandDisplayProbe {
         self.state.xdg_shell_global_readiness_report()
     }
 
+    /// 使用当前 display 自己的 handle 显式初始化 `wl_compositor` global。
+    ///
+    /// 初始化只建立 server-side state owner 与 dispatch wiring；它不创建 client
+    /// connection/event queue，不 bind registry，不创建 xdg lifecycle，也不触碰 core。
+    pub fn initialize_wl_compositor_global(
+        &mut self,
+    ) -> Result<LinuxWlCompositorReadinessReport, LinuxWlCompositorGlobalInitError> {
+        let display_handle = self.display.handle();
+        self.state.initialize_wl_compositor_global(&display_handle)
+    }
+
+    /// 返回当前 owner 是否已持有 `CompositorState`。
+    pub fn is_wl_compositor_global_initialized(&self) -> bool {
+        self.state.is_wl_compositor_global_initialized()
+    }
+
+    /// 返回当前 `wl_compositor` owner readiness；查询不会产生 mutation。
+    pub fn wl_compositor_readiness_report(&self) -> LinuxWlCompositorReadinessReport {
+        self.state.wl_compositor_readiness_report()
+    }
+
     /// 执行一次 Wayland backend client dispatch，并返回处理的 request 数量。
     ///
     /// 该 Linux-only seam 只用于让 backend 观察真实 peer EOF，从而触发其持有的
@@ -120,6 +144,9 @@ impl SmithayWaylandDisplayProbe {
 
 #[cfg(test)]
 mod tests {
+    use crate::smithay_backend::linux_wl_compositor::{
+        LinuxWlCompositorGlobalBlocker, LinuxWlCompositorGlobalInitError,
+    };
     use crate::smithay_backend::linux_xdg_shell::{
         LinuxXdgShellGlobalBlocker, LinuxXdgShellGlobalInitError,
     };
@@ -147,6 +174,14 @@ mod tests {
                 LinuxXdgShellGlobalBlocker::MissingNewToplevelRegistrationOwner,
                 LinuxXdgShellGlobalBlocker::MissingDispatchDrivenCallbackProof,
             ]
+        );
+        let compositor_report = probe.wl_compositor_readiness_report();
+        assert!(!compositor_report.compositor_state_new_invoked);
+        assert!(!compositor_report.wl_compositor_global_initialized);
+        assert!(!compositor_report.wl_compositor_state_owned);
+        assert_eq!(
+            compositor_report.blockers.first(),
+            Some(&LinuxWlCompositorGlobalBlocker::MissingExplicitInitialization)
         );
     }
 
@@ -217,5 +252,53 @@ mod tests {
         assert!(report.xdg_shell_state_owned);
         assert!(!report.protocol_dispatch_started);
         assert!(!report.callback_observed);
+    }
+
+    /// 验证 `wl_compositor` global 只能由配对 display owner 显式初始化。
+    #[test]
+    fn linux_wl_compositor_global_owner_initializes_explicitly() {
+        let mut probe =
+            SmithayWaylandDisplayProbe::new().expect("Wayland Display 探针必须能够构造");
+
+        let report = probe
+            .initialize_wl_compositor_global()
+            .expect("首次显式初始化 wl_compositor 必须成功");
+
+        assert!(probe.is_wl_compositor_global_initialized());
+        assert!(report.global_owner_available);
+        assert!(report.compositor_state_new_invoked);
+        assert!(report.wl_compositor_global_initialized);
+        assert!(report.wl_compositor_state_owned);
+        assert!(report.compositor_handler_available);
+        assert!(report.delegate_compositor_wired);
+        assert!(report.per_client_compositor_state_available);
+        assert!(report.wl_surface_owner_boundary_available);
+        assert!(!report.client_connection_created);
+        assert!(!report.registry_bind_attempted);
+        assert!(!report.client_bound_wl_compositor);
+        assert!(!report.protocol_dispatch_started);
+        assert!(!report.real_compositor_runtime_available);
+    }
+
+    /// 验证重复初始化结构化拒绝，并保留首次创建的 compositor state。
+    #[test]
+    fn linux_wl_compositor_global_initialization_is_structured() {
+        let mut probe =
+            SmithayWaylandDisplayProbe::new().expect("Wayland Display 探针必须能够构造");
+        probe
+            .initialize_wl_compositor_global()
+            .expect("首次显式初始化 wl_compositor 必须成功");
+
+        let duplicate = probe.initialize_wl_compositor_global();
+
+        assert_eq!(
+            duplicate,
+            Err(LinuxWlCompositorGlobalInitError::AlreadyInitialized)
+        );
+        assert!(probe.is_wl_compositor_global_initialized());
+        let report = probe.wl_compositor_readiness_report();
+        assert!(report.wl_compositor_state_owned);
+        assert!(!report.client_bound_wl_compositor);
+        assert!(!report.protocol_dispatch_started);
     }
 }

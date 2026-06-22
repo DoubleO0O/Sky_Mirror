@@ -80,6 +80,9 @@ pub mod linux_runtime;
 /// Linux-only Wayland client 依赖与类型 import 编译边界。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_wayland_client_endpoint;
+/// Linux-only `wl_compositor` state owner 与 per-client compositor data seam。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_wl_compositor;
 /// Linux-only xdg lifecycle callback-like signal到 identity lookup observation boundary。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_xdg_lifecycle_observation;
@@ -312,6 +315,12 @@ pub use linux_runtime::SmithayLinuxRuntimeProbe;
 pub use linux_wayland_client_endpoint::{
     LinuxWaylandClientEndpointCompileReport, WaylandClientEndpointCompileBlocker,
     linux_wayland_client_endpoint_compile_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_wl_compositor::{
+    LinuxWlCompositorGlobalBlocker, LinuxWlCompositorGlobalInitError,
+    LinuxWlCompositorReadinessReport, linux_wl_compositor_readiness_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -1956,6 +1965,149 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !init_code.contains(forbidden) && !display_init_code.contains(forbidden),
                 "Phase 52I production owner 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52M-B compositor owner 必须同时受 feature 与 Linux target 双重隔离。
+    #[test]
+    fn linux_wl_compositor_owner_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_wl_compositor;")
+            .expect("Phase 52M-B Linux wl_compositor owner module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_wl_compositor::{")
+            .expect("Phase 52M-B Linux wl_compositor owner re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52M-B owner/data seam 必须显式初始化并保持 runtime/core 边界关闭。
+    #[test]
+    fn linux_wl_compositor_owner_source_is_explicit_and_conservative() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let compositor_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_wl_compositor.rs"))
+                .expect("Phase 52M-B Linux wl_compositor owner module 必须存在");
+        let shell_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_xdg_shell.rs"))
+                .expect("Linux display state module 必须存在");
+        let display_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/wayland_display.rs"))
+                .expect("Linux Wayland display owner module 必须存在");
+        let client_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/client_insert.rs"))
+                .expect("Linux client data owner module 必须存在");
+        let production = |source: &str| {
+            source
+                .split_once("#[cfg(test)]")
+                .map_or(source, |(production, _)| production)
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let compositor_code = production(&compositor_source);
+        let shell_code = production(&shell_source);
+        let display_code = production(&display_source);
+        let client_code = production(&client_source);
+        let shell_init_code = shell_code
+            .split_once("pub(crate) fn initialize_wl_compositor_global")
+            .and_then(|(_, tail)| tail.split_once("fn wl_compositor_state_mut"))
+            .map(|(code, _)| code)
+            .expect("Phase 52M-B compositor init seam 必须可定位");
+        let shell_handler_code = shell_code
+            .split_once("impl CompositorHandler for LinuxXdgShellStateSkeleton")
+            .and_then(|(_, tail)| {
+                tail.split_once("smithay::delegate_compositor!(LinuxXdgShellStateSkeleton)")
+            })
+            .map(|(code, _)| code)
+            .expect("Phase 52M-B compositor handler seam 必须可定位");
+
+        for required in [
+            "LinuxWlCompositorGlobalInitError",
+            "LinuxWlCompositorReadinessReport",
+            "global_owner_available: true",
+            "client_connection_created: false",
+            "registry_bind_attempted: false",
+            "client_bound_wl_compositor: false",
+            "protocol_dispatch_started: false",
+            "real_compositor_runtime_available: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                compositor_code.contains(required),
+                "Phase 52M-B report 缺少保守能力证据: {required}"
+            );
+        }
+
+        for required in [
+            "compositor_state: Option<CompositorState>",
+            "pub(crate) fn initialize_wl_compositor_global",
+            "CompositorState::new::<LinuxXdgShellStateSkeleton>(display_handle)",
+            "impl CompositorHandler for LinuxXdgShellStateSkeleton",
+            "smithay::delegate_compositor!(LinuxXdgShellStateSkeleton)",
+        ] {
+            assert!(
+                shell_code.contains(required),
+                "Phase 52M-B display state 缺少 owner/handler 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub fn initialize_wl_compositor_global",
+            "self.display.handle()",
+            "self.state.initialize_wl_compositor_global(&display_handle)",
+            "pub fn wl_compositor_readiness_report",
+        ] {
+            assert!(
+                display_code.contains(required),
+                "Phase 52M-B display owner 缺少显式初始化证据: {required}"
+            );
+        }
+
+        for required in [
+            "compositor_state: CompositorClientState",
+            "CompositorClientState::default()",
+            "pub(crate) fn compositor_state(&self) -> &CompositorClientState",
+        ] {
+            assert!(
+                client_code.contains(required),
+                "Phase 52M-B client data owner 缺少 per-client state 证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "Connection::connect_to_env",
+            "Connection::connect_to_name",
+            "Connection::from_socket",
+            ".new_event_queue(",
+            ".get_registry(",
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent::ToplevelMapped",
+            "BackendEvent::ToplevelUnmapped",
+            "CoreCommand::RegisterWindowForSurface",
+            "CoreCommand::DetachWindowFromSurface",
+            "SeatHandler",
+        ] {
+            assert!(
+                !compositor_code.contains(forbidden)
+                    && !shell_init_code.contains(forbidden)
+                    && !shell_handler_code.contains(forbidden)
+                    && !display_code.contains(forbidden)
+                    && !client_code.contains(forbidden),
+                "Phase 52M-B production seam 包含禁止 token: {forbidden}"
             );
         }
     }
