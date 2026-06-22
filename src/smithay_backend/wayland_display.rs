@@ -129,6 +129,14 @@ impl SmithayWaylandDisplayProbe {
         self.display.dispatch_clients(&mut self.state)
     }
 
+    /// Flush 当前受控 client 的 server-side outgoing buffer。
+    ///
+    /// Phase 52N 的 client registry roundtrip 需要 server 把 global/sync event 写回
+    /// 受控 stream；该方法不启动长期 runtime，也不访问 xdg、ledger 或 core。
+    pub(crate) fn flush_clients_once(&mut self) -> std::io::Result<()> {
+        self.display.flush_clients()
+    }
+
     /// 返回当前是否仍然只是 probe 模式。
     pub fn is_probe_only(&self) -> bool {
         self.state.wayland_state().probe_only
