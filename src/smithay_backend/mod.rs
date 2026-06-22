@@ -86,6 +86,9 @@ pub mod linux_wl_compositor;
 /// Linux-only controlled client `wl_compositor` bind proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_wl_compositor_client_bind;
+/// Linux-only controlled `wl_surface` creation 与 adapter-owned identity proof。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_wl_surface_identity;
 /// Linux-only xdg lifecycle callback-like signal到 identity lookup observation boundary。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_xdg_lifecycle_observation;
@@ -331,6 +334,14 @@ pub use linux_wl_compositor_client_bind::{
     ControlledWlCompositorBindBlocker, ControlledWlCompositorBindError,
     ControlledWlCompositorBindOperation, ControlledWlCompositorBindReport,
     controlled_wl_compositor_bind_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_wl_surface_identity::{
+    AdapterSurfaceIdentityMapping, ControlledWlSurfaceCreationBlocker,
+    ControlledWlSurfaceCreationError, ControlledWlSurfaceCreationOperation,
+    ControlledWlSurfaceCreationReport, SurfaceIdentityError, SurfaceIdentityKey,
+    controlled_wl_surface_creation_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -2208,6 +2219,97 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52N controlled bind 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52O controlled surface proof 必须同时受 feature 与 Linux target 双重隔离。
+    #[test]
+    fn controlled_wl_surface_creation_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_wl_surface_identity;")
+            .expect("Phase 52O controlled surface identity module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_wl_surface_identity::{")
+            .expect("Phase 52O controlled surface identity re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52O 只允许受控 surface creation 与 adapter identity，不得进入 xdg/core。
+    #[test]
+    fn controlled_wl_surface_creation_source_stays_within_proof_boundary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_wl_surface_identity.rs"))
+                .expect("Phase 52O controlled surface identity module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "Connection::from_socket(client_stream)",
+            "registry_queue_init::<ControlledSurfaceClientState>(&connection)",
+            ".bind::<WlCompositor, _, _>",
+            "MissingClientWlCompositorBind",
+            ".create_surface(&queue_handle, ())",
+            "NestedClientInsertCompileBoundary::new(server.display_handle())",
+            ".insert_client(server_stream, session)",
+            ".dispatch_clients_once()",
+            ".flush_clients_once()",
+            "wl_surface_create_attempted: true",
+            "wl_surface_created: true",
+            "server_surface_observed: true",
+            "adapter_surface_identity_allocated: true",
+            "client_bound_xdg_wm_base: false",
+            "xdg_surface_created: false",
+            "xdg_toplevel_created: false",
+            "ledger_admit_invoked: false",
+            "core_register_invoked: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52O controlled surface proof 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "Connection::connect_to_env",
+            "Connection::connect_to_name",
+            "XdgWmBase",
+            "xdg_wm_base::",
+            "xdg_surface::",
+            "xdg_toplevel::",
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent::ToplevelMapped",
+            "BackendEvent::ToplevelUnmapped",
+            "CoreCommand::RegisterWindowForSurface",
+            "CoreCommand::DetachWindowFromSurface",
+            "SurfaceRegistry",
+            "WindowRegistry",
+            "WindowId",
+            "SeatHandler",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52O controlled surface proof 包含禁止生产 token: {forbidden}"
             );
         }
     }

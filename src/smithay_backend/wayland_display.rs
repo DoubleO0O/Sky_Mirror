@@ -14,6 +14,7 @@ use smithay::reexports::wayland_server::{Display, DisplayHandle};
 use super::linux_wl_compositor::{
     LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
 };
+use super::linux_wl_surface_identity::{AdapterSurfaceIdentityMapping, SurfaceIdentityError};
 use super::linux_xdg_shell::{
     LinuxXdgShellGlobalInitError, LinuxXdgShellGlobalInitReport, LinuxXdgShellStateSkeleton,
 };
@@ -118,6 +119,18 @@ impl SmithayWaylandDisplayProbe {
     /// 返回当前 `wl_compositor` owner readiness；查询不会产生 mutation。
     pub fn wl_compositor_readiness_report(&self) -> LinuxWlCompositorReadinessReport {
         self.state.wl_compositor_readiness_report()
+    }
+
+    /// 返回本 display 的 server handler 收到的 `new_surface` 次数。
+    pub(crate) fn wl_surface_observation_count(&self) -> usize {
+        self.state.wl_surface_observation_count()
+    }
+
+    /// 返回最近一次 `new_surface` 观察建立的 adapter-only mapping。
+    pub(crate) fn last_wl_surface_identity_observation(
+        &self,
+    ) -> Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>> {
+        self.state.last_wl_surface_identity_observation()
     }
 
     /// 执行一次 Wayland backend client dispatch，并返回处理的 request 数量。

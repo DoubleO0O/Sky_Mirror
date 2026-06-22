@@ -27,6 +27,9 @@ use super::linux_wl_compositor::{
     LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
     build_linux_wl_compositor_readiness_report,
 };
+use super::linux_wl_surface_identity::{
+    AdapterSurfaceIdentityMapping, LinuxWlSurfaceIdentityRegistry, SurfaceIdentityError,
+};
 use super::linux_xdg_lifecycle_observation::observe_toplevel_lifecycle;
 use super::linux_xdg_toplevel_identity::LinuxXdgToplevelIdentityRegistry;
 use super::wayland_display::SmithayWaylandState;
@@ -44,6 +47,7 @@ pub struct LinuxXdgShellStateSkeleton {
     wayland_state: SmithayWaylandState,
     xdg_shell_state: Option<XdgShellState>,
     compositor_state: Option<CompositorState>,
+    surface_identities: LinuxWlSurfaceIdentityRegistry,
     toplevel_identities: LinuxXdgToplevelIdentityRegistry,
     last_toplevel_lifecycle_observation: Option<XdgToplevelLifecycleObservationReport>,
 }
@@ -111,6 +115,7 @@ impl LinuxXdgShellStateSkeleton {
             wayland_state: SmithayWaylandState::new(),
             xdg_shell_state: None,
             compositor_state: None,
+            surface_identities: LinuxWlSurfaceIdentityRegistry::new(),
             toplevel_identities: LinuxXdgToplevelIdentityRegistry::new(),
             last_toplevel_lifecycle_observation: None,
         }
@@ -127,6 +132,18 @@ impl LinuxXdgShellStateSkeleton {
     /// 所属的 state owner，mapping ownership 不等于 callback observed。
     pub(crate) const fn toplevel_identity_registry(&self) -> &LinuxXdgToplevelIdentityRegistry {
         &self.toplevel_identities
+    }
+
+    /// 返回 server handler 收到的 `new_surface` observation 次数。
+    pub(crate) fn wl_surface_observation_count(&self) -> usize {
+        self.surface_identities.observation_count()
+    }
+
+    /// 返回最近一次 server-side `new_surface` 建立的纯数据 mapping。
+    pub(crate) fn last_wl_surface_identity_observation(
+        &self,
+    ) -> Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>> {
+        self.surface_identities.last_observation()
     }
 
     /// 返回最近一次 callback-like lifecycle identity lookup 报告。
@@ -363,6 +380,13 @@ impl CompositorHandler for LinuxXdgShellStateSkeleton {
             .get_data::<NestedClientDataOwner>()
             .map(NestedClientDataOwner::compositor_state)
             .expect("Wayland client 必须由 NestedClientDataOwner 插入")
+    }
+
+    fn new_surface(&mut self, surface: &WlSurface) {
+        // 真实 WlSurface 不能进入 core。先以 adapter-owned ObjectId key 去重，再分配
+        // 纯数据 AdapterSurfaceId；该观察不赋 xdg role、不调用 ledger/core，也不
+        // 表示 surface 已 commit 或可 render。
+        let _ = self.surface_identities.observe_surface(surface);
     }
 
     fn commit(&mut self, _surface: &WlSurface) {
