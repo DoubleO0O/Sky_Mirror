@@ -77,6 +77,9 @@ pub mod linux_handler_probe;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only Wayland client 依赖与类型 import 编译边界。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_wayland_client_endpoint;
 /// Linux-only xdg lifecycle callback-like signal到 identity lookup observation boundary。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_xdg_lifecycle_observation;
@@ -304,6 +307,12 @@ pub use linux_handler_probe::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_wayland_client_endpoint::{
+    LinuxWaylandClientEndpointCompileReport, WaylandClientEndpointCompileBlocker,
+    linux_wayland_client_endpoint_compile_report,
+};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_xdg_lifecycle_observation::{
@@ -1947,6 +1956,110 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !init_code.contains(forbidden) && !display_init_code.contains(forbidden),
                 "Phase 52I production owner 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52L client compile seam 必须同时受 feature 与 Linux target 双重隔离。
+    #[test]
+    fn linux_wayland_client_compile_seam_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_wayland_client_endpoint;")
+            .expect("Phase 52L Linux client compile module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_wayland_client_endpoint::{")
+            .expect("Phase 52L Linux client compile re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+
+        let cargo = include_str!("../../Cargo.toml");
+        for required in [
+            "\"dep:wayland-client\"",
+            "\"dep:wayland-protocols\"",
+            "wayland-client = { version = \"0.31\", optional = true }",
+            "wayland-protocols = { version = \"0.32\", features = [\"client\"], optional = true }",
+        ] {
+            assert!(
+                cargo.contains(required),
+                "Phase 52L Cargo gate 缺少依赖证据: {required}"
+            );
+        }
+    }
+
+    /// Compile/import 证据不得偷偷创建 connection、bind global 或进入 ledger/core。
+    #[test]
+    fn linux_wayland_client_compile_seam_keeps_runtime_boundary_false() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/smithay_backend/linux_wayland_client_endpoint.rs");
+        let source = std::fs::read_to_string(path)
+            .expect("Phase 52L Linux client compile seam 源码必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let production_code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "wayland_client::Connection",
+            "wl_compositor::WlCompositor",
+            "wl_registry::WlRegistry",
+            "wl_surface::WlSurface",
+            "xdg_wm_base::XdgWmBase",
+            "xdg_surface::XdgSurface",
+            "xdg_toplevel::XdgToplevel",
+            "wayland_client_dependency_available: true",
+            "wayland_protocols_client_feature_available: true",
+            "linux_client_imports_compile: true",
+            "runtime_connection_created: false",
+            "event_queue_created: false",
+            "registry_bind_attempted: false",
+            "client_harness_available: false",
+            "callback_observed: false",
+            "ledger_admit_invoked: false",
+            "ledger_unmap_invoked: false",
+            "core_register_invoked: false",
+            "core_detach_invoked: false",
+            "protocol_dispatch_started: false",
+            "real_xdg_shell_runtime_available: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "Phase 52L compile seam 缺少保守证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "Connection::connect_to_env",
+            "Connection::connect_to_name",
+            "Connection::from_socket",
+            ".new_event_queue(",
+            ".get_registry(",
+            ".bind(",
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent::ToplevelMapped",
+            "BackendEvent::ToplevelUnmapped",
+            "CoreCommand::RegisterWindowForSurface",
+            "CoreCommand::DetachWindowFromSurface",
+            "SeatHandler",
+        ] {
+            assert!(
+                !production_code.contains(forbidden),
+                "Phase 52L compile seam 包含禁止 runtime token: {forbidden}"
             );
         }
     }
