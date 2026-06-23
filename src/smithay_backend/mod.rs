@@ -98,6 +98,9 @@ pub mod linux_xdg_shell;
 /// Linux-only Smithay toplevel ObjectId 到 AdapterToplevelId 的 ownership registry。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_xdg_toplevel_identity;
+/// Linux-only controlled client `xdg_wm_base` bind proof。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_xdg_wm_base_client_bind;
 /// Linux-only accept/dispatch/disconnect lifecycle 的单次 pump coordinator。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod nested_runtime_coordinator;
@@ -363,6 +366,12 @@ pub use linux_xdg_toplevel_identity::{
     LinuxXdgToplevelIdentityOperationError, LinuxXdgToplevelIdentityReadinessReport,
     LinuxXdgToplevelIdentityRegistry, LinuxXdgToplevelIdentitySourceError,
     linux_xdg_toplevel_identity_readiness_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_xdg_wm_base_client_bind::{
+    ControlledXdgWmBaseBindBlocker, ControlledXdgWmBaseBindError, ControlledXdgWmBaseBindOperation,
+    ControlledXdgWmBaseBindReport, controlled_xdg_wm_base_bind_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -2310,6 +2319,106 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52O controlled surface proof 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
+    #[test]
+    fn controlled_xdg_wm_base_bind_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_xdg_wm_base_client_bind;")
+            .expect("Phase 52P controlled xdg_wm_base bind module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_xdg_wm_base_client_bind::{")
+            .expect("Phase 52P controlled xdg_wm_base bind re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52P 只允许 bind xdg_wm_base，不得创建 shell object 或进入 ledger/core。
+    #[test]
+    fn controlled_xdg_wm_base_bind_source_stays_within_proof_boundary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_xdg_wm_base_client_bind.rs"),
+        )
+        .expect("Phase 52P controlled xdg_wm_base bind module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "server.is_xdg_shell_global_initialized()",
+            "server.is_wl_compositor_global_initialized()",
+            "Connection::from_socket(client_stream)",
+            "registry_queue_init::<ControlledXdgWmBaseClientState>(&connection)",
+            ".bind::<WlCompositor, _, _>",
+            ".bind::<XdgWmBase, _, _>",
+            "NestedClientInsertCompileBoundary::new(server.display_handle())",
+            ".insert_client(server_stream, session)",
+            ".dispatch_clients_once()",
+            ".flush_clients_once()",
+            "client_bound_wl_compositor: true",
+            "client_bound_xdg_wm_base: true",
+            "wl_surface_created: false",
+            "adapter_surface_identity_allocated: false",
+            "xdg_surface_create_attempted: false",
+            "xdg_surface_created: false",
+            "xdg_toplevel_create_attempted: false",
+            "xdg_toplevel_created: false",
+            "new_toplevel_callback_observed: false",
+            "ledger_admit_invoked: false",
+            "core_register_invoked: false",
+            "protocol_dispatch_started: true",
+            "real_xdg_shell_runtime_available: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52P controlled xdg_wm_base bind 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "Connection::connect_to_env",
+            "Connection::connect_to_name",
+            ".create_surface(",
+            ".get_xdg_surface(",
+            ".get_toplevel(",
+            "Event::Ping",
+            ".pong(",
+            "xdg_surface::XdgSurface",
+            "xdg_toplevel::XdgToplevel",
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent::ToplevelMapped",
+            "BackendEvent::ToplevelUnmapped",
+            "CoreCommand::RegisterWindowForSurface",
+            "CoreCommand::DetachWindowFromSurface",
+            "SurfaceRegistry",
+            "WindowRegistry",
+            "WindowId",
+            "SeatHandler",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52P controlled xdg_wm_base bind 包含禁止生产 token: {forbidden}"
             );
         }
     }
