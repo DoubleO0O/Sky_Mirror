@@ -74,6 +74,9 @@ pub mod linux_adapter;
 /// Smithay handler trait 边界的隔离类型形状与 blocker evidence 探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_handler_probe;
+/// Linux-only controlled `new_toplevel` callback observation proof。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_new_toplevel_callback_observation;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
@@ -321,6 +324,14 @@ pub use linux_handler_probe::{
     smithay_linux_global_dispatch_trait_boundary_report,
     smithay_linux_global_registration_promotion_report, smithay_linux_handler_probe_report,
     smithay_linux_handler_reduction_plan_report, smithay_linux_handler_requirement_matrix_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_new_toplevel_callback_observation::{
+    ControlledNewToplevelCallbackObservationBlocker, ControlledNewToplevelCallbackObservationError,
+    ControlledNewToplevelCallbackObservationOperation,
+    ControlledNewToplevelCallbackObservationReport,
+    controlled_new_toplevel_callback_observation_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -2647,6 +2658,165 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52R controlled xdg_toplevel proof 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52S controlled new_toplevel callback observation API 必须同时受 feature 与 Linux target 隔离。
+    #[test]
+    fn controlled_new_toplevel_callback_observation_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_new_toplevel_callback_observation;")
+            .expect("Phase 52S controlled new_toplevel callback observation module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_new_toplevel_callback_observation::{")
+            .expect("Phase 52S controlled new_toplevel callback observation re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52S 只允许观察 `new_toplevel` callback，不得注册 identity 或进入 ledger/core。
+    #[test]
+    fn controlled_new_toplevel_callback_observation_source_stays_within_proof_boundary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_new_toplevel_callback_observation.rs"),
+        )
+        .expect("Phase 52S controlled new_toplevel callback observation module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "server.is_xdg_shell_global_initialized()",
+            "server.is_wl_compositor_global_initialized()",
+            "Connection::from_socket(client_stream)",
+            "registry_queue_init::<ControlledNewToplevelCallbackClientState>(&connection)",
+            ".bind::<WlCompositor, _, _>",
+            ".create_surface(&queue_handle, ())",
+            ".bind::<XdgWmBase, _, _>",
+            ".get_xdg_surface(&surface, &queue_handle, ())",
+            ".get_toplevel(&queue_handle, ())",
+            "server.new_toplevel_callback_observation_count()",
+            ".last_new_toplevel_callback_observation_sequence()",
+            "NestedClientInsertCompileBoundary::new(server.display_handle())",
+            ".insert_client(server_stream, session)",
+            ".dispatch_clients_once()",
+            ".flush_clients_once()",
+            "client_bound_wl_compositor: true",
+            "wl_surface_create_attempted: true",
+            "wl_surface_created: true",
+            "server_surface_observed: true",
+            "adapter_surface_identity_allocated: true",
+            "client_bound_xdg_wm_base: true",
+            "xdg_surface_create_attempted: true",
+            "xdg_surface_created: true",
+            "xdg_toplevel_create_attempted: true",
+            "xdg_toplevel_created: true",
+            "new_toplevel_callback_expected: true",
+            "new_toplevel_callback_observed: true",
+            "new_toplevel_callback_count: callback_count",
+            "adapter_toplevel_identity_registered: false",
+            "ledger_admit_invoked: false",
+            "core_register_invoked: false",
+            "window_id_allocated: false",
+            "protocol_dispatch_started: true",
+            "real_xdg_shell_runtime_available: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52S controlled callback observation 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "Connection::connect_to_env",
+            "Connection::connect_to_name",
+            "LinuxXdgToplevelIdentityRegistry",
+            ".insert(",
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent::ToplevelMapped",
+            "BackendEvent::ToplevelUnmapped",
+            "CoreCommand::RegisterWindowForSurface",
+            "CoreCommand::DetachWindowFromSurface",
+            "SurfaceRegistry",
+            "WindowRegistry",
+            "WindowId",
+            "SeatHandler",
+            "libinput",
+            "drm",
+            "gbm",
+            "ToplevelSurface",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52S controlled callback observation 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52S 的 handler state 只能记录纯数据 callback count/sequence。
+    #[test]
+    fn linux_new_toplevel_callback_handler_state_is_pure_observation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(root.join("src/smithay_backend/linux_xdg_shell.rs"))
+            .expect("Linux xdg shell handler state 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "new_toplevel_callback_count: u64",
+            "last_new_toplevel_callback_observation_sequence: Option<u64>",
+            "pub(crate) const fn new_toplevel_callback_observation_count(&self) -> u64",
+            "pub(crate) const fn last_new_toplevel_callback_observation_sequence(&self) -> Option<u64>",
+            "fn record_new_toplevel_callback_observation(&mut self)",
+            "self.new_toplevel_callback_count += 1",
+            "self.last_new_toplevel_callback_observation_sequence = Some(sequence)",
+            "fn new_toplevel(&mut self, _surface: ToplevelSurface)",
+            "self.record_new_toplevel_callback_observation();",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52S handler state 缺少纯数据 callback 观察证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "last_new_toplevel_surface",
+            "Option<ToplevelSurface>",
+            "Vec<ToplevelSurface>",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "CoreCommand::",
+            "BackendEvent::",
+            "WindowId",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52S handler state 包含禁止 token: {forbidden}"
             );
         }
     }

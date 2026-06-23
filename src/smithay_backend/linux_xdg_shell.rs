@@ -50,6 +50,8 @@ pub struct LinuxXdgShellStateSkeleton {
     surface_identities: LinuxWlSurfaceIdentityRegistry,
     toplevel_identities: LinuxXdgToplevelIdentityRegistry,
     last_toplevel_lifecycle_observation: Option<XdgToplevelLifecycleObservationReport>,
+    new_toplevel_callback_count: u64,
+    last_new_toplevel_callback_observation_sequence: Option<u64>,
 }
 
 /// Linux-only xdg-shell global 显式初始化的结构化错误。
@@ -118,6 +120,8 @@ impl LinuxXdgShellStateSkeleton {
             surface_identities: LinuxWlSurfaceIdentityRegistry::new(),
             toplevel_identities: LinuxXdgToplevelIdentityRegistry::new(),
             last_toplevel_lifecycle_observation: None,
+            new_toplevel_callback_count: 0,
+            last_new_toplevel_callback_observation_sequence: None,
         }
     }
 
@@ -154,6 +158,22 @@ impl LinuxXdgShellStateSkeleton {
         &self,
     ) -> Option<&XdgToplevelLifecycleObservationReport> {
         self.last_toplevel_lifecycle_observation.as_ref()
+    }
+
+    /// 返回 server handler 收到的 `new_toplevel` callback 次数。
+    pub(crate) const fn new_toplevel_callback_observation_count(&self) -> u64 {
+        self.new_toplevel_callback_count
+    }
+
+    /// 返回最近一次 `new_toplevel` callback 的纯数据观察序号。
+    pub(crate) const fn last_new_toplevel_callback_observation_sequence(&self) -> Option<u64> {
+        self.last_new_toplevel_callback_observation_sequence
+    }
+
+    fn record_new_toplevel_callback_observation(&mut self) {
+        self.new_toplevel_callback_count += 1;
+        let sequence = self.new_toplevel_callback_count;
+        self.last_new_toplevel_callback_observation_sequence = Some(sequence);
     }
 
     /// 返回当前 owner 是否已经持有 xdg-shell global state。
@@ -333,8 +353,9 @@ impl XdgShellHandler for LinuxXdgShellStateSkeleton {
     }
 
     fn new_toplevel(&mut self, _surface: ToplevelSurface) {
+        self.record_new_toplevel_callback_observation();
         // 真实 protocol object 不能进入 core；未来必须先转换为 AdapterToplevelId。
-        // Phase 52E 不建立该映射，也不触发 admission 或 lifecycle mutation。
+        // Phase 52S 只记录 callback 观察，不保存 surface、不触发 admission/core mutation。
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {

@@ -133,6 +133,16 @@ impl SmithayWaylandDisplayProbe {
         self.state.last_wl_surface_identity_observation()
     }
 
+    /// 返回本 display 的 server handler 收到的 `new_toplevel` callback 次数。
+    pub(crate) fn new_toplevel_callback_observation_count(&self) -> u64 {
+        self.state.new_toplevel_callback_observation_count()
+    }
+
+    /// 返回最近一次 `new_toplevel` callback 的纯数据观察序号。
+    pub(crate) fn last_new_toplevel_callback_observation_sequence(&self) -> Option<u64> {
+        self.state.last_new_toplevel_callback_observation_sequence()
+    }
+
     /// 执行一次 Wayland backend client dispatch，并返回处理的 request 数量。
     ///
     /// 该 Linux-only seam 只用于让 backend 观察真实 peer EOF，从而触发其持有的
