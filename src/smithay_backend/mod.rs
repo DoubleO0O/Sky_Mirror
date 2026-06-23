@@ -80,6 +80,9 @@ pub mod linux_new_toplevel_callback_observation;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only adapter-owned `new_toplevel` identity registration proof。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_toplevel_identity_registration;
 /// Linux-only Wayland client 依赖与类型 import 编译边界。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_wayland_client_endpoint;
@@ -336,6 +339,13 @@ pub use linux_new_toplevel_callback_observation::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_toplevel_identity_registration::{
+    AdapterToplevelIdentityRegistrationBlocker, AdapterToplevelIdentityRegistrationError,
+    AdapterToplevelIdentityRegistrationOperation, AdapterToplevelIdentityRegistrationReport,
+    adapter_toplevel_identity_registration_report,
+};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_wayland_client_endpoint::{
@@ -1973,7 +1983,7 @@ mod nested_socket_probe_gate_tests {
             "xdg_shell_global_initialized: initialized",
             "xdg_shell_state_owned: initialized",
             "client_harness_available: false",
-            "new_toplevel_registration_owner_available: false",
+            "new_toplevel_registration_owner_available: true",
             "callback_observed: false",
             "ledger_unmap_invoked: false",
             "core_detach_invoked: false",
@@ -2683,7 +2693,7 @@ mod nested_socket_probe_gate_tests {
         assert_eq!(lines[reexport.0 - 1], required_gate);
     }
 
-    /// Phase 52S 只允许观察 `new_toplevel` callback，不得注册 identity 或进入 ledger/core。
+    /// Phase 52S 仍证明 `new_toplevel` callback；Phase 52T 后报告也读取 adapter registration。
     #[test]
     fn controlled_new_toplevel_callback_observation_source_stays_within_proof_boundary() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -2729,7 +2739,8 @@ mod nested_socket_probe_gate_tests {
             "new_toplevel_callback_expected: true",
             "new_toplevel_callback_observed: true",
             "new_toplevel_callback_count: callback_count",
-            "adapter_toplevel_identity_registered: false",
+            ".last_adapter_toplevel_identity_registration_observation()",
+            "adapter_toplevel_identity_registered: registration.is_some()",
             "ledger_admit_invoked: false",
             "core_register_invoked: false",
             "window_id_allocated: false",
@@ -2772,9 +2783,123 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
-    /// Phase 52S 的 handler state 只能记录纯数据 callback count/sequence。
+    /// Phase 52T adapter toplevel identity registration API 必须同时受 feature 与 Linux target 隔离。
     #[test]
-    fn linux_new_toplevel_callback_handler_state_is_pure_observation() {
+    fn adapter_toplevel_identity_registration_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_toplevel_identity_registration;")
+            .expect("Phase 52T adapter toplevel identity registration module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_toplevel_identity_registration::{")
+            .expect("Phase 52T adapter toplevel identity registration re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52T 只允许 adapter-owned toplevel identity registration，不得进入 ledger/core/window。
+    #[test]
+    fn adapter_toplevel_identity_registration_source_stays_within_proof_boundary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_toplevel_identity_registration.rs"),
+        )
+        .expect("Phase 52T adapter toplevel identity registration module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "server.is_xdg_shell_global_initialized()",
+            "server.is_wl_compositor_global_initialized()",
+            "Connection::from_socket(client_stream)",
+            "registry_queue_init::<",
+            "AdapterToplevelIdentityRegistrationClientState",
+            ".bind::<WlCompositor, _, _>",
+            ".create_surface(&queue_handle, ())",
+            ".bind::<XdgWmBase, _, _>",
+            ".get_xdg_surface(&surface, &queue_handle, ())",
+            ".get_toplevel(&queue_handle, ())",
+            "server.new_toplevel_callback_observation_count()",
+            ".last_adapter_toplevel_identity_registration_observation()",
+            "NestedClientInsertCompileBoundary::new(server.display_handle())",
+            ".insert_client(server_stream, session)",
+            ".dispatch_clients_once()",
+            ".flush_clients_once()",
+            "client_bound_wl_compositor: true",
+            "wl_surface_create_attempted: true",
+            "wl_surface_created: true",
+            "server_surface_observed: true",
+            "adapter_surface_identity_available: true",
+            "client_bound_xdg_wm_base: true",
+            "xdg_surface_created: true",
+            "xdg_toplevel_created: true",
+            "new_toplevel_callback_observed: true",
+            "toplevel_identity_source_available: true",
+            "adapter_toplevel_identity_registration_attempted: true",
+            "adapter_toplevel_identity_registered: true",
+            "adapter_toplevel_id_allocated: true",
+            "adapter_surface_id_linked: registration.adapter_surface",
+            "== surface_mapping.adapter_surface_id",
+            "ledger_admit_invoked: false",
+            "ledger_unmap_invoked: false",
+            "core_register_invoked: false",
+            "core_detach_invoked: false",
+            "window_id_allocated: false",
+            "protocol_dispatch_started: true",
+            "real_xdg_shell_runtime_available: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52T adapter toplevel identity registration 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "Connection::connect_to_env",
+            "Connection::connect_to_name",
+            "SurfaceXdgAdmissionLedger",
+            ".admit_toplevel(",
+            ".unmap_toplevel(",
+            "BackendEvent::ToplevelMapped",
+            "BackendEvent::ToplevelUnmapped",
+            "CoreCommand::RegisterWindowForSurface",
+            "CoreCommand::DetachWindowFromSurface",
+            "SurfaceRegistry",
+            "WindowRegistry",
+            "WindowId",
+            "SeatHandler",
+            "libinput",
+            "drm",
+            "gbm",
+            "last_toplevel_surface",
+            "Option<ToplevelSurface>",
+            "Vec<ToplevelSurface>",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52T adapter toplevel identity registration 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52T 的 handler state 只能注册 adapter identity，不得保存 `ToplevelSurface` 或触碰 core。
+    #[test]
+    fn linux_new_toplevel_callback_handler_state_registers_adapter_identity_only() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let source = std::fs::read_to_string(root.join("src/smithay_backend/linux_xdg_shell.rs"))
             .expect("Linux xdg shell handler state 必须存在");
@@ -2790,17 +2915,24 @@ mod nested_socket_probe_gate_tests {
         for required in [
             "new_toplevel_callback_count: u64",
             "last_new_toplevel_callback_observation_sequence: Option<u64>",
+            "last_toplevel_identity_registration:",
             "pub(crate) const fn new_toplevel_callback_observation_count(&self) -> u64",
             "pub(crate) const fn last_new_toplevel_callback_observation_sequence(&self) -> Option<u64>",
+            "pub(crate) fn last_adapter_toplevel_identity_registration_observation(",
             "fn record_new_toplevel_callback_observation(&mut self)",
+            "fn register_new_toplevel_identity(&mut self, surface: &ToplevelSurface)",
             "self.new_toplevel_callback_count += 1",
             "self.last_new_toplevel_callback_observation_sequence = Some(sequence)",
-            "fn new_toplevel(&mut self, _surface: ToplevelSurface)",
+            "LinuxXdgToplevelIdentityRegistry::key_for_toplevel(surface)",
+            ".observe_surface(surface.wl_surface())",
+            ".register(identity, adapter_surface)",
+            "fn new_toplevel(&mut self, surface: ToplevelSurface)",
             "self.record_new_toplevel_callback_observation();",
+            "self.register_new_toplevel_identity(&surface);",
         ] {
             assert!(
                 code.contains(required),
-                "Phase 52S handler state 缺少纯数据 callback 观察证据: {required}"
+                "Phase 52T handler state 缺少 adapter identity registration 证据: {required}"
             );
         }
 

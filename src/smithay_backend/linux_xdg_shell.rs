@@ -23,6 +23,7 @@ use smithay::wayland::shell::xdg::{
 };
 
 use super::client_insert::NestedClientDataOwner;
+use super::linux_toplevel_identity_registration::AdapterToplevelIdentityRegistrationError;
 use super::linux_wl_compositor::{
     LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
     build_linux_wl_compositor_readiness_report,
@@ -36,6 +37,7 @@ use super::wayland_display::SmithayWaylandState;
 use super::xdg_lifecycle_observation::{
     XdgToplevelLifecycleObservationReport, XdgToplevelLifecycleSignal,
 };
+use super::xdg_toplevel_identity::XdgToplevelIdentityMapping;
 
 /// Wayland display 内部持有的 Linux-only xdg-shell handler state。
 ///
@@ -49,6 +51,8 @@ pub struct LinuxXdgShellStateSkeleton {
     compositor_state: Option<CompositorState>,
     surface_identities: LinuxWlSurfaceIdentityRegistry,
     toplevel_identities: LinuxXdgToplevelIdentityRegistry,
+    last_toplevel_identity_registration:
+        Option<Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError>>,
     last_toplevel_lifecycle_observation: Option<XdgToplevelLifecycleObservationReport>,
     new_toplevel_callback_count: u64,
     last_new_toplevel_callback_observation_sequence: Option<u64>,
@@ -119,6 +123,7 @@ impl LinuxXdgShellStateSkeleton {
             compositor_state: None,
             surface_identities: LinuxWlSurfaceIdentityRegistry::new(),
             toplevel_identities: LinuxXdgToplevelIdentityRegistry::new(),
+            last_toplevel_identity_registration: None,
             last_toplevel_lifecycle_observation: None,
             new_toplevel_callback_count: 0,
             last_new_toplevel_callback_observation_sequence: None,
@@ -170,10 +175,39 @@ impl LinuxXdgShellStateSkeleton {
         self.last_new_toplevel_callback_observation_sequence
     }
 
+    /// 返回最近一次 `new_toplevel` callback 触发的 adapter identity registration。
+    ///
+    /// 该 observation 只包含纯数据 `AdapterToplevelId`/`AdapterSurfaceId` mapping。
+    /// Handler 不保存 `ToplevelSurface`，也不把 `AdapterToplevelId` 解释成 core `WindowId`。
+    pub(crate) fn last_adapter_toplevel_identity_registration_observation(
+        &self,
+    ) -> Option<Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError>> {
+        self.last_toplevel_identity_registration
+    }
+
     fn record_new_toplevel_callback_observation(&mut self) {
         self.new_toplevel_callback_count += 1;
         let sequence = self.new_toplevel_callback_count;
         self.last_new_toplevel_callback_observation_sequence = Some(sequence);
+    }
+
+    fn register_new_toplevel_identity(&mut self, surface: &ToplevelSurface) {
+        // Phase 52T 只在 adapter 层登记 protocol identity。这里不持久化
+        // `ToplevelSurface`，不调用 admission ledger/core，也不产生 render/input 能力。
+        let result = (|| {
+            let identity = LinuxXdgToplevelIdentityRegistry::key_for_toplevel(surface)?;
+            let surface_mapping = self
+                .surface_identities
+                .observe_surface(surface.wl_surface())
+                .map_err(AdapterToplevelIdentityRegistrationError::SurfaceIdentity)?;
+            let adapter_surface = surface_mapping.adapter_surface_id;
+
+            self.toplevel_identities
+                .register(identity, adapter_surface)
+                .map_err(Into::into)
+        })();
+
+        self.last_toplevel_identity_registration = Some(result);
     }
 
     /// 返回当前 owner 是否已经持有 xdg-shell global state。
@@ -210,7 +244,6 @@ impl LinuxXdgShellStateSkeleton {
         }
         blockers.extend([
             LinuxXdgShellGlobalBlocker::MissingControlledClientHarness,
-            LinuxXdgShellGlobalBlocker::MissingNewToplevelRegistrationOwner,
             LinuxXdgShellGlobalBlocker::MissingDispatchDrivenCallbackProof,
         ]);
 
@@ -220,7 +253,7 @@ impl LinuxXdgShellStateSkeleton {
             xdg_shell_global_initialized: initialized,
             xdg_shell_state_owned: initialized,
             client_harness_available: false,
-            new_toplevel_registration_owner_available: false,
+            new_toplevel_registration_owner_available: true,
             callback_observed: false,
             ledger_unmap_invoked: false,
             core_detach_invoked: false,
@@ -352,10 +385,9 @@ impl XdgShellHandler for LinuxXdgShellStateSkeleton {
         self.xdg_shell_state_mut()
     }
 
-    fn new_toplevel(&mut self, _surface: ToplevelSurface) {
+    fn new_toplevel(&mut self, surface: ToplevelSurface) {
         self.record_new_toplevel_callback_observation();
-        // 真实 protocol object 不能进入 core；未来必须先转换为 AdapterToplevelId。
-        // Phase 52S 只记录 callback 观察，不保存 surface、不触发 admission/core mutation。
+        self.register_new_toplevel_identity(&surface);
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {
