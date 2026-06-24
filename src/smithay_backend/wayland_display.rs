@@ -11,6 +11,7 @@
 
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 
+use super::linux_toplevel_identity_registration::AdapterToplevelIdentityRegistrationError;
 use super::linux_wl_compositor::{
     LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
 };
@@ -18,6 +19,7 @@ use super::linux_wl_surface_identity::{AdapterSurfaceIdentityMapping, SurfaceIde
 use super::linux_xdg_shell::{
     LinuxXdgShellGlobalInitError, LinuxXdgShellGlobalInitReport, LinuxXdgShellStateSkeleton,
 };
+use super::xdg_toplevel_identity::XdgToplevelIdentityMapping;
 
 /// Smithay 和 Wayland server 侧的最小状态占位。
 ///
@@ -143,6 +145,17 @@ impl SmithayWaylandDisplayProbe {
         self.state.last_new_toplevel_callback_observation_sequence()
     }
 
+    /// 返回最近一次 `new_toplevel` callback 产生的 adapter toplevel identity mapping。
+    ///
+    /// 该 accessor 只暴露纯数据 observation；不泄漏 Smithay `ToplevelSurface`，也不把
+    /// adapter identity 提升为 core window。
+    pub(crate) fn last_adapter_toplevel_identity_registration_observation(
+        &self,
+    ) -> Option<Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError>> {
+        self.state
+            .last_adapter_toplevel_identity_registration_observation()
+    }
+
     /// 执行一次 Wayland backend client dispatch，并返回处理的 request 数量。
     ///
     /// 该 Linux-only seam 只用于让 backend 观察真实 peer EOF，从而触发其持有的
@@ -202,7 +215,6 @@ mod tests {
             vec![
                 LinuxXdgShellGlobalBlocker::MissingExplicitInitialization,
                 LinuxXdgShellGlobalBlocker::MissingControlledClientHarness,
-                LinuxXdgShellGlobalBlocker::MissingNewToplevelRegistrationOwner,
                 LinuxXdgShellGlobalBlocker::MissingDispatchDrivenCallbackProof,
             ]
         );
@@ -243,7 +255,7 @@ mod tests {
         assert!(report.xdg_shell_global_initialized);
         assert!(report.xdg_shell_state_owned);
         assert!(!report.client_harness_available);
-        assert!(!report.new_toplevel_registration_owner_available);
+        assert!(report.new_toplevel_registration_owner_available);
         assert!(!report.callback_observed);
         assert!(!report.ledger_unmap_invoked);
         assert!(!report.core_detach_invoked);
@@ -255,7 +267,6 @@ mod tests {
             report.blockers,
             vec![
                 LinuxXdgShellGlobalBlocker::MissingControlledClientHarness,
-                LinuxXdgShellGlobalBlocker::MissingNewToplevelRegistrationOwner,
                 LinuxXdgShellGlobalBlocker::MissingDispatchDrivenCallbackProof,
             ]
         );
