@@ -74,6 +74,9 @@ pub mod linux_adapter;
 /// Smithay handler trait 边界的隔离类型形状与 blocker evidence 探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_handler_probe;
+/// Linux-only adapter-led ledger admission ownership proof。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_ledger_admission_owner;
 /// Linux-only controlled `new_toplevel` callback observation proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_new_toplevel_callback_observation;
@@ -327,6 +330,12 @@ pub use linux_handler_probe::{
     smithay_linux_global_dispatch_trait_boundary_report,
     smithay_linux_global_registration_promotion_report, smithay_linux_handler_probe_report,
     smithay_linux_handler_reduction_plan_report, smithay_linux_handler_requirement_matrix_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_ledger_admission_owner::{
+    AdapterLedgerAdmissionBlocker, AdapterLedgerAdmissionError, AdapterLedgerAdmissionOperation,
+    AdapterLedgerAdmissionReport, adapter_ledger_admission_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
