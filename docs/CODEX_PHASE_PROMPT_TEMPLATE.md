@@ -27,11 +27,18 @@ Confirm:
 
 ## 2. MCP Rule
 
-Use only the main project from `list_projects`.
+Use native `mcp__codebase_memory` tools first.
+
+Use only the main project from `list_projects`:
+
+- project: `Users-double-Code-Sky_Mirror`
+- root_path: `/Users/double/Code/Sky_Mirror`
 
 Never index worktree paths.
 
 Never index `/Users/double/sky_mirror` unless a future rebuild explicitly makes it the active repo again.
+
+Use project name, not path, for `index_status`.
 
 If codebase-memory-mcp is unavailable, report that and continue with git, `rg`, and file reads.
 

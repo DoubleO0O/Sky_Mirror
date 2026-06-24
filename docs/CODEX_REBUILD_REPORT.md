@@ -62,7 +62,7 @@ Plugin conclusions:
 
 - superpowers exists in cache: yes, version 5.1.4
 - github exists in cache and tools: yes, version 0.1.5
-- codebase-memory-mcp / memory-mcp plugin: not found as an enabled plugin and not exposed as callable MCP tools
+- codebase-memory-mcp: repaired after the initial rebuild; native `mcp__codebase_memory` tools are now visible in a new Codex session
 
 ## Skills Discovery
 
@@ -123,19 +123,28 @@ Forbidden repo/index paths:
 
 Callable MCP discovery:
 
-- `tool_search` for codebase-memory / memory project tools did not expose codebase-memory-mcp.
-- Exposed `codex_app.list_projects` is a Codex App thread/project tool, not codebase-memory-mcp.
-- Configured MCP server in config.toml: `node_repl` only.
-- codebase-memory-mcp `list_projects`, `delete_project`, `index_repository`, and `index_status` were not callable.
+- Initial rebuild session: `tool_search` for codebase-memory / memory project tools did not expose codebase-memory-mcp, and the session required CLI fallback before restart/new session.
+- Repair action: codebase-memory-mcp config was repaired by adding the local binary as the Codex MCP server `codebase-memory`.
+- Reset action: MCP reset completed after repair.
+- New Codex session: native `mcp__codebase_memory` tools are visible and verified.
+- Verified native tools: `list_projects`, `index_status`, `search_code`, `search_graph`, `get_code_snippet`.
 
 Reset result:
 
-- Delete before list: unavailable
-- Delete operations: not performed
-- Delete after list: unavailable
-- Rebuild index: not performed
-- index_status: unavailable
-- Blocker: codebase-memory-mcp is currently unavailable in this Codex environment, so old MCP indexes could not be deleted and the new main repo could not be indexed.
+- Delete before list: old project `Users-double-sky_mirror` existed with root_path `/Users/double/sky_mirror`.
+- Delete operations: old codebase-memory index projects were deleted; no Git repository directories were deleted.
+- Delete after list: old path `/Users/double/sky_mirror` removed from the index.
+- Rebuild index: completed for `/Users/double/Code/Sky_Mirror` only.
+- Native verification after new session: completed.
+- Only project: `Users-double-Code-Sky_Mirror`.
+- root_path: `/Users/double/Code/Sky_Mirror`.
+- nodes: 3942.
+- edges: 14563.
+- size_bytes: 13500416.
+- status: `ready`.
+- No old `/Users/double/sky_mirror` index.
+- No `/Users/double/.config/superpowers/worktrees/...` index.
+- `index_status` was verified using project name `Users-double-Code-Sky_Mirror`, not a filesystem path.
 
 ## Worktrees
 
@@ -196,7 +205,7 @@ Post-edit verification results:
 
 ## Remaining Risks
 
-- codebase-memory-mcp is not callable, so MCP deletion/rebuild remains blocked.
+- Earlier current session required CLI fallback before restart/new session. After the new session, native MCP tools are visible.
 - Cached github/superpowers plugins are visible, but they are not listed as enabled in config.toml.
 - `/Users/double/sky_mirror` exists but is not the active repo and was intentionally not used or modified.
 - This rebuild intentionally modifies docs only and does not validate Linux-only `smithay-linux` locally.

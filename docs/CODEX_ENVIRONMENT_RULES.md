@@ -15,10 +15,15 @@
 ## 3. MCP Rules
 
 - 只索引主项目 /Users/double/Code/Sky_Mirror。
-- project name 以 `list_projects` 实际返回为准。
+- MCP project name: `Users-double-Code-Sky_Mirror`。
+- MCP root_path: `/Users/double/Code/Sky_Mirror`。
+- MCP status: `ready`。
+- 当前索引规模：3942 nodes, 14563 edges, 13500416 size_bytes。
+- project name 以 `list_projects` 实际返回为准；当前必须只有 `Users-double-Code-Sky_Mirror`。
 - 禁止索引 /Users/double/sky_mirror。
 - 禁止索引 /Users/double/.config/superpowers/worktrees/...。
 - `index_status` 使用 project name，不使用 path。
+- 优先使用原生 `mcp__codebase_memory` 工具：`list_projects`、`index_status`、`search_code`、`search_graph`、`get_code_snippet`。
 - worktree 开发时 MCP 仍查主项目。
 - worktree 当前改动用 `git diff`、`rg`、文件读取确认。
 - 如果 codebase-memory-mcp / memory-mcp 工具不可用，必须报告不可用，不能伪造 `list_projects`、`delete_project`、`index_repository` 或 `index_status` 结果。
@@ -91,8 +96,12 @@ Superpowers plugin skills 当前可见：
 
 MCP / memory 状态：
 
-- config.toml 仅发现 `mcp_servers.node_repl`。
-- 当前可调用工具未发现 codebase-memory-mcp / memory-mcp 的 `list_projects`、`delete_project`、`index_repository`、`index_status`。
+- codebase-memory-mcp 已修复并启用。
+- 原生 `mcp__codebase_memory` 工具已在新 Codex 会话中验证可用。
+- 已验证工具：`list_projects`、`index_status`、`search_code`、`search_graph`、`get_code_snippet`。
+- 只剩一个 MCP 项目：`Users-double-Code-Sky_Mirror`。
+- 当前 root_path：`/Users/double/Code/Sky_Mirror`。
+- 当前 status：`ready`。
 - 不得把 Codex App thread/project 工具误报为 codebase-memory-mcp。
 
 ## 7. Worktree Rules
