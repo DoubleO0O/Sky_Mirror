@@ -455,6 +455,7 @@ mod tests {
     use crate::{
         core::state::State,
         smithay_backend::{
+            linux_toplevel_identity_registration::adapter_toplevel_identity_registration_report,
             nested_runtime_coordinator::{NestedRuntimePumpError, NestedRuntimePumpErrorKind},
             nested_runtime_loop::{
                 NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
@@ -592,6 +593,54 @@ mod tests {
         assert!(report.shutdown_completed);
         assert!(report.validation_is_clean);
         assert!(report.is_clean_shutdown());
+    }
+
+    /// Linux-only proof：orchestrator run 通过 loop live admission pump 完成 xdg_toplevel admission。
+    #[test]
+    fn runtime_orchestrator_run_drains_live_toplevel_admission() {
+        assert_runtime_dir();
+        let mut orchestrator =
+            NestedRuntimeOrchestrator::new(config("orchestrator-live-admission", 1));
+        let mut state = State::new();
+        let _start_report = orchestrator.start().expect("Created 必须允许 start");
+        let registration = {
+            let display = orchestrator
+                .runtime_loop
+                .as_mut()
+                .expect("Started 必须持有 runtime loop")
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            adapter_toplevel_identity_registration_report(display)
+                .expect("adapter identity registration proof 必须完成")
+        };
+
+        let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
+
+        assert_eq!(report.pump_iterations, 1);
+        assert!(report.is_clean_shutdown());
+        assert_eq!(report.final_state, NestedRuntimeLifecycleState::Stopped);
+        assert!(report.loop_report.is_successful());
+        let runtime_loop = orchestrator
+            .runtime_loop
+            .as_ref()
+            .expect("Stopped orchestrator 保留 runtime loop report owner");
+        assert_eq!(
+            runtime_loop.admission_surface_mapping(registration.adapter_surface_id),
+            Some(1)
+        );
+        assert!(
+            runtime_loop
+                .admission_toplevel_mapping(registration.adapter_toplevel_id)
+                .is_some()
+        );
+        assert_eq!(runtime_loop.admission_pending_count(), 0);
+        assert!(state.surfaces.get(1).is_some());
+        assert!(state.validate().is_clean());
     }
 
     /// loop 返回 pump error 时，orchestrator 必须保留原始结构并进入 Failed。
