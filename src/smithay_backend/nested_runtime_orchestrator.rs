@@ -7,8 +7,9 @@
 use crate::{
     core::state::State,
     smithay_backend::nested_runtime_loop::{
-        NestedRuntimeLoop, NestedRuntimeLoopConfig, NestedRuntimeLoopError,
-        NestedRuntimeLoopExitReason, NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle,
+        NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLoop, NestedRuntimeLoopConfig,
+        NestedRuntimeLoopError, NestedRuntimeLoopExitReason, NestedRuntimeLoopReport,
+        NestedRuntimeLoopStopHandle,
     },
 };
 
@@ -253,6 +254,9 @@ pub struct NestedRuntimeLifecycleReport {
     /// run 退出时核心状态是否通过 ValidationReport。
     pub validation_is_clean: bool,
 
+    /// 本轮 live admission enqueue/drain 事实。
+    pub live_admission: NestedRuntimeLiveAdmissionRunSummary,
+
     /// 完整原始 bounded-loop report。
     pub loop_report: NestedRuntimeLoopReport,
 
@@ -396,6 +400,7 @@ impl NestedRuntimeOrchestrator {
             errors: loop_report.errors.clone(),
             final_state: self.state,
             validation_is_clean: loop_report.validation_is_clean,
+            live_admission: loop_report.live_admission,
             loop_report,
             readiness: nested_runtime_orchestrator_readiness_report(),
         }
@@ -625,6 +630,13 @@ mod tests {
         assert!(report.is_clean_shutdown());
         assert_eq!(report.final_state, NestedRuntimeLifecycleState::Stopped);
         assert!(report.loop_report.is_successful());
+        assert_eq!(report.live_admission.owner_invocations, 1);
+        assert_eq!(report.live_admission.enqueue_invocations, 1);
+        assert_eq!(report.live_admission.admissions_enqueued, 1);
+        assert_eq!(report.live_admission.drain_invocations, 1);
+        assert_eq!(report.live_admission.admissions_consumed, 1);
+        assert_eq!(report.live_admission.pending_admissions_after, 0);
+        assert_eq!(report.live_admission, report.loop_report.live_admission);
         let runtime_loop = orchestrator
             .runtime_loop
             .as_ref()

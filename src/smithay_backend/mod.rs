@@ -485,9 +485,10 @@ pub use nested_runtime_coordinator::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_runtime_loop::{
-    NestedRuntimeLoop, NestedRuntimeLoopBlocker, NestedRuntimeLoopConfig, NestedRuntimeLoopError,
-    NestedRuntimeLoopExitReason, NestedRuntimeLoopReadinessReport, NestedRuntimeLoopReport,
-    NestedRuntimeLoopStopHandle, NestedRuntimeWakeupReport, nested_runtime_loop_readiness_report,
+    NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLoop, NestedRuntimeLoopBlocker,
+    NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
+    NestedRuntimeLoopReadinessReport, NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle,
+    NestedRuntimeWakeupReport, nested_runtime_loop_readiness_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -748,6 +749,8 @@ mod nested_socket_probe_gate_tests {
             "pub struct NestedRuntimeStopReport",
             "pub enum NestedRuntimeLifecycleState",
             "pub enum NestedRuntimeOrchestratorError",
+            "NestedRuntimeLiveAdmissionRunSummary",
+            "live_admission: loop_report.live_admission",
             "pub fn start",
             "pub fn run",
             "pub fn stop",
@@ -871,6 +874,7 @@ mod nested_socket_probe_gate_tests {
             "pub struct NestedRuntimeLoop",
             "pub struct NestedRuntimeLoopConfig",
             "pub struct NestedRuntimeLoopReport",
+            "pub struct NestedRuntimeLiveAdmissionRunSummary",
             "pub struct NestedRuntimeLoopStopHandle",
             "pub enum NestedRuntimeLoopExitReason",
             "pub fn run_for_iterations",
@@ -878,6 +882,8 @@ mod nested_socket_probe_gate_tests {
             "RuntimeToplevelAdmissionDrainTick",
             "pump_once_with_live_toplevel_admission_drain(",
             "RuntimeToplevelAdmissionDrainTick::phase52y_default(",
+            "NestedRuntimeLiveAdmissionRunSummary::from_live_pump",
+            "live_admission",
             ".lifecycle_report",
             "max_iterations",
             "stop_when_idle",
