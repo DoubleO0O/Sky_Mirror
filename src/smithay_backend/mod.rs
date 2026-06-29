@@ -355,8 +355,9 @@ pub use linux_ledger_admission_owner::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_live_toplevel_admission_owner::{
-    LiveToplevelAdmissionOwnerBlocker, LiveToplevelAdmissionOwnerOperation,
-    LiveToplevelAdmissionOwnerReport, enqueue_live_toplevel_admission_from_display,
+    LiveToplevelAdmissionOwnerBlocker, LiveToplevelAdmissionOwnerObservation,
+    LiveToplevelAdmissionOwnerOperation, LiveToplevelAdmissionOwnerReport,
+    enqueue_live_toplevel_admission_from_display, enqueue_live_toplevel_admission_from_observation,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -477,8 +478,9 @@ pub use linux_xdg_wm_base_client_bind::{
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_runtime_coordinator::{
     NestedRuntimeAdmissionPumpReport, NestedRuntimeCoordinator, NestedRuntimeCoordinatorBlocker,
-    NestedRuntimeCoordinatorReadinessReport, NestedRuntimePumpError, NestedRuntimePumpErrorKind,
-    NestedRuntimePumpReport, nested_runtime_coordinator_readiness_report,
+    NestedRuntimeCoordinatorReadinessReport, NestedRuntimeLiveAdmissionPumpReport,
+    NestedRuntimePumpError, NestedRuntimePumpErrorKind, NestedRuntimePumpReport,
+    nested_runtime_coordinator_readiness_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -1267,11 +1269,14 @@ mod nested_socket_probe_gate_tests {
 
         for required in [
             "pub struct LiveToplevelAdmissionOwnerReport",
+            "pub struct LiveToplevelAdmissionOwnerObservation",
             "pub enum LiveToplevelAdmissionOwnerBlocker",
             "pub enum LiveToplevelAdmissionOwnerOperation",
             "pub fn enqueue_live_toplevel_admission_from_display(",
+            "pub fn enqueue_live_toplevel_admission_from_observation(",
             "server: &SmithayWaylandDisplayProbe",
             "coordinator: &mut NestedRuntimeCoordinator",
+            "LiveToplevelAdmissionOwnerObservation::from_display(server)",
             ".last_new_toplevel_callback_observation_sequence()",
             ".last_adapter_toplevel_identity_registration_observation()",
             "LiveToplevelAdmissionBridgeInput::from_registered_identity(",
@@ -1312,6 +1317,51 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 53A live admission owner 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 53B coordinator 必须组合 live owner enqueue 与 runtime admission drain。
+    #[test]
+    fn nested_runtime_live_admission_pump_source_uses_live_owner_before_drain() {
+        let source = include_str!("nested_runtime_coordinator.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "LiveToplevelAdmissionOwnerReport",
+            "enqueue_live_toplevel_admission_from_observation",
+            "pub struct NestedRuntimeLiveAdmissionPumpReport",
+            "pub live_admission_owner_report: LiveToplevelAdmissionOwnerReport",
+            "pub fn pump_once_with_live_toplevel_admission_drain(",
+            "let lifecycle_report = self.pump_once(state, timeout);",
+            "let observation = self.flow.live_toplevel_admission_observation();",
+            "enqueue_live_toplevel_admission_from_observation(observation, self)",
+            ".drain_pending_toplevel_admission_once(state, tick)",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 53B live admission pump 缺少 coordinator seam 证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "SeatHandler",
+            "registry_queue_init",
+            "Connection::",
+            "libinput",
+            "drm",
+            "gbm",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 53B live admission pump 生产代码包含禁止 token: {forbidden}"
             );
         }
     }

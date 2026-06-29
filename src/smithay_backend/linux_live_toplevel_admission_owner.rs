@@ -16,6 +16,7 @@ use super::{
     linux_toplevel_identity_registration::AdapterToplevelIdentityRegistrationError,
     nested_runtime_coordinator::NestedRuntimeCoordinator,
     wayland_display::SmithayWaylandDisplayProbe,
+    xdg_toplevel_identity::XdgToplevelIdentityMapping,
 };
 
 /// Phase 53A live admission owner 中可定位的操作阶段。
@@ -95,6 +96,32 @@ pub struct LiveToplevelAdmissionOwnerReport {
     pub blockers: Vec<LiveToplevelAdmissionOwnerBlocker>,
 }
 
+/// Phase 53B coordinator 从 display owner 读取出的 live admission observation 快照。
+///
+/// 该快照只携带纯数据 callback sequence 与 adapter identity mapping。coordinator 先
+/// 读取快照释放 display 借用，再把快照交给 owner 入队，避免同时借用 display 与
+/// `NestedRuntimeCoordinator`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveToplevelAdmissionOwnerObservation {
+    /// 最近一次 `new_toplevel` callback observation 序号。
+    pub new_toplevel_callback_sequence: Option<u64>,
+    /// 最近一次 adapter toplevel identity registration observation。
+    pub adapter_toplevel_identity_registration:
+        Option<Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError>>,
+}
+
+impl LiveToplevelAdmissionOwnerObservation {
+    /// 从 display owner 读取 live callback/identity observation 的纯数据快照。
+    pub fn from_display(server: &SmithayWaylandDisplayProbe) -> Self {
+        Self {
+            new_toplevel_callback_sequence: server
+                .last_new_toplevel_callback_observation_sequence(),
+            adapter_toplevel_identity_registration: server
+                .last_adapter_toplevel_identity_registration_observation(),
+        }
+    }
+}
+
 /// 从 display owner 的 live callback observation 入队一条 coordinator admission intent。
 ///
 /// 本函数不创建 client harness，不 dispatch Wayland requests，也不消费 ledger/core。
@@ -104,9 +131,21 @@ pub fn enqueue_live_toplevel_admission_from_display(
     server: &SmithayWaylandDisplayProbe,
     coordinator: &mut NestedRuntimeCoordinator,
 ) -> LiveToplevelAdmissionOwnerReport {
+    let observation = LiveToplevelAdmissionOwnerObservation::from_display(server);
+    enqueue_live_toplevel_admission_from_observation(observation, coordinator)
+}
+
+/// 从已读取的 live admission observation 快照入队一条 coordinator admission intent。
+///
+/// coordinator 组合 pump 使用该 seam 避免同时借用 display owner 与 coordinator
+/// runtime owner；语义与 [`enqueue_live_toplevel_admission_from_display`] 保持一致。
+pub fn enqueue_live_toplevel_admission_from_observation(
+    observation: LiveToplevelAdmissionOwnerObservation,
+    coordinator: &mut NestedRuntimeCoordinator,
+) -> LiveToplevelAdmissionOwnerReport {
     let mut operations = vec![LiveToplevelAdmissionOwnerOperation::ReadDisplayObservation];
     let coordinator_pending_admission_count_before = coordinator.admission_pending_count();
-    let callback_sequence = server.last_new_toplevel_callback_observation_sequence();
+    let callback_sequence = observation.new_toplevel_callback_sequence;
     let mut blockers = Vec::new();
     let mut adapter_toplevel_identity_observation_available = false;
 
@@ -114,7 +153,7 @@ pub fn enqueue_live_toplevel_admission_from_display(
         blockers.push(LiveToplevelAdmissionOwnerBlocker::MissingNewToplevelCallbackObservation);
     }
 
-    let registration = match server.last_adapter_toplevel_identity_registration_observation() {
+    let registration = match observation.adapter_toplevel_identity_registration {
         Some(Ok(registration)) => {
             adapter_toplevel_identity_observation_available = true;
             Some(registration)

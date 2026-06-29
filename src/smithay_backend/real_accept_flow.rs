@@ -35,6 +35,7 @@ use crate::{
             NestedClientSessionEvent, NestedClientSessionEventLog, NestedClientSessionEventRecord,
             NestedClientSessionId,
         },
+        linux_live_toplevel_admission_owner::LiveToplevelAdmissionOwnerObservation,
         real_disconnect_flow::{NestedRealDisconnectCallbackReport, bridge_disconnected_events},
         wayland_display::SmithayWaylandDisplayProbe,
         wayland_socket::SmithayWaylandSocketProbe,
@@ -511,6 +512,16 @@ impl NestedRealAcceptFlow {
         self.display.dispatch_clients_once()
     }
 
+    /// 读取 display owner 中最近一次 live toplevel admission observation 的纯数据快照。
+    ///
+    /// flow 只暴露 copyable report 数据，不把 Smithay display 或 handler state 泄漏给
+    /// ledger/core owner；coordinator 随后才能安全地可变借用自身执行 enqueue/drain。
+    pub(crate) fn live_toplevel_admission_observation(
+        &self,
+    ) -> LiveToplevelAdmissionOwnerObservation {
+        LiveToplevelAdmissionOwnerObservation::from_display(&self.display)
+    }
+
     /// 只读访问 persistent backend-client/session mapping。
     pub fn mapping(&self) -> &NestedAcceptedClientMapping {
         &self.loop_data.mapping
@@ -576,6 +587,19 @@ fn observed_validations_clean(outcomes: &[NestedClientSessionBridgeOutcome]) -> 
     }
 
     observed.then_some(all_clean)
+}
+
+#[cfg(test)]
+impl NestedRealAcceptFlow {
+    /// 测试专用：让 Linux controlled proof 在 flow 持有的 display 上制造 observation。
+    ///
+    /// production coordinator 只读取 [`Self::live_toplevel_admission_observation`] 返回的
+    /// 纯数据快照；该 mutable accessor 不参与 runtime pump。
+    pub(crate) fn display_mut_for_controlled_toplevel_registration(
+        &mut self,
+    ) -> &mut SmithayWaylandDisplayProbe {
+        &mut self.display
+    }
 }
 
 #[cfg(test)]
