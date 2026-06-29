@@ -15,6 +15,7 @@ use smithay::reexports::calloop::LoopSignal;
 
 use crate::{
     core::state::State,
+    smithay_backend::RuntimeToplevelAdmissionDrainTick,
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimePumpError, NestedRuntimePumpReport,
     },
@@ -363,7 +364,7 @@ impl NestedRuntimeLoop {
         self.stop_handle.clone()
     }
 
-    /// 在硬性 iteration 上限内重复调用现有 coordinator pump。
+    /// 在硬性 iteration 上限内重复调用 coordinator live admission pump。
     ///
     /// `max_iterations` 是防无限循环的不可绕过上限。stop、error 和 idle 只会提前退出；
     /// 本方法没有 protocol event-source wakeup，也不是完整 compositor runtime。
@@ -373,8 +374,16 @@ impl NestedRuntimeLoop {
         config: NestedRuntimeLoopConfig,
     ) -> NestedRuntimeLoopReport {
         let stop_handle = self.stop_handle.clone();
-        run_with_pump(state, config, &stop_handle, |state, _| {
-            self.coordinator.pump_once(state, config.pump_timeout)
+        let mut admission_tick_index = 0u64;
+        run_with_pump(state, config, &stop_handle, |state, timeout| {
+            admission_tick_index = admission_tick_index.saturating_add(1);
+            self.coordinator
+                .pump_once_with_live_toplevel_admission_drain(
+                    state,
+                    timeout,
+                    RuntimeToplevelAdmissionDrainTick::phase52y_default(admission_tick_index),
+                )
+                .lifecycle_report
         })
     }
 }
@@ -507,6 +516,7 @@ mod tests {
     use crate::{
         core::state::State,
         smithay_backend::{
+            linux_toplevel_identity_registration::adapter_toplevel_identity_registration_report,
             nested_runtime_coordinator::{
                 NestedRuntimePumpError, NestedRuntimePumpErrorKind, NestedRuntimePumpReport,
                 nested_runtime_coordinator_readiness_report,
@@ -802,5 +812,48 @@ mod tests {
         assert!(!report.readiness.long_running_loop_available);
         let client = report.pump_reports[0].registered_core_clients[0];
         assert!(!state.clients.is_alive(client));
+    }
+
+    /// Linux-only proof：bounded loop 每轮使用 live admission pump，而不是只跑 lifecycle pump。
+    #[test]
+    fn nested_runtime_loop_drains_live_toplevel_admission() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-live-admission");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let registration = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            adapter_toplevel_identity_registration_report(display)
+                .expect("adapter identity registration proof 必须完成")
+        };
+        let mut state = State::new();
+
+        let report = runtime_loop.run_for_iterations(&mut state, config(1));
+
+        assert_eq!(report.iterations_run, 1);
+        assert!(report.is_successful());
+        assert_eq!(
+            runtime_loop
+                .coordinator
+                .admission_surface_mapping(registration.adapter_surface_id),
+            Some(1)
+        );
+        assert!(
+            runtime_loop
+                .coordinator
+                .admission_toplevel_mapping(registration.adapter_toplevel_id)
+                .is_some()
+        );
+        assert_eq!(runtime_loop.coordinator.admission_pending_count(), 0);
+        assert!(state.surfaces.get(1).is_some());
+        assert!(state.validate().is_clean());
     }
 }

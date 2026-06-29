@@ -412,6 +412,18 @@ impl NestedRuntimeCoordinator {
 }
 
 #[cfg(test)]
+impl NestedRuntimeCoordinator {
+    /// 测试专用：让 loop/orchestrator proof 在 coordinator 持有的 display 上制造 observation。
+    ///
+    /// production 仍只能通过 coordinator pump 读取 flow 暴露的纯数据 observation。
+    pub(crate) fn display_mut_for_controlled_toplevel_registration(
+        &mut self,
+    ) -> &mut crate::smithay_backend::wayland_display::SmithayWaylandDisplayProbe {
+        self.flow.display_mut_for_controlled_toplevel_registration()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::{io, os::unix::net::UnixStream, path::Path, time::Duration};
 
