@@ -467,7 +467,7 @@ pub use linux_xdg_wm_base_client_bind::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_runtime_coordinator::{
-    NestedRuntimeCoordinator, NestedRuntimeCoordinatorBlocker,
+    NestedRuntimeAdmissionPumpReport, NestedRuntimeCoordinator, NestedRuntimeCoordinatorBlocker,
     NestedRuntimeCoordinatorReadinessReport, NestedRuntimePumpError, NestedRuntimePumpErrorKind,
     NestedRuntimePumpReport, nested_runtime_coordinator_readiness_report,
 };
@@ -1153,6 +1153,67 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 production.contains(conservative),
                 "C 路线越级上调了未证明 capability: {conservative}"
+            );
+        }
+    }
+
+    /// Phase 52Z coordinator 必须拥有 runtime admission queue owner，并在 lifecycle 后 drain。
+    #[test]
+    fn nested_runtime_coordinator_admission_drain_source_uses_runtime_queue_owner() {
+        let source = include_str!("nested_runtime_coordinator.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "RuntimeToplevelAdmissionQueueOwner",
+            "RuntimeToplevelAdmissionDrainTick",
+            "RuntimeToplevelAdmissionDrainReport",
+            "RuntimeToplevelAdmissionEnqueueReport",
+            "PendingXdgToplevelAdmission",
+            "admission_queue_owner: RuntimeToplevelAdmissionQueueOwner",
+            "RuntimeToplevelAdmissionQueueOwner::new(",
+            "pub struct NestedRuntimeAdmissionPumpReport",
+            "pub fn enqueue_pending_toplevel_admission(",
+            "pub fn pump_once_with_toplevel_admission_drain(",
+            "let lifecycle_report = self.pump_once(state, timeout);",
+            ".drain_pending_toplevel_admission_once(state, tick)",
+            "pub fn admission_pending_count(",
+            "pub fn admission_surface_mapping(",
+            "pub fn admission_toplevel_mapping(",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52Z coordinator admission drain seam 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "BackendEvent::",
+            "CoreCommand::",
+            ".workspaces",
+            ".slots",
+            ".stacks",
+            "insert_window",
+            "WindowRegistry",
+            "SeatHandler",
+            "SmithayWaylandDisplayProbe",
+            "UnixStream",
+            "Connection::",
+            "registry_queue_init",
+            "flush_clients_once",
+            "libinput",
+            "drm",
+            "gbm",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52Z coordinator admission drain 生产代码包含禁止 token: {forbidden}"
             );
         }
     }
