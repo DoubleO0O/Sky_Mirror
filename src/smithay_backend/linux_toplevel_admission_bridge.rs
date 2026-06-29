@@ -170,6 +170,14 @@ impl ToplevelAdmissionBridgeQueue {
     pub fn front(&self) -> Option<&PendingXdgToplevelAdmission> {
         self.pending.front()
     }
+
+    /// 取出下一条待 owner 消费的 pending intent。
+    ///
+    /// 只有显式 owner consumer 可以调用该方法；callback handler 仍只负责追加
+    /// pending intent，不在 handler 内消费 ledger 或修改 core State。
+    pub fn pop_front(&mut self) -> Option<PendingXdgToplevelAdmission> {
+        self.pending.pop_front()
+    }
 }
 
 /// Phase 52V live callback admission bridge 的能力报告。
@@ -414,5 +422,7 @@ mod tests {
 
         assert_eq!(queue.pending_count(), 2);
         assert_eq!(queue.front(), Some(&first));
+        assert_eq!(queue.pop_front(), Some(first));
+        assert_eq!(queue.front(), Some(&second));
     }
 }
