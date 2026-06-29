@@ -17,7 +17,8 @@ use crate::{
     core::state::State,
     smithay_backend::RuntimeToplevelAdmissionDrainTick,
     smithay_backend::nested_runtime_coordinator::{
-        NestedRuntimeCoordinator, NestedRuntimePumpError, NestedRuntimePumpReport,
+        NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport, NestedRuntimePumpError,
+        NestedRuntimePumpReport,
     },
 };
 
@@ -284,6 +285,72 @@ pub struct NestedRuntimeWakeupReport {
     pub exited_before_timeout: bool,
 }
 
+/// 一次 bounded run 中由 live admission pump 产生的纯数据汇总。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NestedRuntimeLiveAdmissionRunSummary {
+    /// live admission owner 被调用的次数。
+    pub owner_invocations: usize,
+
+    /// coordinator enqueue seam 被调用的次数。
+    pub enqueue_invocations: usize,
+
+    /// 成功入队的 pending admission 数量。
+    pub admissions_enqueued: usize,
+
+    /// runtime admission drain 被调用的次数。
+    pub drain_invocations: usize,
+
+    /// 成功消费到 ledger/core 的 admission 数量。
+    pub admissions_consumed: usize,
+
+    /// 最后一轮 drain 后 remaining pending admission 数量。
+    pub pending_admissions_after: usize,
+}
+
+impl NestedRuntimeLiveAdmissionRunSummary {
+    fn from_live_pump(report: &NestedRuntimeLiveAdmissionPumpReport) -> Self {
+        let admissions_enqueued = report
+            .live_admission_owner_report
+            .coordinator_enqueue_report
+            .as_ref()
+            .is_some_and(|enqueue| enqueue.pending_admission_enqueued);
+
+        Self {
+            owner_invocations: 1,
+            enqueue_invocations: usize::from(
+                report
+                    .live_admission_owner_report
+                    .coordinator_enqueue_invoked,
+            ),
+            admissions_enqueued: usize::from(admissions_enqueued),
+            drain_invocations: usize::from(report.admission_drain_report.drain_invoked),
+            admissions_consumed: usize::from(
+                report.admission_drain_report.pending_admission_consumed,
+            ),
+            pending_admissions_after: report.admission_drain_report.pending_admission_count_after,
+        }
+    }
+
+    fn observe(&mut self, delta: Self) {
+        self.owner_invocations = self
+            .owner_invocations
+            .saturating_add(delta.owner_invocations);
+        self.enqueue_invocations = self
+            .enqueue_invocations
+            .saturating_add(delta.enqueue_invocations);
+        self.admissions_enqueued = self
+            .admissions_enqueued
+            .saturating_add(delta.admissions_enqueued);
+        self.drain_invocations = self
+            .drain_invocations
+            .saturating_add(delta.drain_invocations);
+        self.admissions_consumed = self
+            .admissions_consumed
+            .saturating_add(delta.admissions_consumed);
+        self.pending_admissions_after = delta.pending_admissions_after;
+    }
+}
+
 /// 一次 bounded loop run 的纯数据汇总报告。
 #[must_use = "loop report 包含退出原因、pump 错误和 validation，不能忽略"]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +384,9 @@ pub struct NestedRuntimeLoopReport {
 
     /// 本轮 stop/wakeup 与 interruptible wait 事实。
     pub wakeup: NestedRuntimeWakeupReport,
+
+    /// 本轮 live admission enqueue/drain 事实。
+    pub live_admission: NestedRuntimeLiveAdmissionRunSummary,
 }
 
 impl NestedRuntimeLoopReport {
@@ -375,16 +445,38 @@ impl NestedRuntimeLoop {
     ) -> NestedRuntimeLoopReport {
         let stop_handle = self.stop_handle.clone();
         let mut admission_tick_index = 0u64;
-        run_with_pump(state, config, &stop_handle, |state, timeout| {
+        run_with_observed_pump(state, config, &stop_handle, |state, timeout| {
             admission_tick_index = admission_tick_index.saturating_add(1);
-            self.coordinator
-                .pump_once_with_live_toplevel_admission_drain(
-                    state,
-                    timeout,
-                    RuntimeToplevelAdmissionDrainTick::phase52y_default(admission_tick_index),
-                )
-                .lifecycle_report
+            ObservedNestedRuntimePumpReport::from_live_admission(
+                self.coordinator
+                    .pump_once_with_live_toplevel_admission_drain(
+                        state,
+                        timeout,
+                        RuntimeToplevelAdmissionDrainTick::phase52y_default(admission_tick_index),
+                    ),
+            )
         })
+    }
+}
+
+struct ObservedNestedRuntimePumpReport {
+    lifecycle_report: NestedRuntimePumpReport,
+    live_admission: NestedRuntimeLiveAdmissionRunSummary,
+}
+
+impl ObservedNestedRuntimePumpReport {
+    fn lifecycle_only(lifecycle_report: NestedRuntimePumpReport) -> Self {
+        Self {
+            lifecycle_report,
+            live_admission: NestedRuntimeLiveAdmissionRunSummary::default(),
+        }
+    }
+
+    fn from_live_admission(report: NestedRuntimeLiveAdmissionPumpReport) -> Self {
+        Self {
+            live_admission: NestedRuntimeLiveAdmissionRunSummary::from_live_pump(&report),
+            lifecycle_report: report.lifecycle_report,
+        }
     }
 }
 
@@ -397,9 +489,24 @@ fn run_with_pump<F>(
 where
     F: FnMut(&mut State, Duration) -> NestedRuntimePumpReport,
 {
+    run_with_observed_pump(state, config, stop_handle, |state, timeout| {
+        ObservedNestedRuntimePumpReport::lifecycle_only(pump(state, timeout))
+    })
+}
+
+fn run_with_observed_pump<F>(
+    state: &mut State,
+    config: NestedRuntimeLoopConfig,
+    stop_handle: &NestedRuntimeLoopStopHandle,
+    mut pump: F,
+) -> NestedRuntimeLoopReport
+where
+    F: FnMut(&mut State, Duration) -> ObservedNestedRuntimePumpReport,
+{
     let started_at = Instant::now();
     // 不按调用方给出的上限预分配，避免极大但仍有限的 max_iterations 在 run 前触发巨额分配。
     let mut pump_reports = Vec::new();
+    let mut live_admission = NestedRuntimeLiveAdmissionRunSummary::default();
     let mut connected_clients_registered = 0usize;
     let mut disconnected_clients_closed = 0usize;
     let mut dispatch_calls = 0usize;
@@ -418,11 +525,13 @@ where
         for _ in 0..config.max_iterations {
             // 生产路径只能通过 coordinator pump；loop 不得绕过 bridge 直接修改 core。
             stop_handle.begin_wait();
-            let report = pump(state, config.pump_timeout);
+            let observed_report = pump(state, config.pump_timeout);
             stop_handle.end_wait();
             wakeup_requested |= stop_handle.take_wakeup_request();
             wait_interrupted |= stop_handle.take_wait_interrupt();
             let iteration = pump_reports.len().saturating_add(1);
+            live_admission.observe(observed_report.live_admission);
+            let report = observed_report.lifecycle_report;
             let report_is_idle = pump_report_is_idle(&report);
             let report_has_errors = !report.errors.is_empty();
 
@@ -483,6 +592,7 @@ where
             configured_pump_timeout: config.pump_timeout,
             exited_before_timeout,
         },
+        live_admission,
     }
 }
 
@@ -873,6 +983,12 @@ mod tests {
 
         assert_eq!(report.iterations_run, 1);
         assert!(report.is_successful());
+        assert_eq!(report.live_admission.owner_invocations, 1);
+        assert_eq!(report.live_admission.enqueue_invocations, 1);
+        assert_eq!(report.live_admission.admissions_enqueued, 1);
+        assert_eq!(report.live_admission.drain_invocations, 1);
+        assert_eq!(report.live_admission.admissions_consumed, 1);
+        assert_eq!(report.live_admission.pending_admissions_after, 0);
         assert_eq!(
             runtime_loop
                 .coordinator
