@@ -83,6 +83,9 @@ pub mod linux_new_toplevel_callback_observation;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only live callback 到 pending ledger admission intent 的桥接 seam。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_toplevel_admission_bridge;
 /// Linux-only adapter-owned `new_toplevel` identity registration proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_identity_registration;
@@ -348,6 +351,14 @@ pub use linux_new_toplevel_callback_observation::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_toplevel_admission_bridge::{
+    LiveToplevelAdmissionBridgeBlocker, LiveToplevelAdmissionBridgeInput,
+    LiveToplevelAdmissionBridgeOperation, LiveToplevelAdmissionBridgeReport,
+    PendingXdgToplevelAdmission, ToplevelAdmissionBridgeQueue,
+    live_toplevel_admission_bridge_report,
+};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_toplevel_identity_registration::{
@@ -2958,6 +2969,94 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52S handler state 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52V live callback admission bridge API 必须同时受 feature 与 Linux target 隔离。
+    #[test]
+    fn live_toplevel_admission_bridge_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_toplevel_admission_bridge;")
+            .expect("Phase 52V live toplevel admission bridge module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_toplevel_admission_bridge::{")
+            .expect("Phase 52V live toplevel admission bridge re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52V bridge 只能生成 pending admission intent，不得在 handler 层消费 ledger/core。
+    #[test]
+    fn live_toplevel_admission_bridge_source_stays_b_lite() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_toplevel_admission_bridge.rs"),
+        )
+        .expect("Phase 52V live toplevel admission bridge module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "pub struct PendingXdgToplevelAdmission",
+            "pub struct ToplevelAdmissionBridgeQueue",
+            "pub struct LiveToplevelAdmissionBridgeReport",
+            "pub enum LiveToplevelAdmissionBridgeBlocker",
+            "pub fn live_toplevel_admission_bridge_report(",
+            "new_toplevel_callback_observed",
+            "adapter_surface_identity_available",
+            "adapter_toplevel_identity_registered",
+            "pending_admission_intent_created",
+            "pending_admission_count",
+            "ledger_owner_available: false",
+            "ledger_consume_attempted: false",
+            "ledger_admit_invoked: false",
+            "core_register_invoked: false",
+            "window_id_allocated: false",
+            "render_support: false",
+            "input_support: false",
+            "real_compositor_runtime_available: false",
+            "real_xdg_shell_runtime_available: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52V bridge 缺少 B-lite 证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "SurfaceXdgAdmissionLedger",
+            ".admit_surface(",
+            ".admit_toplevel(",
+            "BackendEvent::",
+            "CoreCommand::",
+            "state::State",
+            "&mut State",
+            "workspace::WindowId",
+            "WindowRegistry",
+            "SurfaceRegistry",
+            "SeatHandler",
+            "libinput",
+            "drm",
+            "gbm",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52V bridge 包含禁止生产 token: {forbidden}"
             );
         }
     }
