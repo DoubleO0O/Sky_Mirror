@@ -7,8 +7,18 @@
 use std::{io, time::Duration};
 
 use crate::{
-    core::{client::ClientId as CoreClientId, state::State},
-    smithay_backend::real_accept_flow::NestedRealAcceptFlow,
+    core::{
+        client::ClientId as CoreClientId, state::State, surface::SurfaceId, workspace::WindowId,
+    },
+    smithay_backend::{
+        linux_toplevel_admission_bridge::PendingXdgToplevelAdmission,
+        linux_toplevel_admission_runtime_queue::{
+            RuntimeToplevelAdmissionDrainReport, RuntimeToplevelAdmissionDrainTick,
+            RuntimeToplevelAdmissionEnqueueReport, RuntimeToplevelAdmissionQueueOwner,
+        },
+        real_accept_flow::NestedRealAcceptFlow,
+        surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId},
+    },
 };
 
 /// Phase 51K coordinator 尚未满足的独立能力条件。
@@ -175,6 +185,16 @@ impl NestedRuntimePumpReport {
     }
 }
 
+/// 一次 lifecycle pump 后追加 runtime admission drain 的组合报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRuntimeAdmissionPumpReport {
+    /// 既有 accept/connected/dispatch/disconnected lifecycle pump report。
+    pub lifecycle_report: NestedRuntimePumpReport,
+
+    /// lifecycle 完成后由 runtime admission queue owner drain 的 report。
+    pub admission_drain_report: RuntimeToplevelAdmissionDrainReport,
+}
+
 /// Linux-only nested client lifecycle single-pump coordinator。
 ///
 /// coordinator 只拥有并编排 [`NestedRealAcceptFlow`]。connected/disconnected mutation
@@ -183,6 +203,7 @@ impl NestedRuntimePumpReport {
 /// 没有 run/stop/wakeup 语义，因此不等于长期 runtime loop。
 pub struct NestedRuntimeCoordinator {
     flow: NestedRealAcceptFlow,
+    admission_queue_owner: RuntimeToplevelAdmissionQueueOwner,
 }
 
 impl NestedRuntimeCoordinator {
@@ -192,8 +213,21 @@ impl NestedRuntimeCoordinator {
     ///
     /// Display、socket、calloop source 或 accept flow 初始化失败时返回原始错误链。
     pub fn with_socket_name(name: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_socket_name_and_admission_surface_start(name, 1)
+    }
+
+    /// 使用指定 Wayland socket 名称与 admission core surface 起始 ID 创建 coordinator。
+    ///
+    /// # Errors
+    ///
+    /// Display、socket、calloop source 或 accept flow 初始化失败时返回原始错误链。
+    pub fn with_socket_name_and_admission_surface_start(
+        name: &str,
+        next_core_surface_id: SurfaceId,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
             flow: NestedRealAcceptFlow::with_socket_name(name)?,
+            admission_queue_owner: RuntimeToplevelAdmissionQueueOwner::new(next_core_surface_id),
         })
     }
 
@@ -207,6 +241,42 @@ impl NestedRuntimeCoordinator {
         self.flow.loop_signal()
     }
 
+    /// 将 pending xdg_toplevel admission intent 入队到 coordinator 持有的 runtime owner。
+    pub fn enqueue_pending_toplevel_admission(
+        &mut self,
+        pending: PendingXdgToplevelAdmission,
+    ) -> RuntimeToplevelAdmissionEnqueueReport {
+        self.admission_queue_owner
+            .enqueue_pending_toplevel_admission(pending)
+    }
+
+    /// 返回 coordinator admission owner 中的 pending 数量。
+    pub fn admission_pending_count(&self) -> usize {
+        self.admission_queue_owner.pending_count()
+    }
+
+    /// 返回 coordinator admission owner 下一次将使用的 core surface identity。
+    pub fn admission_next_core_surface_id(&self) -> SurfaceId {
+        self.admission_queue_owner.next_core_surface_id()
+    }
+
+    /// 查询 adapter surface 到 core surface 的 admission ledger mapping。
+    pub fn admission_surface_mapping(
+        &self,
+        adapter_surface: AdapterSurfaceId,
+    ) -> Option<SurfaceId> {
+        self.admission_queue_owner.surface_mapping(adapter_surface)
+    }
+
+    /// 查询 adapter toplevel 到 core window 的 admission ledger mapping。
+    pub fn admission_toplevel_mapping(
+        &self,
+        adapter_toplevel: AdapterToplevelId,
+    ) -> Option<WindowId> {
+        self.admission_queue_owner
+            .toplevel_mapping(adapter_toplevel)
+    }
+
     /// 执行一次 accept/connected → Display dispatch → disconnected lifecycle pump。
     ///
     /// accept 与 dispatch 错误会进入 report；coordinator 不 panic，也不会绕过既有
@@ -214,6 +284,27 @@ impl NestedRuntimeCoordinator {
     /// drain，避免把 active session mapping 留在半完成状态。
     pub fn pump_once(&mut self, state: &mut State, timeout: Duration) -> NestedRuntimePumpReport {
         self.pump_once_with_dispatch(state, timeout, |flow| flow.dispatch_wayland_clients_once())
+    }
+
+    /// 执行一次既有 lifecycle pump，然后从 runtime admission queue drain 一条 intent。
+    ///
+    /// 该方法不改变 [`Self::pump_once`] 的语义；admission drain 被明确追加在
+    /// accept/dispatch/disconnect lifecycle 之后。
+    pub fn pump_once_with_toplevel_admission_drain(
+        &mut self,
+        state: &mut State,
+        timeout: Duration,
+        tick: RuntimeToplevelAdmissionDrainTick,
+    ) -> NestedRuntimeAdmissionPumpReport {
+        let lifecycle_report = self.pump_once(state, timeout);
+        let admission_drain_report = self
+            .admission_queue_owner
+            .drain_pending_toplevel_admission_once(state, tick);
+
+        NestedRuntimeAdmissionPumpReport {
+            lifecycle_report,
+            admission_drain_report,
+        }
     }
 
     // 内部 seam 只允许测试注入 dispatch error；production 始终调用真实 Display dispatch。
@@ -287,8 +378,25 @@ mod tests {
     };
     use crate::{
         core::state::State,
-        smithay_backend::test_support::{assert_runtime_dir, unique_socket_name},
+        smithay_backend::{
+            linux_toplevel_admission_bridge::PendingXdgToplevelAdmission,
+            linux_toplevel_admission_runtime_queue::{
+                RuntimeToplevelAdmissionDrainTick, RuntimeToplevelAdmissionQueueBlocker,
+            },
+            surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId, ProtocolObjectId},
+            test_support::{assert_runtime_dir, unique_socket_name},
+        },
     };
+
+    fn surface(value: u64) -> AdapterSurfaceId {
+        AdapterSurfaceId::new(ProtocolObjectId::new(value).expect("测试 surface identity 必须非零"))
+    }
+
+    fn toplevel(value: u64) -> AdapterToplevelId {
+        AdapterToplevelId::new(
+            ProtocolObjectId::new(value).expect("测试 toplevel identity 必须非零"),
+        )
+    }
 
     /// 验证 C 路线只上调 Linux proof 支持的 single-pump 字段，不冒充长期 loop。
     #[test]
@@ -414,5 +522,113 @@ mod tests {
         assert!(!report.is_successful());
         assert!(report.validation_is_clean);
         assert!(state.clients.records().is_empty());
+    }
+
+    /// 验证 admission drain 被追加到既有 lifecycle 后，空 queue 不制造 core mutation。
+    #[test]
+    fn nested_runtime_admission_drain_empty_queue_preserves_lifecycle_noop() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-runtime-admission-empty");
+        let mut coordinator =
+            NestedRuntimeCoordinator::with_socket_name_and_admission_surface_start(
+                &socket_name,
+                8_000,
+            )
+            .expect("coordinator 必须绑定测试 socket");
+        let mut state = State::new();
+
+        let report = coordinator.pump_once_with_toplevel_admission_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(52),
+        );
+
+        assert_eq!(report.lifecycle_report.accepted_clients, 0);
+        assert_eq!(report.lifecycle_report.inserted_clients, 0);
+        assert!(report.lifecycle_report.dispatch_clients_called);
+        assert!(report.lifecycle_report.is_successful());
+        assert_eq!(
+            report.admission_drain_report.pending_admission_count_before,
+            0
+        );
+        assert_eq!(
+            report.admission_drain_report.pending_admission_count_after,
+            0
+        );
+        assert!(!report.admission_drain_report.ledger_consume_attempted);
+        assert_eq!(
+            report.admission_drain_report.blockers.as_slice(),
+            &[RuntimeToplevelAdmissionQueueBlocker::MissingPendingAdmission]
+        );
+        assert_eq!(coordinator.admission_pending_count(), 0);
+        assert_eq!(coordinator.admission_next_core_surface_id(), 8_000);
+        assert!(state.validate().is_clean());
+    }
+
+    /// 验证 coordinator 可以在 lifecycle 后经 runtime owner drain pending admission。
+    #[test]
+    fn nested_runtime_admission_drain_consumes_pending_after_lifecycle() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-runtime-admission-pending");
+        let adapter_surface = surface(1_701);
+        let adapter_toplevel = toplevel(1_801);
+        let pending = PendingXdgToplevelAdmission::new(adapter_surface, adapter_toplevel, Some(52));
+        let mut coordinator =
+            NestedRuntimeCoordinator::with_socket_name_and_admission_surface_start(
+                &socket_name,
+                9_000,
+            )
+            .expect("coordinator 必须绑定测试 socket");
+        let mut state = State::new();
+
+        let enqueue = coordinator.enqueue_pending_toplevel_admission(pending);
+        assert!(enqueue.pending_admission_enqueued);
+        assert_eq!(enqueue.pending_admission_count_before, 0);
+        assert_eq!(enqueue.pending_admission_count_after, 1);
+        assert_eq!(coordinator.admission_pending_count(), 1);
+
+        let report = coordinator.pump_once_with_toplevel_admission_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(53),
+        );
+
+        assert!(report.lifecycle_report.is_successful());
+        assert_eq!(report.lifecycle_report.accepted_clients, 0);
+        assert_eq!(report.lifecycle_report.disconnected_events_drained, 0);
+        assert_eq!(
+            report.admission_drain_report.pending_admission_count_before,
+            1
+        );
+        assert_eq!(
+            report.admission_drain_report.pending_admission_count_after,
+            0
+        );
+        assert!(report.admission_drain_report.pending_admission_consumed);
+        assert!(report.admission_drain_report.ledger_admit_surface_invoked);
+        assert!(report.admission_drain_report.ledger_admit_invoked);
+        assert!(report.admission_drain_report.core_register_invoked);
+        assert!(report.admission_drain_report.window_id_allocated);
+        assert_eq!(report.admission_drain_report.core_surface_id, Some(9_000));
+        assert_eq!(
+            report.admission_drain_report.next_core_surface_id_after,
+            9_001
+        );
+        let core_window = report
+            .admission_drain_report
+            .core_window_id
+            .expect("coordinator admission drain 必须返回 core WindowId");
+        assert_eq!(coordinator.admission_pending_count(), 0);
+        assert_eq!(coordinator.admission_next_core_surface_id(), 9_001);
+        assert_eq!(
+            coordinator.admission_surface_mapping(adapter_surface),
+            Some(9_000)
+        );
+        assert_eq!(
+            coordinator.admission_toplevel_mapping(adapter_toplevel),
+            Some(core_window)
+        );
+        assert!(state.validate().is_clean());
+        assert!(report.admission_drain_report.blockers.is_empty());
     }
 }
