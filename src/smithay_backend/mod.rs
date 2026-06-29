@@ -77,6 +77,9 @@ pub mod linux_handler_probe;
 /// Linux-only adapter-led ledger admission ownership proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_ledger_admission_owner;
+/// Linux-only live callback observation 到 coordinator admission queue 的 owner seam。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_live_toplevel_admission_owner;
 /// Linux-only controlled `new_toplevel` callback observation proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_new_toplevel_callback_observation;
@@ -348,6 +351,12 @@ pub use linux_handler_probe::{
 pub use linux_ledger_admission_owner::{
     AdapterLedgerAdmissionBlocker, AdapterLedgerAdmissionError, AdapterLedgerAdmissionOperation,
     AdapterLedgerAdmissionReport, adapter_ledger_admission_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_live_toplevel_admission_owner::{
+    LiveToplevelAdmissionOwnerBlocker, LiveToplevelAdmissionOwnerOperation,
+    LiveToplevelAdmissionOwnerReport, enqueue_live_toplevel_admission_from_display,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -1214,6 +1223,95 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52Z coordinator admission drain 生产代码包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 53A live callback admission owner API 必须同时受 feature 与 Linux target 隔离。
+    #[test]
+    fn live_toplevel_admission_owner_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_live_toplevel_admission_owner;")
+            .expect("Phase 53A live toplevel admission owner module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_live_toplevel_admission_owner::{")
+            .expect("Phase 53A live toplevel admission owner re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 53A owner 必须把 live callback observation 入队到 coordinator admission queue。
+    #[test]
+    fn live_toplevel_admission_owner_source_enqueues_coordinator_from_callback_observation() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_live_toplevel_admission_owner.rs"),
+        )
+        .expect("Phase 53A live toplevel admission owner module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "pub struct LiveToplevelAdmissionOwnerReport",
+            "pub enum LiveToplevelAdmissionOwnerBlocker",
+            "pub enum LiveToplevelAdmissionOwnerOperation",
+            "pub fn enqueue_live_toplevel_admission_from_display(",
+            "server: &SmithayWaylandDisplayProbe",
+            "coordinator: &mut NestedRuntimeCoordinator",
+            ".last_new_toplevel_callback_observation_sequence()",
+            ".last_adapter_toplevel_identity_registration_observation()",
+            "LiveToplevelAdmissionBridgeInput::from_registered_identity(",
+            "live_toplevel_admission_bridge_report(",
+            ".enqueue_pending_toplevel_admission(",
+            "coordinator.admission_pending_count()",
+            "handler_state_touched: false",
+            "ledger_admit_invoked: false",
+            "core_register_invoked: false",
+            "window_id_allocated: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 53A live admission owner 缺少 callback->queue 证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "BackendEvent::",
+            "CoreCommand::",
+            ".workspaces",
+            ".slots",
+            ".stacks",
+            "insert_window",
+            "WindowRegistry",
+            "SeatHandler",
+            "UnixStream",
+            "Connection::",
+            "registry_queue_init",
+            "dispatch_clients_once",
+            "flush_clients_once",
+            "libinput",
+            "drm",
+            "gbm",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 53A live admission owner 生产代码包含禁止 token: {forbidden}"
             );
         }
     }
