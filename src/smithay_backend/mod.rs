@@ -86,6 +86,9 @@ pub mod linux_runtime;
 /// Linux-only live callback 到 pending ledger admission intent 的桥接 seam。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_admission_bridge;
+/// Linux-only pending admission intent 的 owner 消费 seam。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_toplevel_admission_consumer;
 /// Linux-only adapter-owned `new_toplevel` identity registration proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_identity_registration;
@@ -358,6 +361,13 @@ pub use linux_toplevel_admission_bridge::{
     LiveToplevelAdmissionBridgeOperation, LiveToplevelAdmissionBridgeReport,
     PendingXdgToplevelAdmission, ToplevelAdmissionBridgeQueue,
     live_toplevel_admission_bridge_report,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_toplevel_admission_consumer::{
+    PendingToplevelAdmissionConsumerBlocker, PendingToplevelAdmissionConsumerInput,
+    PendingToplevelAdmissionConsumerOperation, PendingToplevelAdmissionConsumerReport,
+    consume_pending_toplevel_admission,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -3057,6 +3067,92 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52V bridge 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52W pending admission consumer owner API 必须同时受 feature 与 Linux target 隔离。
+    #[test]
+    fn pending_admission_consumer_owner_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_toplevel_admission_consumer;")
+            .expect("Phase 52W pending admission consumer owner module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_toplevel_admission_consumer::{")
+            .expect("Phase 52W pending admission consumer owner re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52W consumer owner 必须通过 ledger 消费 pending intent，不能回到 handler 直接改 core。
+    #[test]
+    fn pending_admission_consumer_owner_source_uses_ledger_seam() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_toplevel_admission_consumer.rs"),
+        )
+        .expect("Phase 52W pending admission consumer owner module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "pub struct PendingToplevelAdmissionConsumerInput",
+            "pub struct PendingToplevelAdmissionConsumerReport",
+            "pub enum PendingToplevelAdmissionConsumerBlocker",
+            "pub enum PendingToplevelAdmissionConsumerOperation",
+            "pub fn consume_pending_toplevel_admission(",
+            "queue: &mut ToplevelAdmissionBridgeQueue",
+            "ledger: &mut SurfaceXdgAdmissionLedger",
+            "state: &mut State",
+            "queue.pop_front()",
+            ".admit_surface(",
+            ".admit_toplevel(",
+            "ledger_consume_attempted: true",
+            "ledger_admit_surface_invoked: true",
+            "ledger_admit_invoked: true",
+            "core_register_invoked: true",
+            "window_id_allocated: true",
+            "render_support: false",
+            "input_support: false",
+            "real_compositor_runtime_available: false",
+            "real_xdg_shell_runtime_available: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52W consumer owner 缺少 ledger seam 证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "BackendEvent::",
+            "CoreCommand::",
+            ".workspaces",
+            ".slots",
+            ".stacks",
+            "insert_window",
+            "WindowRegistry",
+            "SeatHandler",
+            "libinput",
+            "drm",
+            "gbm",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52W consumer owner 包含禁止生产 token: {forbidden}"
             );
         }
     }
