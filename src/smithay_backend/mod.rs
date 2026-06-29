@@ -92,6 +92,9 @@ pub mod linux_toplevel_admission_consumer;
 /// Linux-only controlled pending admission pump seam。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_admission_pump;
+/// Linux-only runtime-owned pending admission queue seam。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_toplevel_admission_runtime_queue;
 /// Linux-only adapter-owned `new_toplevel` identity registration proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_identity_registration;
@@ -378,6 +381,13 @@ pub use linux_toplevel_admission_pump::{
     ControlledToplevelAdmissionPumpBlocker, ControlledToplevelAdmissionPumpInput,
     ControlledToplevelAdmissionPumpOperation, ControlledToplevelAdmissionPumpReport,
     pump_controlled_toplevel_admission,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_toplevel_admission_runtime_queue::{
+    RuntimeToplevelAdmissionDrainReport, RuntimeToplevelAdmissionDrainTick,
+    RuntimeToplevelAdmissionEnqueueReport, RuntimeToplevelAdmissionQueueBlocker,
+    RuntimeToplevelAdmissionQueueOperation, RuntimeToplevelAdmissionQueueOwner,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -3260,6 +3270,102 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52X pump 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52Y runtime admission queue owner API 必须同时受 feature 与 Linux target 隔离。
+    #[test]
+    fn runtime_admission_queue_owner_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_toplevel_admission_runtime_queue;")
+            .expect("Phase 52Y runtime admission queue owner module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_toplevel_admission_runtime_queue::{")
+            .expect("Phase 52Y runtime admission queue owner re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52Y owner 必须由 runtime 层持有 queue + ledger，并按 tick drain consumer。
+    #[test]
+    fn runtime_admission_queue_owner_source_drains_consumer_from_owned_queue() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_toplevel_admission_runtime_queue.rs"),
+        )
+        .expect("Phase 52Y runtime admission queue owner module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "pub struct RuntimeToplevelAdmissionQueueOwner",
+            "queue: ToplevelAdmissionBridgeQueue",
+            "ledger: SurfaceXdgAdmissionLedger",
+            "next_core_surface_id: SurfaceId",
+            "pub struct RuntimeToplevelAdmissionDrainTick",
+            "pub struct RuntimeToplevelAdmissionEnqueueReport",
+            "pub struct RuntimeToplevelAdmissionDrainReport",
+            "pub enum RuntimeToplevelAdmissionQueueBlocker",
+            "pub enum RuntimeToplevelAdmissionQueueOperation",
+            "pub fn enqueue_pending_toplevel_admission(",
+            "pub fn drain_pending_toplevel_admission_once(",
+            "state: &mut State",
+            "PendingToplevelAdmissionConsumerInput",
+            "consume_pending_toplevel_admission(",
+            "&mut self.queue",
+            "&mut self.ledger",
+            "self.next_core_surface_id = self.next_core_surface_id.saturating_add(1)",
+            "runtime_queue_owned: true",
+            "runtime_ledger_owned: true",
+            "handler_state_touched: false",
+            "render_support: false",
+            "input_support: false",
+            "real_compositor_runtime_available: false",
+            "real_xdg_shell_runtime_available: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52Y runtime queue owner 缺少 owner/drain 证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "BackendEvent::",
+            "CoreCommand::",
+            ".workspaces",
+            ".slots",
+            ".stacks",
+            "insert_window",
+            "WindowRegistry",
+            "SeatHandler",
+            "SmithayWaylandDisplayProbe",
+            "UnixStream",
+            "Connection::",
+            "registry_queue_init",
+            "dispatch_clients_once",
+            "flush_clients_once",
+            "libinput",
+            "drm",
+            "gbm",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52Y runtime queue owner 包含禁止生产 token: {forbidden}"
             );
         }
     }
