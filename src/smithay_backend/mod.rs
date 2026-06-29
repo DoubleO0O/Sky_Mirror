@@ -875,7 +875,10 @@ mod nested_socket_probe_gate_tests {
             "pub enum NestedRuntimeLoopExitReason",
             "pub fn run_for_iterations",
             "pub fn stop_handle",
-            ".coordinator.pump_once(state, config.pump_timeout)",
+            "RuntimeToplevelAdmissionDrainTick",
+            "pump_once_with_live_toplevel_admission_drain(",
+            "RuntimeToplevelAdmissionDrainTick::phase52y_default(",
+            ".lifecycle_report",
             "max_iterations",
             "stop_when_idle",
             "continue_after_error",
@@ -909,6 +912,7 @@ mod nested_socket_probe_gate_tests {
             [".", "registry"].concat(),
             ["Backend", "Event::NestedClient"].concat(),
             ["Core", "Command::RunNestedLoop"].concat(),
+            ".coordinator.pump_once(state, config.pump_timeout)".to_string(),
         ] {
             assert!(
                 !production_code.contains(&forbidden),
