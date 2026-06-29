@@ -498,6 +498,39 @@ fn pump_report_is_idle(report: &NestedRuntimePumpReport) -> bool {
 }
 
 #[cfg(test)]
+impl NestedRuntimeLoop {
+    /// 测试专用：让 orchestrator proof 在 loop 持有的 coordinator display 上制造 observation。
+    pub(crate) fn display_mut_for_controlled_toplevel_registration(
+        &mut self,
+    ) -> &mut crate::smithay_backend::wayland_display::SmithayWaylandDisplayProbe {
+        self.coordinator
+            .display_mut_for_controlled_toplevel_registration()
+    }
+
+    /// 测试专用：读取 loop-owned coordinator admission surface mapping。
+    pub(crate) fn admission_surface_mapping(
+        &self,
+        adapter_surface: crate::smithay_backend::surface_xdg_admission::AdapterSurfaceId,
+    ) -> Option<crate::core::surface::SurfaceId> {
+        self.coordinator.admission_surface_mapping(adapter_surface)
+    }
+
+    /// 测试专用：读取 loop-owned coordinator admission toplevel mapping。
+    pub(crate) fn admission_toplevel_mapping(
+        &self,
+        adapter_toplevel: crate::smithay_backend::surface_xdg_admission::AdapterToplevelId,
+    ) -> Option<crate::core::workspace::WindowId> {
+        self.coordinator
+            .admission_toplevel_mapping(adapter_toplevel)
+    }
+
+    /// 测试专用：读取 loop-owned coordinator pending admission count。
+    pub(crate) fn admission_pending_count(&self) -> usize {
+        self.coordinator.admission_pending_count()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::{
         os::unix::net::UnixStream,
