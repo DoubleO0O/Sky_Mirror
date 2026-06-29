@@ -89,6 +89,9 @@ pub mod linux_toplevel_admission_bridge;
 /// Linux-only pending admission intent 的 owner 消费 seam。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_admission_consumer;
+/// Linux-only controlled pending admission pump seam。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_toplevel_admission_pump;
 /// Linux-only adapter-owned `new_toplevel` identity registration proof。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_identity_registration;
@@ -368,6 +371,13 @@ pub use linux_toplevel_admission_consumer::{
     PendingToplevelAdmissionConsumerBlocker, PendingToplevelAdmissionConsumerInput,
     PendingToplevelAdmissionConsumerOperation, PendingToplevelAdmissionConsumerReport,
     consume_pending_toplevel_admission,
+};
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_toplevel_admission_pump::{
+    ControlledToplevelAdmissionPumpBlocker, ControlledToplevelAdmissionPumpInput,
+    ControlledToplevelAdmissionPumpOperation, ControlledToplevelAdmissionPumpReport,
+    pump_controlled_toplevel_admission,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -3153,6 +3163,103 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52W consumer owner 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 52X controlled admission pump API 必须同时受 feature 与 Linux target 隔离。
+    #[test]
+    fn controlled_admission_pump_api_is_linux_only() {
+        let source = include_str!("mod.rs");
+        let lines = source.lines().collect::<Vec<_>>();
+        let required_gate = "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]";
+        let module = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub mod linux_toplevel_admission_pump;")
+            .expect("Phase 52X controlled admission pump module 必须存在");
+        let reexport = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| **line == "pub use linux_toplevel_admission_pump::{")
+            .expect("Phase 52X controlled admission pump re-export 必须存在");
+
+        assert_eq!(lines[module.0 - 1], required_gate);
+        assert_eq!(lines[reexport.0 - 1], required_gate);
+    }
+
+    /// Phase 52X pump 必须串联 registration report -> bridge queue -> consumer owner。
+    #[test]
+    fn controlled_admission_pump_source_uses_bridge_and_consumer_owner() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_toplevel_admission_pump.rs"),
+        )
+        .expect("Phase 52X controlled admission pump module 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "pub struct ControlledToplevelAdmissionPumpInput",
+            "pub struct ControlledToplevelAdmissionPumpReport",
+            "pub enum ControlledToplevelAdmissionPumpBlocker",
+            "pub enum ControlledToplevelAdmissionPumpOperation",
+            "pub fn pump_controlled_toplevel_admission(",
+            "registration: AdapterToplevelIdentityRegistrationReport",
+            "ledger: &mut SurfaceXdgAdmissionLedger",
+            "state: &mut State",
+            "LiveToplevelAdmissionBridgeInput::from(&registration)",
+            "live_toplevel_admission_bridge_report(bridge_input)",
+            "ToplevelAdmissionBridgeQueue::new()",
+            "queue.push(pending)",
+            "consume_pending_toplevel_admission(",
+            "PendingToplevelAdmissionConsumerInput",
+            "ledger_consume_attempted: consumer_report.ledger_consume_attempted",
+            "pending_admission_consumed: consumer_report.pending_admission_consumed",
+            "ledger_admit_surface_invoked: consumer_report.ledger_admit_surface_invoked",
+            "ledger_admit_invoked: consumer_report.ledger_admit_invoked",
+            "core_register_invoked: consumer_report.core_register_invoked",
+            "window_id_allocated: consumer_report.window_id_allocated",
+            "handler_state_touched: false",
+            "render_support: false",
+            "input_support: false",
+            "real_compositor_runtime_available: false",
+            "real_xdg_shell_runtime_available: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 52X pump 缺少 bridge/consumer owner 证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "BackendEvent::",
+            "CoreCommand::",
+            ".workspaces",
+            ".slots",
+            ".stacks",
+            "insert_window",
+            "WindowRegistry",
+            "SeatHandler",
+            "SmithayWaylandDisplayProbe",
+            "UnixStream",
+            "Connection::",
+            "registry_queue_init",
+            "dispatch_clients_once",
+            "flush_clients_once",
+            "libinput",
+            "drm",
+            "gbm",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "Phase 52X pump 包含禁止生产 token: {forbidden}"
             );
         }
     }
