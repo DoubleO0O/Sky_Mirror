@@ -184,6 +184,13 @@ impl LinuxXdgShellStateSkeleton {
         self.surface_identities.last_commit_observation()
     }
 
+    /// 消费下一条 `wl_surface.commit` adapter-owned observation。
+    pub(crate) fn take_next_wl_surface_commit_observation(
+        &mut self,
+    ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
+        self.surface_identities.take_next_commit_observation()
+    }
+
     /// 返回最近一次 callback-like lifecycle identity lookup 报告。
     ///
     /// `Some` 只说明 handler 方法执行了 observation helper；报告中的

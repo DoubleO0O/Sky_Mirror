@@ -5,7 +5,7 @@
 //! 也不进入 render/input。
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io,
     os::unix::net::UnixStream,
     sync::mpsc::{self, RecvTimeoutError},
@@ -87,6 +87,8 @@ pub(crate) struct LinuxWlSurfaceIdentityRegistry {
     last_observation: Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>>,
     commit_observation_count: u64,
     last_commit_observation: Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>>,
+    pending_commit_observations:
+        VecDeque<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>>,
 }
 
 impl LinuxWlSurfaceIdentityRegistry {
@@ -98,6 +100,7 @@ impl LinuxWlSurfaceIdentityRegistry {
             last_observation: None,
             commit_observation_count: 0,
             last_commit_observation: None,
+            pending_commit_observations: VecDeque::new(),
         }
     }
 
@@ -141,13 +144,17 @@ impl LinuxWlSurfaceIdentityRegistry {
         let object_id = surface.id();
         if object_id.is_null() {
             let error = SurfaceIdentityError::SmithayIdentityUnavailable;
-            self.last_commit_observation = Some(Err(error));
+            let result = Err(error);
+            self.last_commit_observation = Some(result);
+            self.pending_commit_observations.push_back(result);
             return Err(error);
         }
 
         let Some(mapping) = self.mappings.get(&object_id).copied() else {
             let error = SurfaceIdentityError::AdapterSurfaceIdentityMissing;
-            self.last_commit_observation = Some(Err(error));
+            let result = Err(error);
+            self.last_commit_observation = Some(result);
+            self.pending_commit_observations.push_back(result);
             return Err(error);
         };
         let observation = AdapterSurfaceCommitObservation {
@@ -155,7 +162,9 @@ impl LinuxWlSurfaceIdentityRegistry {
             surface_identity_key: mapping.surface_identity_key,
             commit_sequence,
         };
-        self.last_commit_observation = Some(Ok(observation));
+        let result = Ok(observation);
+        self.last_commit_observation = Some(result);
+        self.pending_commit_observations.push_back(result);
         Ok(observation)
     }
 
@@ -177,6 +186,12 @@ impl LinuxWlSurfaceIdentityRegistry {
         &self,
     ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
         self.last_commit_observation
+    }
+
+    pub(crate) fn take_next_commit_observation(
+        &mut self,
+    ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
+        self.pending_commit_observations.pop_front()
     }
 }
 
@@ -953,5 +968,45 @@ mod tests {
         assert!(!report.real_compositor_runtime_available);
         assert!(!report.real_xdg_shell_runtime_available);
         assert!(report.blockers.is_empty());
+    }
+
+    #[test]
+    fn controlled_wl_surface_commit_observations_are_fifo_backlogged() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 compositor owner 必须初始化");
+
+        let first = controlled_wl_surface_commit_observation_report(&mut server)
+            .expect("首个 controlled surface commit proof 必须完成");
+        let second = controlled_wl_surface_commit_observation_report(&mut server)
+            .expect("第二个 controlled surface commit proof 必须完成");
+
+        let first_pending = server
+            .take_next_wl_surface_commit_observation()
+            .expect("首个 commit observation 必须进入 FIFO")
+            .expect("首个 commit observation 必须成功解析");
+        let second_pending = server
+            .take_next_wl_surface_commit_observation()
+            .expect("第二个 commit observation 必须进入 FIFO")
+            .expect("第二个 commit observation 必须成功解析");
+
+        assert_eq!(first_pending.commit_sequence, 1);
+        assert_eq!(first_pending.adapter_surface_id, first.adapter_surface_id);
+        assert_eq!(
+            first_pending.surface_identity_key,
+            first.surface_identity_key
+        );
+        assert_eq!(second_pending.commit_sequence, 2);
+        assert_eq!(second_pending.adapter_surface_id, second.adapter_surface_id);
+        assert_eq!(
+            second_pending.surface_identity_key,
+            second.surface_identity_key
+        );
+        assert_ne!(
+            first_pending.adapter_surface_id,
+            second_pending.adapter_surface_id
+        );
+        assert_eq!(server.take_next_wl_surface_commit_observation(), None);
     }
 }

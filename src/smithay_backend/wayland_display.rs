@@ -151,6 +151,13 @@ impl SmithayWaylandDisplayProbe {
         self.state.last_wl_surface_commit_observation()
     }
 
+    /// 消费 display owner 中下一条 `wl_surface.commit` observation。
+    pub(crate) fn take_next_wl_surface_commit_observation(
+        &mut self,
+    ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
+        self.state.take_next_wl_surface_commit_observation()
+    }
+
     /// 返回本 display 的 server handler 收到的 `new_toplevel` callback 次数。
     pub(crate) fn new_toplevel_callback_observation_count(&self) -> u64 {
         self.state.new_toplevel_callback_observation_count()
