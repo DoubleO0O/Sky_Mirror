@@ -1382,6 +1382,35 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 53G 必须保留同一 coordinator/display 上连续 distinct callback admission 的证明。
+    #[test]
+    fn nested_runtime_multiple_live_admission_proof_source_exists() {
+        let source = include_str!("nested_runtime_coordinator.rs");
+
+        for required in [
+            "fn nested_runtime_live_admission_pump_accepts_distinct_callback_observations()",
+            "let first_registration =",
+            "let second_registration =",
+            "assert_ne!(",
+            "first_registration.new_toplevel_callback_sequence",
+            "second_registration.new_toplevel_callback_sequence",
+            "first_registration.adapter_surface_id",
+            "second_registration.adapter_surface_id",
+            "first_registration.adapter_toplevel_id",
+            "second_registration.adapter_toplevel_id",
+            "Some(13_000)",
+            "Some(13_001)",
+            "next_core_surface_id_after",
+            "coordinator.admission_next_core_surface_id(), 13_002",
+            "state.surfaces.records().len(), 2",
+        ] {
+            assert!(
+                source.contains(required),
+                "Phase 53G multiple live admission proof 缺少证据项: {required}"
+            );
+        }
+    }
+
     /// 验证真实 disconnect callback bridge 的模块声明与公共导出都保持 Linux-only。
     #[test]
     fn real_disconnect_callback_bridge_is_linux_only() {
