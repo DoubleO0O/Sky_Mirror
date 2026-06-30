@@ -36,6 +36,7 @@ use crate::{
             NestedClientSessionId,
         },
         linux_live_toplevel_admission_owner::LiveToplevelAdmissionOwnerObservation,
+        linux_wl_surface_identity::{AdapterSurfaceCommitObservation, SurfaceIdentityError},
         real_disconnect_flow::{NestedRealDisconnectCallbackReport, bridge_disconnected_events},
         wayland_display::SmithayWaylandDisplayProbe,
         wayland_socket::SmithayWaylandSocketProbe,
@@ -541,6 +542,16 @@ impl NestedRealAcceptFlow {
         &mut self,
     ) -> Option<XdgToplevelLifecycleObservationReport> {
         self.display.take_next_live_toplevel_unmap_observation()
+    }
+
+    /// 消费 display owner 中下一条 `wl_surface.commit` observation。
+    ///
+    /// flow 只转发 adapter-owned pure-data commit observation；这里不读取 buffer、
+    /// damage、frame callback，也不调用 render、input、ledger 或 core。
+    pub(crate) fn take_next_wl_surface_commit_observation(
+        &mut self,
+    ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
+        self.display.take_next_wl_surface_commit_observation()
     }
 
     /// 只读访问 persistent backend-client/session mapping。

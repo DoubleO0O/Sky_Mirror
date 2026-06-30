@@ -9,7 +9,7 @@ use crate::{
     smithay_backend::nested_runtime_loop::{
         NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLiveUnmapRunSummary, NestedRuntimeLoop,
         NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
-        NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle,
+        NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle, NestedRuntimeSurfaceCommitRunSummary,
     },
 };
 
@@ -260,6 +260,9 @@ pub struct NestedRuntimeLifecycleReport {
     /// 本轮 live toplevel unmap drain 事实。
     pub live_unmap: NestedRuntimeLiveUnmapRunSummary,
 
+    /// 本轮 `wl_surface.commit` backlog drain 事实。
+    pub surface_commit: NestedRuntimeSurfaceCommitRunSummary,
+
     /// 完整原始 bounded-loop report。
     pub loop_report: NestedRuntimeLoopReport,
 
@@ -405,6 +408,7 @@ impl NestedRuntimeOrchestrator {
             validation_is_clean: loop_report.validation_is_clean,
             live_admission: loop_report.live_admission,
             live_unmap: loop_report.live_unmap,
+            surface_commit: loop_report.surface_commit.clone(),
             loop_report,
             readiness: nested_runtime_orchestrator_readiness_report(),
         }
@@ -465,6 +469,7 @@ mod tests {
         core::state::State,
         smithay_backend::{
             linux_toplevel_identity_registration::adapter_toplevel_identity_registration_report,
+            linux_wl_surface_identity::controlled_wl_surface_commit_observation_report,
             nested_runtime_coordinator::{NestedRuntimePumpError, NestedRuntimePumpErrorKind},
             nested_runtime_loop::{
                 NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
@@ -775,6 +780,61 @@ mod tests {
         assert!(state.surfaces.get(1).is_some());
         assert!(state.surfaces.get(2).is_some());
         assert_eq!(state.surfaces.records().len(), 2);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：orchestrator final report exposes runtime-drained commit backlog.
+    #[test]
+    fn runtime_orchestrator_run_reports_wl_surface_commit_backlog_drain() {
+        assert_runtime_dir();
+        let mut config = config("orchestrator-surface-commit-backlog", 3);
+        config.loop_config.stop_when_idle = true;
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config);
+        let mut state = State::new();
+        let _start_report = orchestrator.start().expect("Created 必须允许 start");
+        let (first_commit, second_commit) = {
+            let display = orchestrator
+                .runtime_loop
+                .as_mut()
+                .expect("Started 必须持有 runtime loop")
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("首个 controlled commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 controlled commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
+
+        assert_eq!(report.pump_iterations, 3);
+        assert_eq!(report.loop_exit_reason, NestedRuntimeLoopExitReason::Idle);
+        assert!(report.is_clean_shutdown());
+        assert_eq!(report.surface_commit, report.loop_report.surface_commit);
+        assert_eq!(report.surface_commit.drain_invocations, 3);
+        assert_eq!(report.surface_commit.commit_observations_drained, 2);
+        assert_eq!(report.surface_commit.commit_observation_errors, 0);
+        assert_eq!(
+            report.surface_commit.drained_commit_sequences,
+            vec![first_commit.commit_sequence, second_commit.commit_sequence]
+        );
+        assert_eq!(report.surface_commit.drained_commit_sequences, vec![1, 2]);
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
+        assert_eq!(report.live_admission.admissions_consumed, 0);
+        assert_eq!(report.live_unmap.core_detaches, 0);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
         assert!(state.validate().is_clean());
     }
 

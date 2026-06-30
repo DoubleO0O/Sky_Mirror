@@ -2962,6 +2962,94 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54C 必须把 wl_surface commit backlog 接入 runtime/loop/orchestrator report drain seam。
+    #[test]
+    fn nested_runtime_surface_commit_backlog_drain_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let real_accept_flow =
+            std::fs::read_to_string(root.join("src/smithay_backend/real_accept_flow.rs"))
+                .expect("Phase 54C real accept flow source 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54C coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54C loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54C orchestrator source 必须存在");
+
+        for required in [
+            "take_next_wl_surface_commit_observation",
+            "self.display.take_next_wl_surface_commit_observation()",
+            "不读取 buffer",
+            "不调用 render、input、ledger 或 core",
+        ] {
+            assert!(
+                real_accept_flow.contains(required),
+                "Phase 54C flow commit drain seam 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitDrainReport",
+            "commit_observation_resolved",
+            "commit_observation_failed",
+            "commit_sequence: Option<u64>",
+            "surface_commit_drain_report",
+            "RuntimeSurfaceCommitDrainReport::from_observation",
+            "self.flow.take_next_wl_surface_commit_observation()",
+            "buffer_attached: false",
+            "damage_submitted: false",
+            "frame_callback_requested: false",
+            "render_invoked: false",
+            "input_invoked: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54C coordinator commit drain report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub struct NestedRuntimeSurfaceCommitRunSummary",
+            "pub drained_commit_sequences: Vec<u64>",
+            "from_surface_commit_drain",
+            "let surface_commit_has_progress = observed_report.surface_commit.has_progress();",
+            "&& !surface_commit_has_progress",
+            "surface_commit: loop_report.surface_commit.clone()",
+            "fn nested_runtime_loop_drains_wl_surface_commit_backlog_fifo_without_render()",
+            "assert_eq!(report.surface_commit.commit_observations_drained, 2)",
+            "assert_eq!(report.surface_commit.drained_commit_sequences, vec![1, 2])",
+            "assert!(!report.surface_commit.render_invoked)",
+            "assert!(!report.surface_commit.input_invoked)",
+            "assert!(!report.surface_commit.core_mutation_invoked)",
+        ] {
+            let source = if required == "surface_commit: loop_report.surface_commit.clone()" {
+                &orchestrator
+            } else {
+                &runtime_loop
+            };
+            assert!(
+                source.contains(required),
+                "Phase 54C loop/orchestrator commit drain proof 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub surface_commit: NestedRuntimeSurfaceCommitRunSummary",
+            "assert_eq!(report.surface_commit, report.loop_report.surface_commit)",
+            "fn runtime_orchestrator_run_reports_wl_surface_commit_backlog_drain()",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54C orchestrator commit report proof 缺少证据: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
