@@ -56,6 +56,7 @@ pub struct LinuxXdgShellStateSkeleton {
     last_toplevel_identity_registration:
         Option<Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError>>,
     last_toplevel_lifecycle_observation: Option<XdgToplevelLifecycleObservationReport>,
+    pending_live_toplevel_unmap_observations: VecDeque<XdgToplevelLifecycleObservationReport>,
     new_toplevel_callback_count: u64,
     last_new_toplevel_callback_observation_sequence: Option<u64>,
     pending_live_toplevel_admission_observations: VecDeque<PendingLiveToplevelAdmissionObservation>,
@@ -138,6 +139,7 @@ impl LinuxXdgShellStateSkeleton {
             toplevel_identities: LinuxXdgToplevelIdentityRegistry::new(),
             last_toplevel_identity_registration: None,
             last_toplevel_lifecycle_observation: None,
+            pending_live_toplevel_unmap_observations: VecDeque::new(),
             new_toplevel_callback_count: 0,
             last_new_toplevel_callback_observation_sequence: None,
             pending_live_toplevel_admission_observations: VecDeque::new(),
@@ -177,6 +179,16 @@ impl LinuxXdgShellStateSkeleton {
         &self,
     ) -> Option<&XdgToplevelLifecycleObservationReport> {
         self.last_toplevel_lifecycle_observation.as_ref()
+    }
+
+    /// 消费下一条 `toplevel_destroyed` lifecycle observation。
+    ///
+    /// Handler 只把真实 callback 解析为纯数据 observation；是否触发 ledger/core unmap
+    /// 由同时拥有 runtime ledger 与 `State` 的上层 owner 决定。
+    pub(crate) fn take_next_live_toplevel_unmap_observation(
+        &mut self,
+    ) -> Option<XdgToplevelLifecycleObservationReport> {
+        self.pending_live_toplevel_unmap_observations.pop_front()
     }
 
     /// 返回 server handler 收到的 `new_toplevel` callback 次数。
@@ -460,7 +472,9 @@ impl XdgShellHandler for LinuxXdgShellStateSkeleton {
             &surface,
             None,
         );
-        self.last_toplevel_lifecycle_observation = Some(report);
+        self.last_toplevel_lifecycle_observation = Some(report.clone());
+        self.pending_live_toplevel_unmap_observations
+            .push_back(report);
     }
 }
 

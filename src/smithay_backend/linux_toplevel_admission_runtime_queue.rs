@@ -19,7 +19,14 @@ use super::{
         PendingToplevelAdmissionConsumerBlocker, PendingToplevelAdmissionConsumerInput,
         PendingToplevelAdmissionConsumerReport, consume_pending_toplevel_admission,
     },
-    surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId, SurfaceXdgAdmissionLedger},
+    surface_xdg_admission::{
+        AdapterSurfaceId, AdapterToplevelId, SurfaceXdgAdmissionLedger, SurfaceXdgRemovalError,
+        SurfaceXdgRemovalReport, XdgToplevelUnmapIntent,
+    },
+    xdg_lifecycle_observation::{
+        XdgToplevelLifecycleObservationError, XdgToplevelLifecycleObservationReport,
+        XdgToplevelLifecycleSignal,
+    },
 };
 
 /// Runtime admission queue owner 中可定位的操作阶段。
@@ -41,6 +48,19 @@ pub enum RuntimeToplevelAdmissionQueueOperation {
     BuildReport,
 }
 
+/// Runtime toplevel unmap owner 中可定位的操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeToplevelUnmapOperation {
+    /// 读取 live lifecycle observation。
+    ReadLiveUnmapObservation,
+    /// 从 observation 构造 ledger unmap intent。
+    BuildToplevelUnmapIntent,
+    /// 调用 `SurfaceXdgAdmissionLedger::unmap_toplevel`。
+    UnmapToplevelThroughLedger,
+    /// 生成保守 capability report。
+    BuildReport,
+}
+
 /// Runtime admission queue owner 的结构化 blocker。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeToplevelAdmissionQueueBlocker {
@@ -48,6 +68,19 @@ pub enum RuntimeToplevelAdmissionQueueBlocker {
     MissingPendingAdmission,
     /// Phase 52W consumer 返回了 blocker。
     ConsumerBlocked(Vec<PendingToplevelAdmissionConsumerBlocker>),
+}
+
+/// Runtime live toplevel unmap drain 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeToplevelUnmapBlocker {
+    /// 本轮没有可消费的 destroyed lifecycle observation。
+    MissingLiveUnmapObservation,
+    /// observation 不是当前支持的 destroyed signal。
+    UnsupportedLifecycleSignal(XdgToplevelLifecycleSignal),
+    /// lifecycle observation 自身未能解析 adapter identity。
+    LifecycleObservationRejected(XdgToplevelLifecycleObservationError),
+    /// admission ledger 拒绝 toplevel unmap。
+    LedgerUnmapRejected(SurfaceXdgRemovalError),
 }
 
 /// Runtime tick 提供给 drain 的 metadata。
@@ -148,6 +181,59 @@ pub struct RuntimeToplevelAdmissionDrainReport {
     pub operations: Vec<RuntimeToplevelAdmissionQueueOperation>,
     /// 失败或未完成原因。
     pub blockers: Vec<RuntimeToplevelAdmissionQueueBlocker>,
+}
+
+/// Runtime-owned live toplevel unmap drain 的能力报告。
+///
+/// 成功报告证明 destroyed callback observation 已在 runtime owner 层转换为
+/// `SurfaceXdgAdmissionLedger::unmap_toplevel`，并经既有 core detach seam 移除 core
+/// window。handler/display 仍不持有 `State`，render/input 仍为 false。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeToplevelUnmapDrainReport {
+    /// runtime 是否拥有 admission ledger。
+    pub runtime_ledger_owned: bool,
+    /// 本轮是否尝试 drain live unmap observation。
+    pub drain_invoked: bool,
+    /// 是否收到 live destroyed observation。
+    pub live_unmap_observation_present: bool,
+    /// observation 是否成功解析 adapter identities。
+    pub adapter_toplevel_id_resolved: bool,
+    /// 是否调用 ledger unmap。
+    pub ledger_unmap_invoked: bool,
+    /// 是否经 ledger/core seam 调用 core detach。
+    pub core_detach_invoked: bool,
+    /// ledger removal report。
+    pub removal_report: Option<SurfaceXdgRemovalReport>,
+    /// 被 unmap 的 adapter surface。
+    pub adapter_surface_id: Option<AdapterSurfaceId>,
+    /// 被 unmap 的 adapter toplevel。
+    pub adapter_toplevel_id: Option<AdapterToplevelId>,
+    /// detach 涉及的 core surface。
+    pub core_surface_id: Option<SurfaceId>,
+    /// detach 涉及的 core window。
+    pub core_window_id: Option<WindowId>,
+    /// unmap 后 adapter surface mapping 是否保留。
+    pub surface_mapping_retained_after_unmap: bool,
+    /// unmap 后 adapter toplevel mapping 是否移除。
+    pub toplevel_mapping_removed_after_unmap: bool,
+    /// unmap 后 core surface 是否仍存活。
+    pub surface_remains_alive: bool,
+    /// handler 是否被要求直接接触 State；固定 false。
+    pub handler_state_touched: bool,
+    /// 是否绕过 ledger；固定 false。
+    pub ledger_bypassed: bool,
+    /// 是否已有 render 支持。
+    pub render_support: bool,
+    /// 是否已有 input 支持。
+    pub input_support: bool,
+    /// 是否已有真实 compositor runtime。
+    pub real_compositor_runtime_available: bool,
+    /// 是否已有真实 xdg-shell runtime。
+    pub real_xdg_shell_runtime_available: bool,
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeToplevelUnmapOperation>,
+    /// 失败或未完成原因。
+    pub blockers: Vec<RuntimeToplevelUnmapBlocker>,
 }
 
 /// Runtime-owned pending toplevel admission queue owner。
@@ -309,6 +395,180 @@ impl RuntimeToplevelAdmissionQueueOwner {
             blockers,
         }
     }
+
+    /// 从 live destroyed observation 中 drain 一次 toplevel unmap。
+    ///
+    /// 该方法是 Phase 53K 的 mutation owner：调用方传入 handler/display 产生的纯数据
+    /// lifecycle report，但只有本 owner 同时持有 admission ledger 与 `State`，因此
+    /// `SurfaceXdgAdmissionLedger::unmap_toplevel` 不会从 Smithay handler 内直接发生。
+    pub fn drain_live_toplevel_unmap_once(
+        &mut self,
+        state: &mut State,
+        observation: Option<XdgToplevelLifecycleObservationReport>,
+    ) -> RuntimeToplevelUnmapDrainReport {
+        let mut operations = vec![RuntimeToplevelUnmapOperation::ReadLiveUnmapObservation];
+        let Some(observation) = observation else {
+            operations.push(RuntimeToplevelUnmapOperation::BuildReport);
+            return RuntimeToplevelUnmapDrainReport {
+                runtime_ledger_owned: true,
+                drain_invoked: true,
+                live_unmap_observation_present: false,
+                adapter_toplevel_id_resolved: false,
+                ledger_unmap_invoked: false,
+                core_detach_invoked: false,
+                removal_report: None,
+                adapter_surface_id: None,
+                adapter_toplevel_id: None,
+                core_surface_id: None,
+                core_window_id: None,
+                surface_mapping_retained_after_unmap: false,
+                toplevel_mapping_removed_after_unmap: false,
+                surface_remains_alive: false,
+                handler_state_touched: false,
+                ledger_bypassed: false,
+                render_support: false,
+                input_support: false,
+                real_compositor_runtime_available: false,
+                real_xdg_shell_runtime_available: false,
+                operations,
+                blockers: vec![RuntimeToplevelUnmapBlocker::MissingLiveUnmapObservation],
+            };
+        };
+
+        if observation.signal != XdgToplevelLifecycleSignal::ToplevelDestroyed {
+            operations.push(RuntimeToplevelUnmapOperation::BuildReport);
+            return RuntimeToplevelUnmapDrainReport {
+                runtime_ledger_owned: true,
+                drain_invoked: true,
+                live_unmap_observation_present: true,
+                adapter_toplevel_id_resolved: false,
+                ledger_unmap_invoked: false,
+                core_detach_invoked: false,
+                removal_report: None,
+                adapter_surface_id: None,
+                adapter_toplevel_id: None,
+                core_surface_id: None,
+                core_window_id: None,
+                surface_mapping_retained_after_unmap: false,
+                toplevel_mapping_removed_after_unmap: false,
+                surface_remains_alive: false,
+                handler_state_touched: false,
+                ledger_bypassed: false,
+                render_support: false,
+                input_support: false,
+                real_compositor_runtime_available: false,
+                real_xdg_shell_runtime_available: false,
+                operations,
+                blockers: vec![RuntimeToplevelUnmapBlocker::UnsupportedLifecycleSignal(
+                    observation.signal,
+                )],
+            };
+        }
+
+        let lifecycle_observation = match observation.observation {
+            Ok(observation) => observation,
+            Err(source) => {
+                operations.push(RuntimeToplevelUnmapOperation::BuildReport);
+                return RuntimeToplevelUnmapDrainReport {
+                    runtime_ledger_owned: true,
+                    drain_invoked: true,
+                    live_unmap_observation_present: true,
+                    adapter_toplevel_id_resolved: false,
+                    ledger_unmap_invoked: false,
+                    core_detach_invoked: false,
+                    removal_report: None,
+                    adapter_surface_id: None,
+                    adapter_toplevel_id: None,
+                    core_surface_id: None,
+                    core_window_id: None,
+                    surface_mapping_retained_after_unmap: false,
+                    toplevel_mapping_removed_after_unmap: false,
+                    surface_remains_alive: false,
+                    handler_state_touched: false,
+                    ledger_bypassed: false,
+                    render_support: false,
+                    input_support: false,
+                    real_compositor_runtime_available: false,
+                    real_xdg_shell_runtime_available: false,
+                    operations,
+                    blockers: vec![RuntimeToplevelUnmapBlocker::LifecycleObservationRejected(
+                        source,
+                    )],
+                };
+            }
+        };
+
+        operations.push(RuntimeToplevelUnmapOperation::BuildToplevelUnmapIntent);
+        let intent = XdgToplevelUnmapIntent {
+            adapter_toplevel: lifecycle_observation.adapter_toplevel,
+            adapter_surface: lifecycle_observation.adapter_surface,
+        };
+        operations.push(RuntimeToplevelUnmapOperation::UnmapToplevelThroughLedger);
+        let removal_report = match self.ledger.unmap_toplevel(state, intent) {
+            Ok(report) => report,
+            Err(source) => {
+                operations.push(RuntimeToplevelUnmapOperation::BuildReport);
+                return RuntimeToplevelUnmapDrainReport {
+                    runtime_ledger_owned: true,
+                    drain_invoked: true,
+                    live_unmap_observation_present: true,
+                    adapter_toplevel_id_resolved: true,
+                    ledger_unmap_invoked: true,
+                    core_detach_invoked: false,
+                    removal_report: None,
+                    adapter_surface_id: Some(lifecycle_observation.adapter_surface),
+                    adapter_toplevel_id: Some(lifecycle_observation.adapter_toplevel),
+                    core_surface_id: self.surface_mapping(lifecycle_observation.adapter_surface),
+                    core_window_id: self.toplevel_mapping(lifecycle_observation.adapter_toplevel),
+                    surface_mapping_retained_after_unmap: false,
+                    toplevel_mapping_removed_after_unmap: false,
+                    surface_remains_alive: false,
+                    handler_state_touched: false,
+                    ledger_bypassed: false,
+                    render_support: false,
+                    input_support: false,
+                    real_compositor_runtime_available: false,
+                    real_xdg_shell_runtime_available: false,
+                    operations,
+                    blockers: vec![RuntimeToplevelUnmapBlocker::LedgerUnmapRejected(source)],
+                };
+            }
+        };
+
+        let core_surface = removal_report.mapping.core_surface;
+        let core_window = removal_report.mapping.core_window;
+        let surface_mapping_retained_after_unmap =
+            self.surface_mapping(lifecycle_observation.adapter_surface) == Some(core_surface);
+        let toplevel_mapping_removed_after_unmap = self
+            .toplevel_mapping(lifecycle_observation.adapter_toplevel)
+            .is_none();
+        operations.push(RuntimeToplevelUnmapOperation::BuildReport);
+
+        RuntimeToplevelUnmapDrainReport {
+            runtime_ledger_owned: true,
+            drain_invoked: true,
+            live_unmap_observation_present: true,
+            adapter_toplevel_id_resolved: true,
+            ledger_unmap_invoked: true,
+            core_detach_invoked: true,
+            removal_report: Some(removal_report.clone()),
+            adapter_surface_id: Some(lifecycle_observation.adapter_surface),
+            adapter_toplevel_id: Some(lifecycle_observation.adapter_toplevel),
+            core_surface_id: Some(core_surface),
+            core_window_id: Some(core_window),
+            surface_mapping_retained_after_unmap,
+            toplevel_mapping_removed_after_unmap,
+            surface_remains_alive: removal_report.surface_remains_alive,
+            handler_state_touched: false,
+            ledger_bypassed: false,
+            render_support: false,
+            input_support: false,
+            real_compositor_runtime_available: false,
+            real_xdg_shell_runtime_available: false,
+            operations,
+            blockers: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -319,9 +579,13 @@ mod tests {
             linux_toplevel_admission_bridge::PendingXdgToplevelAdmission,
             linux_toplevel_admission_runtime_queue::{
                 RuntimeToplevelAdmissionDrainTick, RuntimeToplevelAdmissionQueueBlocker,
-                RuntimeToplevelAdmissionQueueOwner,
+                RuntimeToplevelAdmissionQueueOwner, RuntimeToplevelUnmapBlocker,
             },
             surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId, ProtocolObjectId},
+            xdg_lifecycle_observation::{
+                XdgToplevelLifecycleObservation, XdgToplevelLifecycleObservationReport,
+                XdgToplevelLifecycleSignal,
+            },
         },
     };
 
@@ -408,5 +672,89 @@ mod tests {
                 .blockers
                 .contains(&RuntimeToplevelAdmissionQueueBlocker::MissingPendingAdmission)
         );
+    }
+
+    fn destroyed_observation(
+        adapter_surface: AdapterSurfaceId,
+        adapter_toplevel: AdapterToplevelId,
+    ) -> XdgToplevelLifecycleObservationReport {
+        XdgToplevelLifecycleObservationReport {
+            signal: XdgToplevelLifecycleSignal::ToplevelDestroyed,
+            identity_lookup_invoked: true,
+            adapter_toplevel_id_resolved: true,
+            observation: Ok(XdgToplevelLifecycleObservation {
+                signal: XdgToplevelLifecycleSignal::ToplevelDestroyed,
+                adapter_toplevel,
+                adapter_surface,
+            }),
+            callback_observed: false,
+            ledger_unmap_invoked: false,
+            core_detach_invoked: false,
+            real_xdg_shell_runtime_available: false,
+            protocol_dispatch_started: false,
+            render_support: false,
+            input_support: false,
+        }
+    }
+
+    /// runtime owner 使用 live destroyed observation 经 ledger detach admitted toplevel。
+    #[test]
+    fn runtime_owner_drains_live_unmap_observation_through_ledger() {
+        let adapter_surface = surface(901);
+        let adapter_toplevel = toplevel(902);
+        let pending = PendingXdgToplevelAdmission::new(adapter_surface, adapter_toplevel, Some(53));
+        let mut owner = RuntimeToplevelAdmissionQueueOwner::new(8_000);
+        let mut state = State::new();
+        owner.enqueue_pending_toplevel_admission(pending);
+        let admission = owner.drain_pending_toplevel_admission_once(
+            &mut state,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(53),
+        );
+        let core_window = admission.core_window_id.expect("admission 必须创建 window");
+
+        let report = owner.drain_live_toplevel_unmap_once(
+            &mut state,
+            Some(destroyed_observation(adapter_surface, adapter_toplevel)),
+        );
+
+        assert!(report.runtime_ledger_owned);
+        assert!(report.drain_invoked);
+        assert!(report.live_unmap_observation_present);
+        assert!(report.adapter_toplevel_id_resolved);
+        assert!(report.ledger_unmap_invoked);
+        assert!(report.core_detach_invoked);
+        assert_eq!(report.adapter_surface_id, Some(adapter_surface));
+        assert_eq!(report.adapter_toplevel_id, Some(adapter_toplevel));
+        assert_eq!(report.core_surface_id, Some(8_000));
+        assert_eq!(report.core_window_id, Some(core_window));
+        assert!(report.surface_mapping_retained_after_unmap);
+        assert!(report.toplevel_mapping_removed_after_unmap);
+        assert!(report.surface_remains_alive);
+        assert_eq!(owner.surface_mapping(adapter_surface), Some(8_000));
+        assert_eq!(owner.toplevel_mapping(adapter_toplevel), None);
+        assert!(state.surfaces.is_alive(8_000));
+        assert!(!state.registry.is_alive(core_window));
+        assert!(state.validate().is_clean());
+        assert!(report.blockers.is_empty());
+    }
+
+    /// 没有 destroyed observation 时不调用 ledger，也不改变 admitted mapping。
+    #[test]
+    fn runtime_owner_missing_live_unmap_observation_does_not_touch_ledger() {
+        let mut owner = RuntimeToplevelAdmissionQueueOwner::new(9_000);
+        let mut state = State::new();
+
+        let report = owner.drain_live_toplevel_unmap_once(&mut state, None);
+
+        assert!(report.drain_invoked);
+        assert!(!report.live_unmap_observation_present);
+        assert!(!report.ledger_unmap_invoked);
+        assert!(!report.core_detach_invoked);
+        assert!(
+            report
+                .blockers
+                .contains(&RuntimeToplevelUnmapBlocker::MissingLiveUnmapObservation)
+        );
+        assert!(state.validate().is_clean());
     }
 }

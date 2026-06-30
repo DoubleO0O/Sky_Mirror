@@ -947,6 +947,44 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 53K 必须证明 live destroyed observation 只在 owner 层触发 ledger unmap。
+    #[test]
+    fn live_toplevel_unmap_owner_proof_source_exists() {
+        let queue_source = include_str!("linux_toplevel_admission_runtime_queue.rs");
+        let coordinator_source = include_str!("nested_runtime_coordinator.rs");
+        let display_source = include_str!("wayland_display.rs");
+
+        for required in [
+            "RuntimeToplevelUnmapDrainReport",
+            "drain_live_toplevel_unmap_once",
+            "XdgToplevelUnmapIntent",
+            ".unmap_toplevel(",
+            "core_detach_invoked",
+            "surface_mapping_retained_after_unmap",
+        ] {
+            assert!(
+                queue_source.contains(required),
+                "Phase 53K runtime unmap owner source 缺少证据项: {required}"
+            );
+        }
+
+        for required in [
+            "pump_once_with_live_toplevel_unmap_drain",
+            "take_next_live_toplevel_unmap_observation",
+            "nested_runtime_live_unmap_pump_detaches_admitted_toplevel",
+        ] {
+            assert!(
+                coordinator_source.contains(required),
+                "Phase 53K coordinator unmap proof 缺少证据项: {required}"
+            );
+        }
+
+        assert!(
+            display_source.contains("take_next_live_toplevel_unmap_observation"),
+            "Phase 53K display owner 必须暴露 live unmap observation drain seam"
+        );
+    }
+
     /// 验证 Linux CI proof 只解锁 bounded loop 与 cooperative stop 的精确能力位。
     #[test]
     fn nested_runtime_loop_proof_capabilities_are_precise() {
