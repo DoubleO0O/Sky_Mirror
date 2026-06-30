@@ -927,6 +927,26 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 53J 必须证明 orchestrator 层不会在 live admission backlog 仍有进展时 idle 退出。
+    #[test]
+    fn runtime_orchestrator_idle_backlog_proof_source_exists() {
+        let source = include_str!("nested_runtime_orchestrator.rs");
+
+        for required in [
+            "fn runtime_orchestrator_stop_when_idle_drains_live_admission_backlog()",
+            "config.loop_config.stop_when_idle = true;",
+            "let (first_registration, second_registration) =",
+            "report.loop_exit_reason, NestedRuntimeLoopExitReason::Idle",
+            "report.live_admission.admissions_consumed, 2",
+            "state.surfaces.records().len(), 2",
+        ] {
+            assert!(
+                source.contains(required),
+                "Phase 53J orchestrator idle/backlog proof 缺少证据项: {required}"
+            );
+        }
+    }
+
     /// 验证 Linux CI proof 只解锁 bounded loop 与 cooperative stop 的精确能力位。
     #[test]
     fn nested_runtime_loop_proof_capabilities_are_precise() {
