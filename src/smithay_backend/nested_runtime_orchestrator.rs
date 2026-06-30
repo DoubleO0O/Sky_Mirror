@@ -655,6 +655,68 @@ mod tests {
         assert!(state.validate().is_clean());
     }
 
+    /// Linux-only proof：orchestrator run 继承 loop 的 live-admission-aware idle 判断。
+    #[test]
+    fn runtime_orchestrator_stop_when_idle_drains_live_admission_backlog() {
+        assert_runtime_dir();
+        let mut config = config("orchestrator-live-idle-backlog", 3);
+        config.loop_config.stop_when_idle = true;
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config);
+        let mut state = State::new();
+        let _start_report = orchestrator.start().expect("Created 必须允许 start");
+        let (first_registration, second_registration) = {
+            let display = orchestrator
+                .runtime_loop
+                .as_mut()
+                .expect("Started 必须持有 runtime loop")
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_registration = adapter_toplevel_identity_registration_report(display)
+                .expect("首次 adapter identity registration proof 必须完成");
+            let second_registration = adapter_toplevel_identity_registration_report(display)
+                .expect("第二次 adapter identity registration proof 必须完成");
+
+            (first_registration, second_registration)
+        };
+
+        let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
+
+        assert_eq!(report.pump_iterations, 3);
+        assert_eq!(report.loop_exit_reason, NestedRuntimeLoopExitReason::Idle);
+        assert!(report.is_clean_shutdown());
+        assert_eq!(report.final_state, NestedRuntimeLifecycleState::Stopped);
+        assert!(report.loop_report.is_successful());
+        assert_eq!(report.live_admission.owner_invocations, 3);
+        assert_eq!(report.live_admission.enqueue_invocations, 2);
+        assert_eq!(report.live_admission.admissions_enqueued, 2);
+        assert_eq!(report.live_admission.drain_invocations, 3);
+        assert_eq!(report.live_admission.admissions_consumed, 2);
+        assert_eq!(report.live_admission.pending_admissions_after, 0);
+        assert_eq!(report.live_admission, report.loop_report.live_admission);
+        let runtime_loop = orchestrator
+            .runtime_loop
+            .as_ref()
+            .expect("Stopped orchestrator 保留 runtime loop report owner");
+        assert_eq!(
+            runtime_loop.admission_surface_mapping(first_registration.adapter_surface_id),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_loop.admission_surface_mapping(second_registration.adapter_surface_id),
+            Some(2)
+        );
+        assert_eq!(runtime_loop.admission_pending_count(), 0);
+        assert!(state.surfaces.get(1).is_some());
+        assert!(state.surfaces.get(2).is_some());
+        assert_eq!(state.surfaces.records().len(), 2);
+        assert!(state.validate().is_clean());
+    }
+
     /// loop 返回 pump error 时，orchestrator 必须保留原始结构并进入 Failed。
     #[test]
     fn runtime_orchestrator_preserves_structured_pump_errors() {
