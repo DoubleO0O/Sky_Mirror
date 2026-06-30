@@ -1456,6 +1456,27 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 53I 的 bounded loop idle 判断必须把 live admission progress 计入非 idle。
+    #[test]
+    fn nested_runtime_loop_idle_source_accounts_for_live_admission_progress() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let loop_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Nested runtime loop 必须存在");
+
+        for required in [
+            "fn has_progress(&self) -> bool",
+            "let live_admission_has_progress = observed_report.live_admission.has_progress();",
+            "if config.stop_when_idle && report_is_idle && !live_admission_has_progress",
+            "nested_runtime_loop_stop_when_idle_drains_live_admission_backlog",
+        ] {
+            assert!(
+                loop_source.contains(required),
+                "Phase 53I loop idle/backlog seam 缺少证据项: {required}"
+            );
+        }
+    }
+
     /// 验证真实 disconnect callback bridge 的模块声明与公共导出都保持 Linux-only。
     #[test]
     fn real_disconnect_callback_bridge_is_linux_only() {

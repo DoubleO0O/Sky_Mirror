@@ -331,6 +331,10 @@ impl NestedRuntimeLiveAdmissionRunSummary {
         }
     }
 
+    fn has_progress(&self) -> bool {
+        self.enqueue_invocations > 0 || self.admissions_enqueued > 0 || self.admissions_consumed > 0
+    }
+
     fn observe(&mut self, delta: Self) {
         self.owner_invocations = self
             .owner_invocations
@@ -530,6 +534,7 @@ where
             wakeup_requested |= stop_handle.take_wakeup_request();
             wait_interrupted |= stop_handle.take_wait_interrupt();
             let iteration = pump_reports.len().saturating_add(1);
+            let live_admission_has_progress = observed_report.live_admission.has_progress();
             live_admission.observe(observed_report.live_admission);
             let report = observed_report.lifecycle_report;
             let report_is_idle = pump_report_is_idle(&report);
@@ -564,7 +569,7 @@ where
                 };
                 break;
             }
-            if config.stop_when_idle && report_is_idle {
+            if config.stop_when_idle && report_is_idle && !live_admission_has_progress {
                 exit_reason = NestedRuntimeLoopExitReason::Idle;
                 break;
             }
@@ -1053,6 +1058,70 @@ mod tests {
         assert_eq!(runtime_loop.coordinator.admission_pending_count(), 0);
         assert!(state.surfaces.get(1).is_some());
         assert_eq!(state.surfaces.records().len(), 1);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：stop_when_idle 不能在 live admission backlog 仍有进展时提前退出。
+    #[test]
+    fn nested_runtime_loop_stop_when_idle_drains_live_admission_backlog() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-live-admission-idle-backlog");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let (first_registration, second_registration) = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_registration = adapter_toplevel_identity_registration_report(display)
+                .expect("首次 adapter identity registration proof 必须完成");
+            let second_registration = adapter_toplevel_identity_registration_report(display)
+                .expect("第二次 adapter identity registration proof 必须完成");
+
+            (first_registration, second_registration)
+        };
+        let mut state = State::new();
+
+        let report = runtime_loop.run_for_iterations(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 3,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: true,
+                continue_after_error: false,
+            },
+        );
+
+        assert_eq!(report.iterations_run, 3);
+        assert_eq!(report.exit_reason, NestedRuntimeLoopExitReason::Idle);
+        assert!(report.is_successful());
+        assert_eq!(report.live_admission.owner_invocations, 3);
+        assert_eq!(report.live_admission.enqueue_invocations, 2);
+        assert_eq!(report.live_admission.admissions_enqueued, 2);
+        assert_eq!(report.live_admission.drain_invocations, 3);
+        assert_eq!(report.live_admission.admissions_consumed, 2);
+        assert_eq!(report.live_admission.pending_admissions_after, 0);
+        assert_eq!(
+            runtime_loop
+                .coordinator
+                .admission_surface_mapping(first_registration.adapter_surface_id),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_loop
+                .coordinator
+                .admission_surface_mapping(second_registration.adapter_surface_id),
+            Some(2)
+        );
+        assert_eq!(runtime_loop.coordinator.admission_pending_count(), 0);
+        assert!(state.surfaces.get(1).is_some());
+        assert!(state.surfaces.get(2).is_some());
+        assert_eq!(state.surfaces.records().len(), 2);
         assert!(state.validate().is_clean());
     }
 }
