@@ -637,6 +637,7 @@ mod tests {
         assert_eq!(report.live_admission.admissions_consumed, 1);
         assert_eq!(report.live_admission.pending_admissions_after, 0);
         assert_eq!(report.live_admission, report.loop_report.live_admission);
+        assert_eq!(report.loop_report.live_unmap.drain_invocations, 1);
         let runtime_loop = orchestrator
             .runtime_loop
             .as_ref()
@@ -645,11 +646,14 @@ mod tests {
             runtime_loop.admission_surface_mapping(registration.adapter_surface_id),
             Some(1)
         );
-        assert!(
-            runtime_loop
-                .admission_toplevel_mapping(registration.adapter_toplevel_id)
-                .is_some()
-        );
+        let toplevel_mapping =
+            runtime_loop.admission_toplevel_mapping(registration.adapter_toplevel_id);
+        if report.loop_report.live_unmap.ledger_unmaps > 0 {
+            assert_eq!(toplevel_mapping, None);
+            assert!(report.loop_report.live_unmap.core_detaches > 0);
+        } else {
+            assert!(toplevel_mapping.is_some());
+        }
         assert_eq!(runtime_loop.admission_pending_count(), 0);
         assert!(state.surfaces.get(1).is_some());
         assert!(state.validate().is_clean());

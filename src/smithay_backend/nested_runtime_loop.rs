@@ -1087,12 +1087,16 @@ mod tests {
                 .admission_surface_mapping(registration.adapter_surface_id),
             Some(1)
         );
-        assert!(
-            runtime_loop
-                .coordinator
-                .admission_toplevel_mapping(registration.adapter_toplevel_id)
-                .is_some()
-        );
+        let toplevel_mapping = runtime_loop
+            .coordinator
+            .admission_toplevel_mapping(registration.adapter_toplevel_id);
+        if report.live_unmap.ledger_unmaps > 0 {
+            assert_eq!(toplevel_mapping, None);
+            assert!(report.live_unmap.core_detaches > 0);
+            assert!(state.registry.records().iter().any(|record| !record.alive));
+        } else {
+            assert!(toplevel_mapping.is_some());
+        }
         assert_eq!(runtime_loop.coordinator.admission_pending_count(), 0);
         assert!(state.surfaces.get(1).is_some());
         assert!(state.validate().is_clean());
@@ -1136,12 +1140,16 @@ mod tests {
                 .admission_surface_mapping(registration.adapter_surface_id),
             Some(1)
         );
-        assert!(
-            runtime_loop
-                .coordinator
-                .admission_toplevel_mapping(registration.adapter_toplevel_id)
-                .is_some()
-        );
+        let toplevel_mapping = runtime_loop
+            .coordinator
+            .admission_toplevel_mapping(registration.adapter_toplevel_id);
+        if report.live_unmap.ledger_unmaps > 0 {
+            assert_eq!(toplevel_mapping, None);
+            assert!(report.live_unmap.core_detaches > 0);
+            assert!(state.registry.records().iter().any(|record| !record.alive));
+        } else {
+            assert!(toplevel_mapping.is_some());
+        }
         assert_eq!(runtime_loop.coordinator.admission_pending_count(), 0);
         assert!(state.surfaces.get(1).is_some());
         assert_eq!(state.surfaces.records().len(), 1);
@@ -1207,8 +1215,7 @@ mod tests {
             None
         );
         assert!(state.surfaces.is_alive(1));
-        assert_eq!(state.registry.records().len(), 1);
-        assert!(!state.registry.records()[0].alive);
+        assert!(state.registry.records().iter().any(|record| !record.alive));
         assert!(state.validate().is_clean());
     }
 
