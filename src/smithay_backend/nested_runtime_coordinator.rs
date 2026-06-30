@@ -349,7 +349,7 @@ impl NestedRuntimeCoordinator {
         tick: RuntimeToplevelAdmissionDrainTick,
     ) -> NestedRuntimeLiveAdmissionPumpReport {
         let lifecycle_report = self.pump_once(state, timeout);
-        let observation = self.flow.live_toplevel_admission_observation();
+        let observation = self.flow.take_next_live_toplevel_admission_observation();
         let live_admission_owner_report =
             enqueue_live_toplevel_admission_from_observation(observation, self);
         let admission_drain_report = self
@@ -924,6 +924,113 @@ mod tests {
         assert_eq!(coordinator.admission_next_core_surface_id(), 13_002);
         assert!(state.surfaces.get(13_000).is_some());
         assert!(state.surfaces.get(13_001).is_some());
+        assert_eq!(state.surfaces.records().len(), 2);
+        assert!(state.validate().is_clean());
+    }
+
+    /// 验证 pump 读取前累积的 live callback observations 不会只保留最后一条。
+    #[test]
+    fn nested_runtime_live_admission_pump_drains_backlogged_callback_observations() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-runtime-live-admission-backlog");
+        let mut coordinator =
+            NestedRuntimeCoordinator::with_socket_name_and_admission_surface_start(
+                &socket_name,
+                14_000,
+            )
+            .expect("coordinator 必须绑定测试 socket");
+        {
+            let display = coordinator
+                .flow
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+        }
+        let first_registration = {
+            let display = coordinator
+                .flow
+                .display_mut_for_controlled_toplevel_registration();
+            adapter_toplevel_identity_registration_report(display)
+                .expect("首次 adapter identity registration proof 必须完成")
+        };
+        let second_registration = {
+            let display = coordinator
+                .flow
+                .display_mut_for_controlled_toplevel_registration();
+            adapter_toplevel_identity_registration_report(display)
+                .expect("第二次 adapter identity registration proof 必须完成")
+        };
+        let mut state = State::new();
+
+        let first_report = coordinator.pump_once_with_live_toplevel_admission_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(55),
+        );
+        let second_report = coordinator.pump_once_with_live_toplevel_admission_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(56),
+        );
+
+        assert!(first_report.lifecycle_report.is_successful());
+        assert!(second_report.lifecycle_report.is_successful());
+        assert_eq!(
+            first_report
+                .live_admission_owner_report
+                .new_toplevel_callback_sequence,
+            Some(first_registration.new_toplevel_callback_sequence)
+        );
+        assert_eq!(
+            second_report
+                .live_admission_owner_report
+                .new_toplevel_callback_sequence,
+            Some(second_registration.new_toplevel_callback_sequence)
+        );
+        assert!(
+            first_report
+                .live_admission_owner_report
+                .coordinator_enqueue_invoked
+        );
+        assert!(
+            second_report
+                .live_admission_owner_report
+                .coordinator_enqueue_invoked
+        );
+        assert!(
+            first_report
+                .admission_drain_report
+                .pending_admission_consumed
+        );
+        assert!(
+            second_report
+                .admission_drain_report
+                .pending_admission_consumed
+        );
+        assert_eq!(
+            first_report.admission_drain_report.core_surface_id,
+            Some(14_000)
+        );
+        assert_eq!(
+            second_report.admission_drain_report.core_surface_id,
+            Some(14_001)
+        );
+        assert_eq!(
+            coordinator.admission_surface_mapping(first_registration.adapter_surface_id),
+            Some(14_000)
+        );
+        assert_eq!(
+            coordinator.admission_surface_mapping(second_registration.adapter_surface_id),
+            Some(14_001)
+        );
+        assert_eq!(coordinator.admission_pending_count(), 0);
+        assert_eq!(coordinator.admission_next_core_surface_id(), 14_002);
+        assert!(state.surfaces.get(14_000).is_some());
+        assert!(state.surfaces.get(14_001).is_some());
         assert_eq!(state.surfaces.records().len(), 2);
         assert!(state.validate().is_clean());
     }

@@ -5,6 +5,8 @@
 //! `LinuxXdgShellStateSkeleton`。Phase 52I 允许配对 display owner 显式调用
 //! `XdgShellState::new`；构造时仍不自动初始化，也不把 global 初始化解释为 dispatch。
 
+use std::collections::VecDeque;
+
 use smithay::reexports::wayland_protocols::xdg::shell::server::{
     xdg_popup::{self, XdgPopup},
     xdg_positioner::XdgPositioner,
@@ -56,6 +58,17 @@ pub struct LinuxXdgShellStateSkeleton {
     last_toplevel_lifecycle_observation: Option<XdgToplevelLifecycleObservationReport>,
     new_toplevel_callback_count: u64,
     last_new_toplevel_callback_observation_sequence: Option<u64>,
+    pending_live_toplevel_admission_observations: VecDeque<PendingLiveToplevelAdmissionObservation>,
+}
+
+/// Display owner 保存的待消费 live admission observation。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingLiveToplevelAdmissionObservation {
+    /// `new_toplevel` callback 的单调 observation 序号。
+    pub new_toplevel_callback_sequence: u64,
+    /// 同一 callback 内产生的 adapter toplevel identity registration observation。
+    pub adapter_toplevel_identity_registration:
+        Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError>,
 }
 
 /// Linux-only xdg-shell global 显式初始化的结构化错误。
@@ -127,6 +140,7 @@ impl LinuxXdgShellStateSkeleton {
             last_toplevel_lifecycle_observation: None,
             new_toplevel_callback_count: 0,
             last_new_toplevel_callback_observation_sequence: None,
+            pending_live_toplevel_admission_observations: VecDeque::new(),
         }
     }
 
@@ -185,13 +199,24 @@ impl LinuxXdgShellStateSkeleton {
         self.last_toplevel_identity_registration
     }
 
-    fn record_new_toplevel_callback_observation(&mut self) {
+    pub(crate) fn take_next_live_toplevel_admission_observation(
+        &mut self,
+    ) -> Option<PendingLiveToplevelAdmissionObservation> {
+        self.pending_live_toplevel_admission_observations
+            .pop_front()
+    }
+
+    fn record_new_toplevel_callback_observation(&mut self) -> u64 {
         self.new_toplevel_callback_count += 1;
         let sequence = self.new_toplevel_callback_count;
         self.last_new_toplevel_callback_observation_sequence = Some(sequence);
+        sequence
     }
 
-    fn register_new_toplevel_identity(&mut self, surface: &ToplevelSurface) {
+    fn register_new_toplevel_identity(
+        &mut self,
+        surface: &ToplevelSurface,
+    ) -> Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError> {
         // Phase 52T 只在 adapter 层登记 protocol identity。这里不持久化
         // `ToplevelSurface`，不调用 admission ledger/core，也不产生 render/input 能力。
         let result = (|| {
@@ -208,6 +233,23 @@ impl LinuxXdgShellStateSkeleton {
         })();
 
         self.last_toplevel_identity_registration = Some(result);
+        result
+    }
+
+    fn record_pending_live_toplevel_admission_observation(
+        &mut self,
+        new_toplevel_callback_sequence: u64,
+        adapter_toplevel_identity_registration: Result<
+            XdgToplevelIdentityMapping,
+            AdapterToplevelIdentityRegistrationError,
+        >,
+    ) {
+        self.pending_live_toplevel_admission_observations.push_back(
+            PendingLiveToplevelAdmissionObservation {
+                new_toplevel_callback_sequence,
+                adapter_toplevel_identity_registration,
+            },
+        );
     }
 
     /// 返回当前 owner 是否已经持有 xdg-shell global state。
@@ -386,8 +428,9 @@ impl XdgShellHandler for LinuxXdgShellStateSkeleton {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        self.record_new_toplevel_callback_observation();
-        self.register_new_toplevel_identity(&surface);
+        let callback_sequence = self.record_new_toplevel_callback_observation();
+        let registration = self.register_new_toplevel_identity(&surface);
+        self.record_pending_live_toplevel_admission_observation(callback_sequence, registration);
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {

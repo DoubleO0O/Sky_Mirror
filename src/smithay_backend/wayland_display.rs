@@ -11,6 +11,7 @@
 
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 
+use super::linux_live_toplevel_admission_owner::LiveToplevelAdmissionOwnerObservation;
 use super::linux_toplevel_identity_registration::AdapterToplevelIdentityRegistrationError;
 use super::linux_wl_compositor::{
     LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
@@ -154,6 +155,26 @@ impl SmithayWaylandDisplayProbe {
     ) -> Option<Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError>> {
         self.state
             .last_adapter_toplevel_identity_registration_observation()
+    }
+
+    /// 消费 display owner 保存的下一条 live admission observation。
+    ///
+    /// backlog 为空时保留旧的 latest snapshot 行为，让重复 callback sequence 继续由
+    /// coordinator dedupe seam 处理。
+    pub(crate) fn take_next_live_toplevel_admission_observation(
+        &mut self,
+    ) -> LiveToplevelAdmissionOwnerObservation {
+        let observation = self.state.take_next_live_toplevel_admission_observation();
+
+        match observation {
+            Some(observation) => LiveToplevelAdmissionOwnerObservation {
+                new_toplevel_callback_sequence: Some(observation.new_toplevel_callback_sequence),
+                adapter_toplevel_identity_registration: Some(
+                    observation.adapter_toplevel_identity_registration,
+                ),
+            },
+            None => LiveToplevelAdmissionOwnerObservation::from_display(self),
+        }
     }
 
     /// 执行一次 Wayland backend client dispatch，并返回处理的 request 数量。

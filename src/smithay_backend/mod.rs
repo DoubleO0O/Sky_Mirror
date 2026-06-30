@@ -1357,7 +1357,7 @@ mod nested_socket_probe_gate_tests {
             "pub fn has_seen_live_toplevel_callback_sequence(",
             "pub fn mark_live_toplevel_callback_sequence_seen(",
             "let lifecycle_report = self.pump_once(state, timeout);",
-            "let observation = self.flow.live_toplevel_admission_observation();",
+            "let observation = self.flow.take_next_live_toplevel_admission_observation();",
             "enqueue_live_toplevel_admission_from_observation(observation, self)",
             ".drain_pending_toplevel_admission_once(state, tick)",
         ] {
@@ -1407,6 +1407,51 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 source.contains(required),
                 "Phase 53G multiple live admission proof 缺少证据项: {required}"
+            );
+        }
+    }
+
+    /// Phase 53H 必须让 live callback observation 以 FIFO backlog 进入 coordinator。
+    #[test]
+    fn nested_runtime_live_admission_backlog_source_uses_fifo_observations() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let display_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_xdg_shell.rs"))
+                .expect("Linux xdg-shell state owner 必须存在");
+        let flow_source =
+            std::fs::read_to_string(root.join("src/smithay_backend/real_accept_flow.rs"))
+                .expect("Nested real accept flow 必须存在");
+        let coordinator_source = include_str!("nested_runtime_coordinator.rs");
+
+        for required in [
+            "pending_live_toplevel_admission_observations",
+            ".push_back(",
+            ".pop_front()",
+            "take_next_live_toplevel_admission_observation",
+        ] {
+            assert!(
+                display_source.contains(required),
+                "Phase 53H display owner 缺少 live observation backlog 证据项: {required}"
+            );
+        }
+
+        for required in [
+            "take_next_live_toplevel_admission_observation",
+            "self.display.take_next_live_toplevel_admission_observation()",
+        ] {
+            assert!(
+                flow_source.contains(required),
+                "Phase 53H accept flow 缺少 FIFO observation seam 证据项: {required}"
+            );
+        }
+
+        for required in [
+            "self.flow.take_next_live_toplevel_admission_observation()",
+            "nested_runtime_live_admission_pump_drains_backlogged_callback_observations",
+        ] {
+            assert!(
+                coordinator_source.contains(required),
+                "Phase 53H coordinator 缺少 FIFO observation pump 证据项: {required}"
             );
         }
     }
@@ -3224,15 +3269,17 @@ mod nested_socket_probe_gate_tests {
             "pub(crate) const fn last_new_toplevel_callback_observation_sequence(&self) -> Option<u64>",
             "pub(crate) fn last_adapter_toplevel_identity_registration_observation(",
             "fn record_new_toplevel_callback_observation(&mut self)",
-            "fn register_new_toplevel_identity(&mut self, surface: &ToplevelSurface)",
+            "fn register_new_toplevel_identity(",
+            "surface: &ToplevelSurface",
             "self.new_toplevel_callback_count += 1",
             "self.last_new_toplevel_callback_observation_sequence = Some(sequence)",
             "LinuxXdgToplevelIdentityRegistry::key_for_toplevel(surface)",
             ".observe_surface(surface.wl_surface())",
             ".register(identity, adapter_surface)",
             "fn new_toplevel(&mut self, surface: ToplevelSurface)",
-            "self.record_new_toplevel_callback_observation();",
-            "self.register_new_toplevel_identity(&surface);",
+            "let callback_sequence = self.record_new_toplevel_callback_observation();",
+            "let registration = self.register_new_toplevel_identity(&surface);",
+            "self.record_pending_live_toplevel_admission_observation(callback_sequence, registration);",
         ] {
             assert!(
                 code.contains(required),
