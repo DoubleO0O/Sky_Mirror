@@ -16,7 +16,9 @@ use super::linux_toplevel_identity_registration::AdapterToplevelIdentityRegistra
 use super::linux_wl_compositor::{
     LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
 };
-use super::linux_wl_surface_identity::{AdapterSurfaceIdentityMapping, SurfaceIdentityError};
+use super::linux_wl_surface_identity::{
+    AdapterSurfaceCommitObservation, AdapterSurfaceIdentityMapping, SurfaceIdentityError,
+};
 use super::linux_xdg_shell::{
     LinuxXdgShellGlobalInitError, LinuxXdgShellGlobalInitReport, LinuxXdgShellStateSkeleton,
 };
@@ -135,6 +137,18 @@ impl SmithayWaylandDisplayProbe {
         &self,
     ) -> Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>> {
         self.state.last_wl_surface_identity_observation()
+    }
+
+    /// 返回本 display 的 server handler 收到的 `wl_surface.commit` 次数。
+    pub(crate) fn wl_surface_commit_observation_count(&self) -> u64 {
+        self.state.wl_surface_commit_observation_count()
+    }
+
+    /// 返回最近一次 `wl_surface.commit` 建立的 adapter-only observation。
+    pub(crate) fn last_wl_surface_commit_observation(
+        &self,
+    ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
+        self.state.last_wl_surface_commit_observation()
     }
 
     /// 返回本 display 的 server handler 收到的 `new_toplevel` callback 次数。
