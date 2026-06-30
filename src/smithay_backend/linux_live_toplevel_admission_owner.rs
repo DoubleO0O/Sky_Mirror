@@ -47,6 +47,8 @@ pub enum LiveToplevelAdmissionOwnerBlocker {
     BridgeBlocked(Vec<LiveToplevelAdmissionBridgeBlocker>),
     /// Phase 52V bridge 没有产出 pending admission intent。
     MissingBridgePendingAdmission,
+    /// 当前 callback sequence 已经被 coordinator admission owner 处理过。
+    DuplicateNewToplevelCallbackObservation(u64),
 }
 
 /// Phase 53A live callback admission owner 的纯数据报告。
@@ -152,6 +154,15 @@ pub fn enqueue_live_toplevel_admission_from_observation(
     if callback_sequence.is_none() {
         blockers.push(LiveToplevelAdmissionOwnerBlocker::MissingNewToplevelCallbackObservation);
     }
+    if let Some(callback_sequence) = callback_sequence
+        && coordinator.has_seen_live_toplevel_callback_sequence(callback_sequence)
+    {
+        blockers.push(
+            LiveToplevelAdmissionOwnerBlocker::DuplicateNewToplevelCallbackObservation(
+                callback_sequence,
+            ),
+        );
+    }
 
     let registration = match observation.adapter_toplevel_identity_registration {
         Some(Ok(registration)) => {
@@ -241,6 +252,12 @@ pub fn enqueue_live_toplevel_admission_from_observation(
         coordinator_enqueue_report = Some(coordinator.enqueue_pending_toplevel_admission(
             pending_admission.expect("pending admission 已由 blocker 检查"),
         ));
+        if coordinator_enqueue_report
+            .as_ref()
+            .is_some_and(|report| report.pending_admission_enqueued)
+        {
+            coordinator.mark_live_toplevel_callback_sequence_seen(callback_sequence);
+        }
     }
     operations.push(LiveToplevelAdmissionOwnerOperation::BuildReport);
 

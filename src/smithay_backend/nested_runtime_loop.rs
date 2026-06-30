@@ -1005,4 +1005,54 @@ mod tests {
         assert!(state.surfaces.get(1).is_some());
         assert!(state.validate().is_clean());
     }
+
+    /// Linux-only proof：同一个 live callback observation 不能在多轮 loop 中重复入队。
+    #[test]
+    fn nested_runtime_loop_deduplicates_live_toplevel_admission_observation() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-live-admission-dedupe");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let registration = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            adapter_toplevel_identity_registration_report(display)
+                .expect("adapter identity registration proof 必须完成")
+        };
+        let mut state = State::new();
+
+        let report = runtime_loop.run_for_iterations(&mut state, config(2));
+
+        assert_eq!(report.iterations_run, 2);
+        assert!(report.is_successful());
+        assert_eq!(report.live_admission.owner_invocations, 2);
+        assert_eq!(report.live_admission.enqueue_invocations, 1);
+        assert_eq!(report.live_admission.admissions_enqueued, 1);
+        assert_eq!(report.live_admission.drain_invocations, 2);
+        assert_eq!(report.live_admission.admissions_consumed, 1);
+        assert_eq!(report.live_admission.pending_admissions_after, 0);
+        assert_eq!(
+            runtime_loop
+                .coordinator
+                .admission_surface_mapping(registration.adapter_surface_id),
+            Some(1)
+        );
+        assert!(
+            runtime_loop
+                .coordinator
+                .admission_toplevel_mapping(registration.adapter_toplevel_id)
+                .is_some()
+        );
+        assert_eq!(runtime_loop.coordinator.admission_pending_count(), 0);
+        assert!(state.surfaces.get(1).is_some());
+        assert_eq!(state.surfaces.records().len(), 1);
+        assert!(state.validate().is_clean());
+    }
 }

@@ -4,7 +4,7 @@
 //! connected bridge、一次 Display dispatch、disconnected bridge。它不直接修改 core
 //! registry，也不把单次 pump 冒充长期 compositor event loop。
 
-use std::{io, time::Duration};
+use std::{collections::BTreeSet, io, time::Duration};
 
 use crate::{
     core::{
@@ -220,6 +220,7 @@ pub struct NestedRuntimeLiveAdmissionPumpReport {
 pub struct NestedRuntimeCoordinator {
     flow: NestedRealAcceptFlow,
     admission_queue_owner: RuntimeToplevelAdmissionQueueOwner,
+    seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
 impl NestedRuntimeCoordinator {
@@ -244,6 +245,7 @@ impl NestedRuntimeCoordinator {
         Ok(Self {
             flow: NestedRealAcceptFlow::with_socket_name(name)?,
             admission_queue_owner: RuntimeToplevelAdmissionQueueOwner::new(next_core_surface_id),
+            seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
 
@@ -291,6 +293,17 @@ impl NestedRuntimeCoordinator {
     ) -> Option<WindowId> {
         self.admission_queue_owner
             .toplevel_mapping(adapter_toplevel)
+    }
+
+    /// 返回 live callback sequence 是否已被 coordinator admission owner 处理过。
+    pub fn has_seen_live_toplevel_callback_sequence(&self, sequence: u64) -> bool {
+        self.seen_live_toplevel_callback_sequences
+            .contains(&sequence)
+    }
+
+    /// 标记 live callback sequence 已经被 admission enqueue seam 接收。
+    pub fn mark_live_toplevel_callback_sequence_seen(&mut self, sequence: u64) -> bool {
+        self.seen_live_toplevel_callback_sequences.insert(sequence)
     }
 
     /// 执行一次 accept/connected → Display dispatch → disconnected lifecycle pump。
