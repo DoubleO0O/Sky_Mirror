@@ -53,11 +53,24 @@ pub struct AdapterSurfaceIdentityMapping {
     pub surface_identity_key: SurfaceIdentityKey,
 }
 
+/// Server surface commit callback 的 adapter-owned 纯数据 observation。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdapterSurfaceCommitObservation {
+    /// Adapter-only surface identity；不得作为 core `SurfaceId` 使用。
+    pub adapter_surface_id: AdapterSurfaceId,
+    /// Adapter-only 稳定 key。
+    pub surface_identity_key: SurfaceIdentityKey,
+    /// 本 registry 内观察到的单调 commit 序号。
+    pub commit_sequence: u64,
+}
+
 /// 从 server object 建立 adapter identity 时的结构化错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceIdentityError {
     /// Smithay resource 没有可用 object identity。
     SmithayIdentityUnavailable,
+    /// Commit callback 到达时 adapter 尚未观察过对应 `new_surface` identity。
+    AdapterSurfaceIdentityMissing,
     /// Adapter 的单调 identity 空间耗尽。
     AdapterIdentityExhausted,
 }
@@ -72,6 +85,8 @@ pub(crate) struct LinuxWlSurfaceIdentityRegistry {
     mappings: HashMap<ObjectId, AdapterSurfaceIdentityMapping>,
     observation_count: usize,
     last_observation: Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>>,
+    commit_observation_count: u64,
+    last_commit_observation: Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>>,
 }
 
 impl LinuxWlSurfaceIdentityRegistry {
@@ -81,6 +96,8 @@ impl LinuxWlSurfaceIdentityRegistry {
             mappings: HashMap::new(),
             observation_count: 0,
             last_observation: None,
+            commit_observation_count: 0,
+            last_commit_observation: None,
         }
     }
 
@@ -115,6 +132,33 @@ impl LinuxWlSurfaceIdentityRegistry {
         Ok(mapping)
     }
 
+    pub(crate) fn observe_surface_commit(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> Result<AdapterSurfaceCommitObservation, SurfaceIdentityError> {
+        self.commit_observation_count = self.commit_observation_count.saturating_add(1);
+        let commit_sequence = self.commit_observation_count;
+        let object_id = surface.id();
+        if object_id.is_null() {
+            let error = SurfaceIdentityError::SmithayIdentityUnavailable;
+            self.last_commit_observation = Some(Err(error));
+            return Err(error);
+        }
+
+        let Some(mapping) = self.mappings.get(&object_id).copied() else {
+            let error = SurfaceIdentityError::AdapterSurfaceIdentityMissing;
+            self.last_commit_observation = Some(Err(error));
+            return Err(error);
+        };
+        let observation = AdapterSurfaceCommitObservation {
+            adapter_surface_id: mapping.adapter_surface_id,
+            surface_identity_key: mapping.surface_identity_key,
+            commit_sequence,
+        };
+        self.last_commit_observation = Some(Ok(observation));
+        Ok(observation)
+    }
+
     pub(crate) fn observation_count(&self) -> usize {
         self.observation_count
     }
@@ -123,6 +167,16 @@ impl LinuxWlSurfaceIdentityRegistry {
         &self,
     ) -> Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>> {
         self.last_observation
+    }
+
+    pub(crate) const fn commit_observation_count(&self) -> u64 {
+        self.commit_observation_count
+    }
+
+    pub(crate) fn last_commit_observation(
+        &self,
+    ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
+        self.last_commit_observation
     }
 }
 
@@ -265,6 +319,154 @@ pub struct ControlledWlSurfaceCreationReport {
     pub blockers: Vec<ControlledWlSurfaceCreationBlocker>,
 }
 
+/// Controlled `wl_surface.commit` proof 的结构化 blocker。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlledWlSurfaceCommitBlocker {
+    /// Server 尚未显式初始化 `wl_compositor` owner。
+    MissingServerWlCompositorOwner,
+    /// Client 未能先 bind `wl_compositor`，因此禁止创建和 commit surface。
+    MissingClientWlCompositorBind,
+}
+
+/// Controlled commit proof 中可定位的操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlledWlSurfaceCommitOperation {
+    /// 创建受控 Unix endpoint pair。
+    CreateControlledEndpoint,
+    /// 插入 server endpoint。
+    InsertServerClient,
+    /// 创建 client connection。
+    CreateClientConnection,
+    /// 创建 registry/event queue。
+    InitializeRegistryQueue,
+    /// 完成 commit request roundtrip。
+    CompleteCommitRoundtrip,
+    /// 驱动 server request dispatch。
+    DispatchServerClients,
+    /// flush server events。
+    FlushServerClients,
+}
+
+/// Controlled `wl_surface.commit` proof 的纯数据错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlledWlSurfaceCommitError {
+    /// 前置 capability 尚未满足。
+    Blocked(ControlledWlSurfaceCommitBlocker),
+    /// 受控 session identity 无效。
+    InvalidControlledSessionIdentity,
+    /// I/O 操作失败。
+    Io {
+        /// 失败阶段。
+        operation: ControlledWlSurfaceCommitOperation,
+        /// 标准 I/O 错误类别。
+        kind: io::ErrorKind,
+    },
+    /// wayland-client 操作失败。
+    ClientProtocol {
+        /// 失败阶段。
+        operation: ControlledWlSurfaceCommitOperation,
+    },
+    /// Server insertion 未产生预期 owner evidence。
+    MissingNestedClientDataOwnerEvidence,
+    /// Client 成功返回，但 server 没有观察到新 surface。
+    MissingServerSurfaceObservation,
+    /// Client 成功返回，但 server 没有观察到 commit。
+    MissingServerSurfaceCommitObservation,
+    /// Server 观察到了 surface/commit，但 adapter identity lookup 被结构化拒绝。
+    SurfaceIdentity(SurfaceIdentityError),
+    /// Client proof thread 提前断开。
+    ClientThreadDisconnected,
+    /// Client proof thread panic。
+    ClientThreadPanicked,
+    /// 有界 proof 超时。
+    TimedOut,
+}
+
+/// Linux-only controlled `wl_surface.commit` proof 报告。
+///
+/// `wl_surface_committed` 只表示 server handler 观察到 commit callback，并把它解析为
+/// adapter-owned surface identity。它不表示 buffer attached、damage、frame callback、
+/// core mutation、renderable surface，或完整 compositor runtime。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlledWlSurfaceCommitReport {
+    /// Server-side `wl_compositor` owner 是否存在。
+    pub server_wl_compositor_owner_available: bool,
+    /// Server-side `wl_compositor` 是否显式初始化。
+    pub server_wl_compositor_initialized: bool,
+    /// Inserted client 是否持有独立 compositor state。
+    pub per_client_compositor_state_available: bool,
+    /// 是否创建受控 endpoint pair。
+    pub controlled_endpoint_created: bool,
+    /// Server endpoint 是否通过现有 insertion seam 插入。
+    pub server_client_inserted: bool,
+    /// 是否创建 wayland-client connection。
+    pub client_connection_created: bool,
+    /// 是否创建 client event queue。
+    pub event_queue_created: bool,
+    /// Registry discovery roundtrip 是否完成。
+    pub registry_roundtrip_completed: bool,
+    /// Client 是否成功 bind `wl_compositor`。
+    pub client_bound_wl_compositor: bool,
+    /// Client 是否尝试 create_surface request。
+    pub wl_surface_create_attempted: bool,
+    /// Controlled client 是否创建 `wl_surface`。
+    pub wl_surface_created: bool,
+    /// Server `new_surface` handler 是否观察到该 boundary。
+    pub server_surface_observed: bool,
+    /// Adapter 是否为 server object 分配纯数据 identity。
+    pub adapter_surface_identity_allocated: bool,
+    /// Client 是否调用 `wl_surface.commit`。
+    pub wl_surface_commit_attempted: bool,
+    /// Server `commit` handler 是否观察到 callback。
+    pub server_surface_commit_observed: bool,
+    /// Commit observation 是否解析到 adapter-owned surface identity。
+    pub adapter_surface_commit_observation_available: bool,
+    /// 分配出的 adapter-only surface ID；不是 core `SurfaceId`。
+    pub adapter_surface_id: AdapterSurfaceId,
+    /// 分配出的 adapter-only identity key。
+    pub surface_identity_key: SurfaceIdentityKey,
+    /// Commit observation 中的 adapter-only surface ID。
+    pub committed_adapter_surface_id: AdapterSurfaceId,
+    /// Commit observation 中的 adapter-only identity key。
+    pub committed_surface_identity_key: SurfaceIdentityKey,
+    /// Commit observation 序号。
+    pub commit_sequence: u64,
+    /// 是否 attach 了 buffer；本阶段固定为 false。
+    pub buffer_attached: bool,
+    /// 是否提交 damage；本阶段固定为 false。
+    pub damage_submitted: bool,
+    /// 是否请求或发送 frame callback；本阶段固定为 false。
+    pub frame_callback_requested: bool,
+    /// Client 是否 bind xdg-shell；本阶段固定为 false。
+    pub client_bound_xdg_wm_base: bool,
+    /// 是否创建 xdg surface；本阶段固定为 false。
+    pub xdg_surface_created: bool,
+    /// 是否创建 xdg toplevel；本阶段固定为 false。
+    pub xdg_toplevel_created: bool,
+    /// 是否调用 admission ledger admit。
+    pub ledger_admit_invoked: bool,
+    /// 是否调用 admission ledger unmap。
+    pub ledger_unmap_invoked: bool,
+    /// 是否调用 core register。
+    pub core_register_invoked: bool,
+    /// 是否调用 core detach。
+    pub core_detach_invoked: bool,
+    /// 是否分配 core `WindowId`。
+    pub window_id_allocated: bool,
+    /// 是否运行本 proof 的有界 protocol dispatch。
+    pub protocol_dispatch_started: bool,
+    /// Render 是否可用。
+    pub render_support: bool,
+    /// Input 是否可用。
+    pub input_support: bool,
+    /// 是否已有真实 compositor runtime。
+    pub real_compositor_runtime_available: bool,
+    /// 是否已有真实 xdg-shell runtime。
+    pub real_xdg_shell_runtime_available: bool,
+    /// 成功报告中未解决的 blockers。
+    pub blockers: Vec<ControlledWlSurfaceCommitBlocker>,
+}
+
 #[derive(Debug, Default)]
 struct ControlledSurfaceClientState;
 
@@ -402,6 +604,139 @@ pub fn controlled_wl_surface_creation_report(
     })
 }
 
+/// 证明 controlled client 的 `wl_surface.commit` 可被 server handler 观察为纯数据 identity。
+///
+/// 本函数只使用内部 stream pair。Commit observation 不等于 buffer attach、damage、
+/// frame callback、renderable surface、ledger/core mutation 或完整 compositor runtime。
+pub fn controlled_wl_surface_commit_observation_report(
+    server: &mut SmithayWaylandDisplayProbe,
+) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
+    if !server.is_wl_compositor_global_initialized() {
+        return Err(ControlledWlSurfaceCommitError::Blocked(
+            ControlledWlSurfaceCommitBlocker::MissingServerWlCompositorOwner,
+        ));
+    }
+
+    let observations_before = server.wl_surface_observation_count();
+    let commits_before = server.wl_surface_commit_observation_count();
+    let (server_stream, client_stream) =
+        UnixStream::pair().map_err(|error| ControlledWlSurfaceCommitError::Io {
+            operation: ControlledWlSurfaceCommitOperation::CreateControlledEndpoint,
+            kind: error.kind(),
+        })?;
+    let session = NestedClientSessionId::new(CONTROLLED_SESSION_ID)
+        .ok_or(ControlledWlSurfaceCommitError::InvalidControlledSessionIdentity)?;
+    let mut insertion = NestedClientInsertCompileBoundary::new(server.display_handle());
+    let _server_client = insertion
+        .insert_client(server_stream, session)
+        .map_err(|error| ControlledWlSurfaceCommitError::Io {
+            operation: ControlledWlSurfaceCommitOperation::InsertServerClient,
+            kind: error.kind(),
+        })?;
+    if insertion.event_queue().drain_connected()
+        != vec![NestedClientSessionEvent::Connected { session }]
+    {
+        return Err(ControlledWlSurfaceCommitError::MissingNestedClientDataOwnerEvidence);
+    }
+
+    let (result_sender, result_receiver) = mpsc::channel();
+    let client_thread = thread::spawn(move || {
+        let result = run_controlled_surface_commit_client(client_stream);
+        let _ = result_sender.send(result);
+    });
+
+    let deadline = Instant::now() + CONTROLLED_PROOF_TIMEOUT;
+    let client_result = loop {
+        server
+            .dispatch_clients_once()
+            .map_err(|error| ControlledWlSurfaceCommitError::Io {
+                operation: ControlledWlSurfaceCommitOperation::DispatchServerClients,
+                kind: error.kind(),
+            })?;
+        server
+            .flush_clients_once()
+            .map_err(|error| ControlledWlSurfaceCommitError::Io {
+                operation: ControlledWlSurfaceCommitOperation::FlushServerClients,
+                kind: error.kind(),
+            })?;
+
+        match result_receiver.recv_timeout(SERVER_PUMP_WAIT) {
+            Ok(result) => break result,
+            Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+            Err(RecvTimeoutError::Timeout) => {
+                return Err(ControlledWlSurfaceCommitError::TimedOut);
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return match client_thread.join() {
+                    Ok(()) => Err(ControlledWlSurfaceCommitError::ClientThreadDisconnected),
+                    Err(_) => Err(ControlledWlSurfaceCommitError::ClientThreadPanicked),
+                };
+            }
+        }
+    };
+
+    client_thread
+        .join()
+        .map_err(|_| ControlledWlSurfaceCommitError::ClientThreadPanicked)?;
+    client_result?;
+
+    if server.wl_surface_observation_count() <= observations_before {
+        return Err(ControlledWlSurfaceCommitError::MissingServerSurfaceObservation);
+    }
+    let mapping = server
+        .last_wl_surface_identity_observation()
+        .ok_or(ControlledWlSurfaceCommitError::MissingServerSurfaceObservation)?
+        .map_err(ControlledWlSurfaceCommitError::SurfaceIdentity)?;
+    if server.wl_surface_commit_observation_count() <= commits_before {
+        return Err(ControlledWlSurfaceCommitError::MissingServerSurfaceCommitObservation);
+    }
+    let commit = server
+        .last_wl_surface_commit_observation()
+        .ok_or(ControlledWlSurfaceCommitError::MissingServerSurfaceCommitObservation)?
+        .map_err(ControlledWlSurfaceCommitError::SurfaceIdentity)?;
+
+    Ok(ControlledWlSurfaceCommitReport {
+        server_wl_compositor_owner_available: true,
+        server_wl_compositor_initialized: true,
+        per_client_compositor_state_available: true,
+        controlled_endpoint_created: true,
+        server_client_inserted: true,
+        client_connection_created: true,
+        event_queue_created: true,
+        registry_roundtrip_completed: true,
+        client_bound_wl_compositor: true,
+        wl_surface_create_attempted: true,
+        wl_surface_created: true,
+        server_surface_observed: true,
+        adapter_surface_identity_allocated: true,
+        wl_surface_commit_attempted: true,
+        server_surface_commit_observed: true,
+        adapter_surface_commit_observation_available: true,
+        adapter_surface_id: mapping.adapter_surface_id,
+        surface_identity_key: mapping.surface_identity_key,
+        committed_adapter_surface_id: commit.adapter_surface_id,
+        committed_surface_identity_key: commit.surface_identity_key,
+        commit_sequence: commit.commit_sequence,
+        buffer_attached: false,
+        damage_submitted: false,
+        frame_callback_requested: false,
+        client_bound_xdg_wm_base: false,
+        xdg_surface_created: false,
+        xdg_toplevel_created: false,
+        ledger_admit_invoked: false,
+        ledger_unmap_invoked: false,
+        core_register_invoked: false,
+        core_detach_invoked: false,
+        window_id_allocated: false,
+        protocol_dispatch_started: true,
+        render_support: false,
+        input_support: false,
+        real_compositor_runtime_available: false,
+        real_xdg_shell_runtime_available: false,
+        blockers: Vec::new(),
+    })
+}
+
 fn run_controlled_surface_client(
     client_stream: UnixStream,
 ) -> Result<(), ControlledWlSurfaceCreationError> {
@@ -437,11 +772,46 @@ fn run_controlled_surface_client(
     Ok(())
 }
 
+fn run_controlled_surface_commit_client(
+    client_stream: UnixStream,
+) -> Result<(), ControlledWlSurfaceCommitError> {
+    let connection = Connection::from_socket(client_stream).map_err(|_| {
+        ControlledWlSurfaceCommitError::ClientProtocol {
+            operation: ControlledWlSurfaceCommitOperation::CreateClientConnection,
+        }
+    })?;
+    let (globals, mut event_queue) =
+        registry_queue_init::<ControlledSurfaceClientState>(&connection).map_err(|_| {
+            ControlledWlSurfaceCommitError::ClientProtocol {
+                operation: ControlledWlSurfaceCommitOperation::InitializeRegistryQueue,
+            }
+        })?;
+    let queue_handle = event_queue.handle();
+    let compositor = globals
+        .bind::<WlCompositor, _, _>(&queue_handle, 1..=5, ())
+        .map_err(|_| {
+            ControlledWlSurfaceCommitError::Blocked(
+                ControlledWlSurfaceCommitBlocker::MissingClientWlCompositorBind,
+            )
+        })?;
+    let surface = compositor.create_surface(&queue_handle, ());
+    surface.commit();
+    let mut client_state = ControlledSurfaceClientState;
+    event_queue.roundtrip(&mut client_state).map_err(|_| {
+        ControlledWlSurfaceCommitError::ClientProtocol {
+            operation: ControlledWlSurfaceCommitOperation::CompleteCommitRoundtrip,
+        }
+    })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
+        ControlledWlSurfaceCommitBlocker, ControlledWlSurfaceCommitError,
         ControlledWlSurfaceCreationBlocker, ControlledWlSurfaceCreationError,
-        controlled_wl_surface_creation_report,
+        controlled_wl_surface_commit_observation_report, controlled_wl_surface_creation_report,
     };
     use crate::smithay_backend::wayland_display::SmithayWaylandDisplayProbe;
 
@@ -517,5 +887,71 @@ mod tests {
 
         assert_ne!(first.adapter_surface_id, second.adapter_surface_id);
         assert_ne!(first.surface_identity_key, second.surface_identity_key);
+    }
+
+    #[test]
+    fn controlled_wl_surface_commit_requires_server_owner() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+
+        assert_eq!(
+            controlled_wl_surface_commit_observation_report(&mut server),
+            Err(ControlledWlSurfaceCommitError::Blocked(
+                ControlledWlSurfaceCommitBlocker::MissingServerWlCompositorOwner,
+            ))
+        );
+    }
+
+    #[test]
+    fn controlled_wl_surface_commit_observes_adapter_surface_identity() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 compositor owner 必须初始化");
+
+        let report = controlled_wl_surface_commit_observation_report(&mut server)
+            .expect("controlled surface commit proof 必须完成");
+
+        assert!(report.server_wl_compositor_owner_available);
+        assert!(report.server_wl_compositor_initialized);
+        assert!(report.per_client_compositor_state_available);
+        assert!(report.controlled_endpoint_created);
+        assert!(report.server_client_inserted);
+        assert!(report.client_connection_created);
+        assert!(report.event_queue_created);
+        assert!(report.registry_roundtrip_completed);
+        assert!(report.client_bound_wl_compositor);
+        assert!(report.wl_surface_create_attempted);
+        assert!(report.wl_surface_created);
+        assert!(report.server_surface_observed);
+        assert!(report.adapter_surface_identity_allocated);
+        assert!(report.wl_surface_commit_attempted);
+        assert!(report.server_surface_commit_observed);
+        assert!(report.adapter_surface_commit_observation_available);
+        assert_eq!(
+            report.adapter_surface_id,
+            report.committed_adapter_surface_id
+        );
+        assert_eq!(
+            report.surface_identity_key,
+            report.committed_surface_identity_key
+        );
+        assert_eq!(report.commit_sequence, 1);
+        assert!(!report.buffer_attached);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_requested);
+        assert!(!report.client_bound_xdg_wm_base);
+        assert!(!report.xdg_surface_created);
+        assert!(!report.xdg_toplevel_created);
+        assert!(!report.ledger_admit_invoked);
+        assert!(!report.ledger_unmap_invoked);
+        assert!(!report.core_register_invoked);
+        assert!(!report.core_detach_invoked);
+        assert!(!report.window_id_allocated);
+        assert!(report.protocol_dispatch_started);
+        assert!(!report.render_support);
+        assert!(!report.input_support);
+        assert!(!report.real_compositor_runtime_available);
+        assert!(!report.real_xdg_shell_runtime_available);
+        assert!(report.blockers.is_empty());
     }
 }

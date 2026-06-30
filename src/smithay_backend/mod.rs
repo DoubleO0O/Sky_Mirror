@@ -428,9 +428,12 @@ pub use linux_wl_compositor_client_bind::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_wl_surface_identity::{
-    AdapterSurfaceIdentityMapping, ControlledWlSurfaceCreationBlocker,
-    ControlledWlSurfaceCreationError, ControlledWlSurfaceCreationOperation,
-    ControlledWlSurfaceCreationReport, SurfaceIdentityError, SurfaceIdentityKey,
+    AdapterSurfaceCommitObservation, AdapterSurfaceIdentityMapping,
+    ControlledWlSurfaceCommitBlocker, ControlledWlSurfaceCommitError,
+    ControlledWlSurfaceCommitOperation, ControlledWlSurfaceCommitReport,
+    ControlledWlSurfaceCreationBlocker, ControlledWlSurfaceCreationError,
+    ControlledWlSurfaceCreationOperation, ControlledWlSurfaceCreationReport, SurfaceIdentityError,
+    SurfaceIdentityKey, controlled_wl_surface_commit_observation_report,
     controlled_wl_surface_creation_report,
 };
 #[allow(unused_imports)]
@@ -2848,6 +2851,77 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 !code.contains(forbidden),
                 "Phase 52O controlled surface proof 包含禁止生产 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 54A 只允许受控 wl_surface commit observation，不得进入 buffer/frame/render/core。
+    #[test]
+    fn controlled_wl_surface_commit_observation_source_stays_within_boundary() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_wl_surface_identity.rs"))
+                .expect("Phase 54A controlled surface commit module 必须存在");
+        let xdg_shell =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_xdg_shell.rs"))
+                .expect("Phase 54A xdg shell handler 必须存在");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(production, _)| production);
+        let code = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for required in [
+            "AdapterSurfaceCommitObservation",
+            "controlled_wl_surface_commit_observation_report",
+            ".create_surface(&queue_handle, ())",
+            "surface.commit()",
+            "wl_surface_commit_attempted: true",
+            "server_surface_commit_observed: true",
+            "adapter_surface_commit_observation_available: true",
+            "buffer_attached: false",
+            "damage_submitted: false",
+            "frame_callback_requested: false",
+            "ledger_admit_invoked: false",
+            "core_register_invoked: false",
+            "render_support: false",
+            "input_support: false",
+        ] {
+            assert!(
+                code.contains(required),
+                "Phase 54A controlled commit proof 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "fn commit(&mut self, surface: &WlSurface)",
+            ".observe_surface_commit(surface)",
+            "不检查 buffer/damage",
+            "不发 frame callback",
+            "不触发 admission ledger/core",
+        ] {
+            assert!(
+                xdg_shell.contains(required),
+                "Phase 54A commit handler boundary 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            ["Backend", "Event"].concat(),
+            ["Core", "Runtime", "Bridge"].concat(),
+            [".", "handle_command"].concat(),
+            ["frame", "_callback_requested: true"].concat(),
+            ".frame(".to_string(),
+            ["buffer", "_attached: true"].concat(),
+            ["render", "_support: true"].concat(),
+            ["input", "_support: true"].concat(),
+        ] {
+            assert!(
+                !code.contains(&forbidden),
+                "Phase 54A controlled commit proof 包含禁止 token: {forbidden}"
             );
         }
     }

@@ -31,7 +31,8 @@ use super::linux_wl_compositor::{
     build_linux_wl_compositor_readiness_report,
 };
 use super::linux_wl_surface_identity::{
-    AdapterSurfaceIdentityMapping, LinuxWlSurfaceIdentityRegistry, SurfaceIdentityError,
+    AdapterSurfaceCommitObservation, AdapterSurfaceIdentityMapping, LinuxWlSurfaceIdentityRegistry,
+    SurfaceIdentityError,
 };
 use super::linux_xdg_lifecycle_observation::observe_toplevel_lifecycle;
 use super::linux_xdg_toplevel_identity::LinuxXdgToplevelIdentityRegistry;
@@ -169,6 +170,18 @@ impl LinuxXdgShellStateSkeleton {
         &self,
     ) -> Option<Result<AdapterSurfaceIdentityMapping, SurfaceIdentityError>> {
         self.surface_identities.last_observation()
+    }
+
+    /// 返回 server handler 收到的 `wl_surface.commit` observation 次数。
+    pub(crate) const fn wl_surface_commit_observation_count(&self) -> u64 {
+        self.surface_identities.commit_observation_count()
+    }
+
+    /// 返回最近一次 `wl_surface.commit` 的 adapter-owned 纯数据 observation。
+    pub(crate) fn last_wl_surface_commit_observation(
+        &self,
+    ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
+        self.surface_identities.last_commit_observation()
     }
 
     /// 返回最近一次 callback-like lifecycle identity lookup 报告。
@@ -499,9 +512,10 @@ impl CompositorHandler for LinuxXdgShellStateSkeleton {
         let _ = self.surface_identities.observe_surface(surface);
     }
 
-    fn commit(&mut self, _surface: &WlSurface) {
-        // delegate wiring 只建立 server dispatch boundary。本阶段不记录 identity、
-        // 不创建 xdg lifecycle，也不触发 admission ledger 或 core mutation。
+    fn commit(&mut self, surface: &WlSurface) {
+        // commit observation 只记录 adapter-owned surface identity；不检查 buffer/damage，
+        // 不发 frame callback，不创建 xdg lifecycle，也不触发 admission ledger/core。
+        let _ = self.surface_identities.observe_surface_commit(surface);
     }
 }
 
