@@ -222,6 +222,22 @@ pub struct NestedRuntimeLiveUnmapPumpReport {
     pub unmap_drain_report: RuntimeToplevelUnmapDrainReport,
 }
 
+/// 一次 lifecycle pump 后同时追加 live admission drain 与 live unmap drain 的组合报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
+    /// 既有 accept/connected/dispatch/disconnected lifecycle pump report。
+    pub lifecycle_report: NestedRuntimePumpReport,
+
+    /// Phase 53A live callback admission owner 的 enqueue report。
+    pub live_admission_owner_report: LiveToplevelAdmissionOwnerReport,
+
+    /// live owner 入队后由 runtime admission queue owner drain 的 report。
+    pub admission_drain_report: RuntimeToplevelAdmissionDrainReport,
+
+    /// live destroyed observation 经 runtime owner 调用 ledger unmap 的 report。
+    pub unmap_drain_report: RuntimeToplevelUnmapDrainReport,
+}
+
 /// Linux-only nested client lifecycle single-pump coordinator。
 ///
 /// coordinator 只拥有并编排 [`NestedRealAcceptFlow`]。connected/disconnected mutation
@@ -391,6 +407,37 @@ impl NestedRuntimeCoordinator {
 
         NestedRuntimeLiveUnmapPumpReport {
             lifecycle_report,
+            unmap_drain_report,
+        }
+    }
+
+    /// 执行一次 lifecycle pump，然后依次 drain live admission 与 live toplevel unmap。
+    ///
+    /// 该组合 seam 让 bounded loop 每轮只执行一次 lifecycle pump，同时把 callback
+    /// admission 与 destroyed unmap 都交给 runtime owners。handler/display 仍只提供
+    /// 纯数据 observation，不持有 `State` 或 admission ledger。
+    pub fn pump_once_with_live_toplevel_admission_and_unmap_drain(
+        &mut self,
+        state: &mut State,
+        timeout: Duration,
+        tick: RuntimeToplevelAdmissionDrainTick,
+    ) -> NestedRuntimeLiveAdmissionUnmapPumpReport {
+        let lifecycle_report = self.pump_once(state, timeout);
+        let admission_observation = self.flow.take_next_live_toplevel_admission_observation();
+        let live_admission_owner_report =
+            enqueue_live_toplevel_admission_from_observation(admission_observation, self);
+        let admission_drain_report = self
+            .admission_queue_owner
+            .drain_pending_toplevel_admission_once(state, tick);
+        let unmap_observation = self.flow.take_next_live_toplevel_unmap_observation();
+        let unmap_drain_report = self
+            .admission_queue_owner
+            .drain_live_toplevel_unmap_once(state, unmap_observation);
+
+        NestedRuntimeLiveAdmissionUnmapPumpReport {
+            lifecycle_report,
+            live_admission_owner_report,
+            admission_drain_report,
             unmap_drain_report,
         }
     }
