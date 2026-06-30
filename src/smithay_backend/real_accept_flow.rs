@@ -522,6 +522,16 @@ impl NestedRealAcceptFlow {
         LiveToplevelAdmissionOwnerObservation::from_display(&self.display)
     }
 
+    /// 消费 display owner 中下一条 live toplevel admission observation。
+    ///
+    /// 该 seam 维持 callback arrival order：多个 callback 在一次 coordinator pump 前到达时，
+    /// runtime pump 每次只读取并处理最早的一条。
+    pub(crate) fn take_next_live_toplevel_admission_observation(
+        &mut self,
+    ) -> LiveToplevelAdmissionOwnerObservation {
+        self.display.take_next_live_toplevel_admission_observation()
+    }
+
     /// 只读访问 persistent backend-client/session mapping。
     pub fn mapping(&self) -> &NestedAcceptedClientMapping {
         &self.loop_data.mapping
