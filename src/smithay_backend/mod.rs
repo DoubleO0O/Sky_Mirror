@@ -2926,6 +2926,42 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54B 必须保留多次 wl_surface commit observation 的 FIFO backlog。
+    #[test]
+    fn controlled_wl_surface_commit_backlog_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_wl_surface_identity.rs"))
+                .expect("Phase 54B controlled surface commit module 必须存在");
+        let display = std::fs::read_to_string(root.join("src/smithay_backend/wayland_display.rs"))
+            .expect("Phase 54B display owner 必须存在");
+
+        for required in [
+            "VecDeque<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>>",
+            "pending_commit_observations.push_back(result)",
+            "take_next_commit_observation",
+            "fn controlled_wl_surface_commit_observations_are_fifo_backlogged()",
+            "first_pending.commit_sequence, 1",
+            "second_pending.commit_sequence, 2",
+            "server.take_next_wl_surface_commit_observation(), None",
+        ] {
+            assert!(
+                source.contains(required),
+                "Phase 54B commit backlog proof 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "take_next_wl_surface_commit_observation",
+            "self.state.take_next_wl_surface_commit_observation()",
+        ] {
+            assert!(
+                display.contains(required),
+                "Phase 54B display owner backlog seam 缺少证据: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
