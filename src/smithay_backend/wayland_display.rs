@@ -20,6 +20,7 @@ use super::linux_wl_surface_identity::{AdapterSurfaceIdentityMapping, SurfaceIde
 use super::linux_xdg_shell::{
     LinuxXdgShellGlobalInitError, LinuxXdgShellGlobalInitReport, LinuxXdgShellStateSkeleton,
 };
+use super::xdg_lifecycle_observation::XdgToplevelLifecycleObservationReport;
 use super::xdg_toplevel_identity::XdgToplevelIdentityMapping;
 
 /// Smithay 和 Wayland server 侧的最小状态占位。
@@ -175,6 +176,16 @@ impl SmithayWaylandDisplayProbe {
             },
             None => LiveToplevelAdmissionOwnerObservation::from_display(self),
         }
+    }
+
+    /// 消费 display owner 中下一条 live toplevel unmap observation。
+    ///
+    /// 返回值只包含 adapter identity lookup report；display/handler 不调用 ledger，
+    /// 也不持有 core `State`。真正 detach 只能由 runtime owner 执行。
+    pub(crate) fn take_next_live_toplevel_unmap_observation(
+        &mut self,
+    ) -> Option<XdgToplevelLifecycleObservationReport> {
+        self.state.take_next_live_toplevel_unmap_observation()
     }
 
     /// 执行一次 Wayland backend client dispatch，并返回处理的 request 数量。

@@ -39,6 +39,7 @@ use crate::{
         real_disconnect_flow::{NestedRealDisconnectCallbackReport, bridge_disconnected_events},
         wayland_display::SmithayWaylandDisplayProbe,
         wayland_socket::SmithayWaylandSocketProbe,
+        xdg_lifecycle_observation::XdgToplevelLifecycleObservationReport,
     },
 };
 
@@ -530,6 +531,16 @@ impl NestedRealAcceptFlow {
         &mut self,
     ) -> LiveToplevelAdmissionOwnerObservation {
         self.display.take_next_live_toplevel_admission_observation()
+    }
+
+    /// 消费 display owner 中下一条 live toplevel unmap observation。
+    ///
+    /// flow 只转发纯数据 lifecycle report；ledger/core detach 仍必须由 runtime owner
+    /// 在同时持有 admission ledger 与 `State` 时执行。
+    pub(crate) fn take_next_live_toplevel_unmap_observation(
+        &mut self,
+    ) -> Option<XdgToplevelLifecycleObservationReport> {
+        self.display.take_next_live_toplevel_unmap_observation()
     }
 
     /// 只读访问 persistent backend-client/session mapping。

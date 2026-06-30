@@ -18,6 +18,7 @@ use crate::{
         linux_toplevel_admission_runtime_queue::{
             RuntimeToplevelAdmissionDrainReport, RuntimeToplevelAdmissionDrainTick,
             RuntimeToplevelAdmissionEnqueueReport, RuntimeToplevelAdmissionQueueOwner,
+            RuntimeToplevelUnmapDrainReport,
         },
         real_accept_flow::NestedRealAcceptFlow,
         surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId},
@@ -211,6 +212,16 @@ pub struct NestedRuntimeLiveAdmissionPumpReport {
     pub admission_drain_report: RuntimeToplevelAdmissionDrainReport,
 }
 
+/// 一次 lifecycle pump 后追加 live toplevel unmap drain 的组合报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestedRuntimeLiveUnmapPumpReport {
+    /// 既有 accept/connected/dispatch/disconnected lifecycle pump report。
+    pub lifecycle_report: NestedRuntimePumpReport,
+
+    /// live destroyed observation 经 runtime owner 调用 ledger unmap 的 report。
+    pub unmap_drain_report: RuntimeToplevelUnmapDrainReport,
+}
+
 /// Linux-only nested client lifecycle single-pump coordinator。
 ///
 /// coordinator 只拥有并编排 [`NestedRealAcceptFlow`]。connected/disconnected mutation
@@ -360,6 +371,27 @@ impl NestedRuntimeCoordinator {
             lifecycle_report,
             live_admission_owner_report,
             admission_drain_report,
+        }
+    }
+
+    /// 执行一次 lifecycle pump，然后读取 live destroyed observation 并 drain ledger unmap。
+    ///
+    /// handler/display 只提供纯数据 lifecycle observation；coordinator 把它交给
+    /// runtime admission owner，由后者在拥有 ledger + `State` 的边界内执行 core detach。
+    pub fn pump_once_with_live_toplevel_unmap_drain(
+        &mut self,
+        state: &mut State,
+        timeout: Duration,
+    ) -> NestedRuntimeLiveUnmapPumpReport {
+        let lifecycle_report = self.pump_once(state, timeout);
+        let observation = self.flow.take_next_live_toplevel_unmap_observation();
+        let unmap_drain_report = self
+            .admission_queue_owner
+            .drain_live_toplevel_unmap_once(state, observation);
+
+        NestedRuntimeLiveUnmapPumpReport {
+            lifecycle_report,
+            unmap_drain_report,
         }
     }
 
@@ -1033,5 +1065,85 @@ mod tests {
         assert!(state.surfaces.get(14_001).is_some());
         assert_eq!(state.surfaces.records().len(), 2);
         assert!(state.validate().is_clean());
+    }
+
+    /// 验证 admitted live toplevel 的 destroyed observation 只在 owner 层触发 ledger unmap。
+    #[test]
+    fn nested_runtime_live_unmap_pump_detaches_admitted_toplevel() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-runtime-live-unmap");
+        let mut coordinator =
+            NestedRuntimeCoordinator::with_socket_name_and_admission_surface_start(
+                &socket_name,
+                15_000,
+            )
+            .expect("coordinator 必须绑定测试 socket");
+        let registration = {
+            let display = coordinator
+                .flow
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            adapter_toplevel_identity_registration_report(display)
+                .expect("adapter identity registration proof 必须完成")
+        };
+        let mut state = State::new();
+
+        let admission = coordinator.pump_once_with_live_toplevel_admission_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(57),
+        );
+        let core_window = admission
+            .admission_drain_report
+            .core_window_id
+            .expect("live admission 必须创建 core window");
+        let unmap = coordinator
+            .pump_once_with_live_toplevel_unmap_drain(&mut state, Duration::from_millis(1));
+
+        assert!(admission.lifecycle_report.is_successful());
+        assert!(admission.admission_drain_report.pending_admission_consumed);
+        assert!(unmap.lifecycle_report.is_successful());
+        assert!(unmap.unmap_drain_report.live_unmap_observation_present);
+        assert!(unmap.unmap_drain_report.adapter_toplevel_id_resolved);
+        assert!(unmap.unmap_drain_report.ledger_unmap_invoked);
+        assert!(unmap.unmap_drain_report.core_detach_invoked);
+        assert_eq!(
+            unmap.unmap_drain_report.adapter_surface_id,
+            Some(registration.adapter_surface_id)
+        );
+        assert_eq!(
+            unmap.unmap_drain_report.adapter_toplevel_id,
+            Some(registration.adapter_toplevel_id)
+        );
+        assert_eq!(unmap.unmap_drain_report.core_surface_id, Some(15_000));
+        assert_eq!(unmap.unmap_drain_report.core_window_id, Some(core_window));
+        assert!(
+            unmap
+                .unmap_drain_report
+                .surface_mapping_retained_after_unmap
+        );
+        assert!(
+            unmap
+                .unmap_drain_report
+                .toplevel_mapping_removed_after_unmap
+        );
+        assert!(unmap.unmap_drain_report.surface_remains_alive);
+        assert_eq!(
+            coordinator.admission_surface_mapping(registration.adapter_surface_id),
+            Some(15_000)
+        );
+        assert_eq!(
+            coordinator.admission_toplevel_mapping(registration.adapter_toplevel_id),
+            None
+        );
+        assert!(state.surfaces.is_alive(15_000));
+        assert!(!state.registry.is_alive(core_window));
+        assert!(state.validate().is_clean());
+        assert!(unmap.unmap_drain_report.blockers.is_empty());
     }
 }
