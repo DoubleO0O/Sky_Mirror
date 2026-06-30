@@ -875,15 +875,18 @@ mod nested_socket_probe_gate_tests {
             "pub struct NestedRuntimeLoopConfig",
             "pub struct NestedRuntimeLoopReport",
             "pub struct NestedRuntimeLiveAdmissionRunSummary",
+            "pub struct NestedRuntimeLiveUnmapRunSummary",
             "pub struct NestedRuntimeLoopStopHandle",
             "pub enum NestedRuntimeLoopExitReason",
             "pub fn run_for_iterations",
             "pub fn stop_handle",
             "RuntimeToplevelAdmissionDrainTick",
-            "pump_once_with_live_toplevel_admission_drain(",
+            "pump_once_with_live_toplevel_admission_and_unmap_drain(",
             "RuntimeToplevelAdmissionDrainTick::phase52y_default(",
             "NestedRuntimeLiveAdmissionRunSummary::from_live_pump",
+            "NestedRuntimeLiveUnmapRunSummary::from_live_admission_unmap",
             "live_admission",
+            "live_unmap",
             ".lifecycle_report",
             "max_iterations",
             "stop_when_idle",
@@ -983,6 +986,41 @@ mod nested_socket_probe_gate_tests {
             display_source.contains("take_next_live_toplevel_unmap_observation"),
             "Phase 53K display owner 必须暴露 live unmap observation drain seam"
         );
+    }
+
+    /// Phase 53L 必须证明 bounded loop 每轮处理 live unmap drain 并把进展计入非 idle。
+    #[test]
+    fn nested_runtime_loop_live_unmap_drain_source_exists() {
+        let coordinator_source = include_str!("nested_runtime_coordinator.rs");
+        let loop_source = include_str!("nested_runtime_loop.rs");
+
+        for required in [
+            "NestedRuntimeLiveAdmissionUnmapPumpReport",
+            "pump_once_with_live_toplevel_admission_and_unmap_drain",
+            "admission_drain_report",
+            "unmap_drain_report",
+        ] {
+            assert!(
+                coordinator_source.contains(required),
+                "Phase 53L coordinator combined pump 缺少证据项: {required}"
+            );
+        }
+
+        for required in [
+            "NestedRuntimeLiveUnmapRunSummary",
+            "live_unmap",
+            "from_live_admission_unmap",
+            "let live_unmap_has_progress = observed_report.live_unmap.has_progress();",
+            "&& !live_admission_has_progress",
+            "&& !live_unmap_has_progress",
+            "nested_runtime_loop_drains_live_toplevel_unmap",
+            "nested_runtime_loop_stop_when_idle_counts_live_unmap_progress",
+        ] {
+            assert!(
+                loop_source.contains(required),
+                "Phase 53L loop live-unmap proof 缺少证据项: {required}"
+            );
+        }
     }
 
     /// 验证 Linux CI proof 只解锁 bounded loop 与 cooperative stop 的精确能力位。
@@ -1525,7 +1563,9 @@ mod nested_socket_probe_gate_tests {
         for required in [
             "fn has_progress(&self) -> bool",
             "let live_admission_has_progress = observed_report.live_admission.has_progress();",
-            "if config.stop_when_idle && report_is_idle && !live_admission_has_progress",
+            "let live_unmap_has_progress = observed_report.live_unmap.has_progress();",
+            "&& !live_admission_has_progress",
+            "&& !live_unmap_has_progress",
             "nested_runtime_loop_stop_when_idle_drains_live_admission_backlog",
         ] {
             assert!(

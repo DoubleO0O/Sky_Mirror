@@ -17,8 +17,8 @@ use crate::{
     core::state::State,
     smithay_backend::RuntimeToplevelAdmissionDrainTick,
     smithay_backend::nested_runtime_coordinator::{
-        NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport, NestedRuntimePumpError,
-        NestedRuntimePumpReport,
+        NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
+        NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
     },
 };
 
@@ -355,6 +355,72 @@ impl NestedRuntimeLiveAdmissionRunSummary {
     }
 }
 
+/// 一次 bounded run 中由 live unmap drain 产生的纯数据汇总。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NestedRuntimeLiveUnmapRunSummary {
+    /// runtime unmap drain 被调用的次数。
+    pub drain_invocations: usize,
+
+    /// 成功读取到 live destroyed observation 的次数。
+    pub live_unmap_observations: usize,
+
+    /// admission ledger unmap 被调用的次数。
+    pub ledger_unmaps: usize,
+
+    /// core detach seam 被调用的次数。
+    pub core_detaches: usize,
+
+    /// 成功 unmap 后确认 adapter surface mapping 保留的次数。
+    pub surface_mappings_retained: usize,
+
+    /// 成功 unmap 后确认 adapter toplevel mapping 移除的次数。
+    pub toplevel_mappings_removed: usize,
+}
+
+impl NestedRuntimeLiveUnmapRunSummary {
+    fn from_live_admission_unmap(report: &NestedRuntimeLiveAdmissionUnmapPumpReport) -> Self {
+        Self {
+            drain_invocations: usize::from(report.unmap_drain_report.drain_invoked),
+            live_unmap_observations: usize::from(
+                report.unmap_drain_report.live_unmap_observation_present,
+            ),
+            ledger_unmaps: usize::from(report.unmap_drain_report.ledger_unmap_invoked),
+            core_detaches: usize::from(report.unmap_drain_report.core_detach_invoked),
+            surface_mappings_retained: usize::from(
+                report
+                    .unmap_drain_report
+                    .surface_mapping_retained_after_unmap,
+            ),
+            toplevel_mappings_removed: usize::from(
+                report
+                    .unmap_drain_report
+                    .toplevel_mapping_removed_after_unmap,
+            ),
+        }
+    }
+
+    fn has_progress(&self) -> bool {
+        self.live_unmap_observations > 0 || self.ledger_unmaps > 0 || self.core_detaches > 0
+    }
+
+    fn observe(&mut self, delta: Self) {
+        self.drain_invocations = self
+            .drain_invocations
+            .saturating_add(delta.drain_invocations);
+        self.live_unmap_observations = self
+            .live_unmap_observations
+            .saturating_add(delta.live_unmap_observations);
+        self.ledger_unmaps = self.ledger_unmaps.saturating_add(delta.ledger_unmaps);
+        self.core_detaches = self.core_detaches.saturating_add(delta.core_detaches);
+        self.surface_mappings_retained = self
+            .surface_mappings_retained
+            .saturating_add(delta.surface_mappings_retained);
+        self.toplevel_mappings_removed = self
+            .toplevel_mappings_removed
+            .saturating_add(delta.toplevel_mappings_removed);
+    }
+}
+
 /// 一次 bounded loop run 的纯数据汇总报告。
 #[must_use = "loop report 包含退出原因、pump 错误和 validation，不能忽略"]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -391,6 +457,9 @@ pub struct NestedRuntimeLoopReport {
 
     /// 本轮 live admission enqueue/drain 事实。
     pub live_admission: NestedRuntimeLiveAdmissionRunSummary,
+
+    /// 本轮 live toplevel unmap drain 事实。
+    pub live_unmap: NestedRuntimeLiveUnmapRunSummary,
 }
 
 impl NestedRuntimeLoopReport {
@@ -438,7 +507,7 @@ impl NestedRuntimeLoop {
         self.stop_handle.clone()
     }
 
-    /// 在硬性 iteration 上限内重复调用 coordinator live admission pump。
+    /// 在硬性 iteration 上限内重复调用 coordinator live admission/unmap pump。
     ///
     /// `max_iterations` 是防无限循环的不可绕过上限。stop、error 和 idle 只会提前退出；
     /// 本方法没有 protocol event-source wakeup，也不是完整 compositor runtime。
@@ -451,9 +520,9 @@ impl NestedRuntimeLoop {
         let mut admission_tick_index = 0u64;
         run_with_observed_pump(state, config, &stop_handle, |state, timeout| {
             admission_tick_index = admission_tick_index.saturating_add(1);
-            ObservedNestedRuntimePumpReport::from_live_admission(
+            ObservedNestedRuntimePumpReport::from_live_admission_unmap(
                 self.coordinator
-                    .pump_once_with_live_toplevel_admission_drain(
+                    .pump_once_with_live_toplevel_admission_and_unmap_drain(
                         state,
                         timeout,
                         RuntimeToplevelAdmissionDrainTick::phase52y_default(admission_tick_index),
@@ -466,6 +535,7 @@ impl NestedRuntimeLoop {
 struct ObservedNestedRuntimePumpReport {
     lifecycle_report: NestedRuntimePumpReport,
     live_admission: NestedRuntimeLiveAdmissionRunSummary,
+    live_unmap: NestedRuntimeLiveUnmapRunSummary,
 }
 
 impl ObservedNestedRuntimePumpReport {
@@ -473,12 +543,20 @@ impl ObservedNestedRuntimePumpReport {
         Self {
             lifecycle_report,
             live_admission: NestedRuntimeLiveAdmissionRunSummary::default(),
+            live_unmap: NestedRuntimeLiveUnmapRunSummary::default(),
         }
     }
 
-    fn from_live_admission(report: NestedRuntimeLiveAdmissionPumpReport) -> Self {
+    fn from_live_admission_unmap(report: NestedRuntimeLiveAdmissionUnmapPumpReport) -> Self {
         Self {
-            live_admission: NestedRuntimeLiveAdmissionRunSummary::from_live_pump(&report),
+            live_admission: NestedRuntimeLiveAdmissionRunSummary::from_live_pump(
+                &NestedRuntimeLiveAdmissionPumpReport {
+                    lifecycle_report: report.lifecycle_report.clone(),
+                    live_admission_owner_report: report.live_admission_owner_report.clone(),
+                    admission_drain_report: report.admission_drain_report.clone(),
+                },
+            ),
+            live_unmap: NestedRuntimeLiveUnmapRunSummary::from_live_admission_unmap(&report),
             lifecycle_report: report.lifecycle_report,
         }
     }
@@ -511,6 +589,7 @@ where
     // 不按调用方给出的上限预分配，避免极大但仍有限的 max_iterations 在 run 前触发巨额分配。
     let mut pump_reports = Vec::new();
     let mut live_admission = NestedRuntimeLiveAdmissionRunSummary::default();
+    let mut live_unmap = NestedRuntimeLiveUnmapRunSummary::default();
     let mut connected_clients_registered = 0usize;
     let mut disconnected_clients_closed = 0usize;
     let mut dispatch_calls = 0usize;
@@ -535,7 +614,9 @@ where
             wait_interrupted |= stop_handle.take_wait_interrupt();
             let iteration = pump_reports.len().saturating_add(1);
             let live_admission_has_progress = observed_report.live_admission.has_progress();
+            let live_unmap_has_progress = observed_report.live_unmap.has_progress();
             live_admission.observe(observed_report.live_admission);
+            live_unmap.observe(observed_report.live_unmap);
             let report = observed_report.lifecycle_report;
             let report_is_idle = pump_report_is_idle(&report);
             let report_has_errors = !report.errors.is_empty();
@@ -569,7 +650,11 @@ where
                 };
                 break;
             }
-            if config.stop_when_idle && report_is_idle && !live_admission_has_progress {
+            if config.stop_when_idle
+                && report_is_idle
+                && !live_admission_has_progress
+                && !live_unmap_has_progress
+            {
                 exit_reason = NestedRuntimeLoopExitReason::Idle;
                 break;
             }
@@ -598,6 +683,7 @@ where
             exited_before_timeout,
         },
         live_admission,
+        live_unmap,
     }
 }
 
@@ -657,9 +743,10 @@ mod tests {
     use smithay::reexports::calloop::EventLoop;
 
     use super::{
-        NestedRuntimeLoop, NestedRuntimeLoopBlocker, NestedRuntimeLoopConfig,
-        NestedRuntimeLoopExitReason, NestedRuntimeLoopStopHandle,
-        nested_runtime_loop_readiness_report, run_with_pump,
+        NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLiveUnmapRunSummary, NestedRuntimeLoop,
+        NestedRuntimeLoopBlocker, NestedRuntimeLoopConfig, NestedRuntimeLoopExitReason,
+        NestedRuntimeLoopStopHandle, ObservedNestedRuntimePumpReport,
+        nested_runtime_loop_readiness_report, run_with_observed_pump, run_with_pump,
     };
     use crate::{
         core::state::State,
@@ -1000,12 +1087,16 @@ mod tests {
                 .admission_surface_mapping(registration.adapter_surface_id),
             Some(1)
         );
-        assert!(
-            runtime_loop
-                .coordinator
-                .admission_toplevel_mapping(registration.adapter_toplevel_id)
-                .is_some()
-        );
+        let toplevel_mapping = runtime_loop
+            .coordinator
+            .admission_toplevel_mapping(registration.adapter_toplevel_id);
+        if report.live_unmap.ledger_unmaps > 0 {
+            assert_eq!(toplevel_mapping, None);
+            assert!(report.live_unmap.core_detaches > 0);
+            assert!(state.registry.records().iter().any(|record| !record.alive));
+        } else {
+            assert!(toplevel_mapping.is_some());
+        }
         assert_eq!(runtime_loop.coordinator.admission_pending_count(), 0);
         assert!(state.surfaces.get(1).is_some());
         assert!(state.validate().is_clean());
@@ -1049,15 +1140,132 @@ mod tests {
                 .admission_surface_mapping(registration.adapter_surface_id),
             Some(1)
         );
-        assert!(
-            runtime_loop
-                .coordinator
-                .admission_toplevel_mapping(registration.adapter_toplevel_id)
-                .is_some()
-        );
+        let toplevel_mapping = runtime_loop
+            .coordinator
+            .admission_toplevel_mapping(registration.adapter_toplevel_id);
+        if report.live_unmap.ledger_unmaps > 0 {
+            assert_eq!(toplevel_mapping, None);
+            assert!(report.live_unmap.core_detaches > 0);
+            assert!(state.registry.records().iter().any(|record| !record.alive));
+        } else {
+            assert!(toplevel_mapping.is_some());
+        }
         assert_eq!(runtime_loop.coordinator.admission_pending_count(), 0);
         assert!(state.surfaces.get(1).is_some());
         assert_eq!(state.surfaces.records().len(), 1);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：bounded loop 每轮同时 drain live admission 与 live unmap。
+    #[test]
+    fn nested_runtime_loop_drains_live_toplevel_unmap() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-live-unmap");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let registration = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            adapter_toplevel_identity_registration_report(display)
+                .expect("adapter identity registration proof 必须完成")
+        };
+        let mut state = State::new();
+
+        let report = runtime_loop.run_for_iterations(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 2,
+                pump_timeout: Duration::from_millis(1),
+                stop_when_idle: false,
+                continue_after_error: false,
+            },
+        );
+
+        assert_eq!(report.iterations_run, 2);
+        assert!(report.is_successful());
+        assert_eq!(report.live_admission.owner_invocations, 2);
+        assert_eq!(report.live_admission.enqueue_invocations, 1);
+        assert_eq!(report.live_admission.admissions_enqueued, 1);
+        assert_eq!(report.live_admission.drain_invocations, 2);
+        assert_eq!(report.live_admission.admissions_consumed, 1);
+        assert_eq!(report.live_admission.pending_admissions_after, 0);
+        assert_eq!(report.live_unmap.drain_invocations, 2);
+        assert_eq!(report.live_unmap.live_unmap_observations, 1);
+        assert_eq!(report.live_unmap.ledger_unmaps, 1);
+        assert_eq!(report.live_unmap.core_detaches, 1);
+        assert_eq!(report.live_unmap.surface_mappings_retained, 1);
+        assert_eq!(report.live_unmap.toplevel_mappings_removed, 1);
+        assert_eq!(
+            runtime_loop
+                .coordinator
+                .admission_surface_mapping(registration.adapter_surface_id),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_loop
+                .coordinator
+                .admission_toplevel_mapping(registration.adapter_toplevel_id),
+            None
+        );
+        assert!(state.surfaces.is_alive(1));
+        assert!(state.registry.records().iter().any(|record| !record.alive));
+        assert!(state.validate().is_clean());
+    }
+
+    /// stop_when_idle 不能忽略 live unmap drain 的进展。
+    #[test]
+    fn nested_runtime_loop_stop_when_idle_counts_live_unmap_progress() {
+        let (_event_loop, stop_handle) = isolated_stop_handle();
+        let mut state = State::new();
+        let mut calls = 0usize;
+
+        let report = run_with_observed_pump(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 3,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: true,
+                continue_after_error: false,
+            },
+            &stop_handle,
+            |_, _| {
+                calls = calls.saturating_add(1);
+                let live_unmap = if calls == 1 {
+                    NestedRuntimeLiveUnmapRunSummary {
+                        drain_invocations: 1,
+                        live_unmap_observations: 1,
+                        ledger_unmaps: 1,
+                        core_detaches: 1,
+                        surface_mappings_retained: 1,
+                        toplevel_mappings_removed: 1,
+                    }
+                } else {
+                    NestedRuntimeLiveUnmapRunSummary::default()
+                };
+
+                ObservedNestedRuntimePumpReport {
+                    lifecycle_report: synthetic_pump_report(Vec::new()),
+                    live_admission: NestedRuntimeLiveAdmissionRunSummary::default(),
+                    live_unmap,
+                }
+            },
+        );
+
+        assert_eq!(calls, 2);
+        assert_eq!(report.iterations_run, 2);
+        assert_eq!(report.exit_reason, NestedRuntimeLoopExitReason::Idle);
+        assert!(report.is_successful());
+        assert_eq!(report.live_admission.admissions_consumed, 0);
+        assert_eq!(report.live_unmap.live_unmap_observations, 1);
+        assert_eq!(report.live_unmap.ledger_unmaps, 1);
+        assert_eq!(report.live_unmap.core_detaches, 1);
         assert!(state.validate().is_clean());
     }
 
