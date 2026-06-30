@@ -485,10 +485,10 @@ pub use nested_runtime_coordinator::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use nested_runtime_loop::{
-    NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLoop, NestedRuntimeLoopBlocker,
-    NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
-    NestedRuntimeLoopReadinessReport, NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle,
-    NestedRuntimeWakeupReport, nested_runtime_loop_readiness_report,
+    NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLiveUnmapRunSummary, NestedRuntimeLoop,
+    NestedRuntimeLoopBlocker, NestedRuntimeLoopConfig, NestedRuntimeLoopError,
+    NestedRuntimeLoopExitReason, NestedRuntimeLoopReadinessReport, NestedRuntimeLoopReport,
+    NestedRuntimeLoopStopHandle, NestedRuntimeWakeupReport, nested_runtime_loop_readiness_report,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -946,6 +946,26 @@ mod nested_socket_probe_gate_tests {
             assert!(
                 source.contains(required),
                 "Phase 53J orchestrator idle/backlog proof 缺少证据项: {required}"
+            );
+        }
+    }
+
+    /// Phase 53M 必须证明 orchestrator lifecycle report 直接暴露 live unmap 汇总。
+    #[test]
+    fn runtime_orchestrator_live_unmap_report_source_exists() {
+        let source = include_str!("nested_runtime_orchestrator.rs");
+
+        for required in [
+            "NestedRuntimeLiveUnmapRunSummary",
+            "pub live_unmap: NestedRuntimeLiveUnmapRunSummary",
+            "live_unmap: loop_report.live_unmap",
+            "fn runtime_orchestrator_run_reports_live_toplevel_unmap()",
+            "assert_eq!(report.live_unmap, report.loop_report.live_unmap)",
+            "assert_eq!(report.live_unmap.ledger_unmaps, 1)",
+        ] {
+            assert!(
+                source.contains(required),
+                "Phase 53M orchestrator live unmap report proof 缺少证据项: {required}"
             );
         }
     }

@@ -7,9 +7,9 @@
 use crate::{
     core::state::State,
     smithay_backend::nested_runtime_loop::{
-        NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLoop, NestedRuntimeLoopConfig,
-        NestedRuntimeLoopError, NestedRuntimeLoopExitReason, NestedRuntimeLoopReport,
-        NestedRuntimeLoopStopHandle,
+        NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLiveUnmapRunSummary, NestedRuntimeLoop,
+        NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
+        NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle,
     },
 };
 
@@ -257,6 +257,9 @@ pub struct NestedRuntimeLifecycleReport {
     /// 本轮 live admission enqueue/drain 事实。
     pub live_admission: NestedRuntimeLiveAdmissionRunSummary,
 
+    /// 本轮 live toplevel unmap drain 事实。
+    pub live_unmap: NestedRuntimeLiveUnmapRunSummary,
+
     /// 完整原始 bounded-loop report。
     pub loop_report: NestedRuntimeLoopReport,
 
@@ -401,6 +404,7 @@ impl NestedRuntimeOrchestrator {
             final_state: self.state,
             validation_is_clean: loop_report.validation_is_clean,
             live_admission: loop_report.live_admission,
+            live_unmap: loop_report.live_unmap,
             loop_report,
             readiness: nested_runtime_orchestrator_readiness_report(),
         }
@@ -637,7 +641,8 @@ mod tests {
         assert_eq!(report.live_admission.admissions_consumed, 1);
         assert_eq!(report.live_admission.pending_admissions_after, 0);
         assert_eq!(report.live_admission, report.loop_report.live_admission);
-        assert_eq!(report.loop_report.live_unmap.drain_invocations, 1);
+        assert_eq!(report.live_unmap, report.loop_report.live_unmap);
+        assert_eq!(report.live_unmap.drain_invocations, 1);
         let runtime_loop = orchestrator
             .runtime_loop
             .as_ref()
@@ -648,14 +653,66 @@ mod tests {
         );
         let toplevel_mapping =
             runtime_loop.admission_toplevel_mapping(registration.adapter_toplevel_id);
-        if report.loop_report.live_unmap.ledger_unmaps > 0 {
+        if report.live_unmap.ledger_unmaps > 0 {
             assert_eq!(toplevel_mapping, None);
-            assert!(report.loop_report.live_unmap.core_detaches > 0);
+            assert!(report.live_unmap.core_detaches > 0);
         } else {
             assert!(toplevel_mapping.is_some());
         }
         assert_eq!(runtime_loop.admission_pending_count(), 0);
         assert!(state.surfaces.get(1).is_some());
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：orchestrator report 直接暴露 loop live unmap drain 事实。
+    #[test]
+    fn runtime_orchestrator_run_reports_live_toplevel_unmap() {
+        assert_runtime_dir();
+        let mut orchestrator =
+            NestedRuntimeOrchestrator::new(config("orchestrator-live-unmap-report", 2));
+        let mut state = State::new();
+        let _start_report = orchestrator.start().expect("Created 必须允许 start");
+        let registration = {
+            let display = orchestrator
+                .runtime_loop
+                .as_mut()
+                .expect("Started 必须持有 runtime loop")
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            adapter_toplevel_identity_registration_report(display)
+                .expect("adapter identity registration proof 必须完成")
+        };
+
+        let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
+
+        assert_eq!(report.pump_iterations, 2);
+        assert!(report.is_clean_shutdown());
+        assert_eq!(report.live_unmap, report.loop_report.live_unmap);
+        assert_eq!(report.live_unmap.drain_invocations, 2);
+        assert_eq!(report.live_unmap.live_unmap_observations, 1);
+        assert_eq!(report.live_unmap.ledger_unmaps, 1);
+        assert_eq!(report.live_unmap.core_detaches, 1);
+        assert_eq!(report.live_unmap.surface_mappings_retained, 1);
+        assert_eq!(report.live_unmap.toplevel_mappings_removed, 1);
+        let runtime_loop = orchestrator
+            .runtime_loop
+            .as_ref()
+            .expect("Stopped orchestrator 保留 runtime loop report owner");
+        assert_eq!(
+            runtime_loop.admission_surface_mapping(registration.adapter_surface_id),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_loop.admission_toplevel_mapping(registration.adapter_toplevel_id),
+            None
+        );
+        assert!(state.surfaces.is_alive(1));
+        assert!(state.registry.records().iter().any(|record| !record.alive));
         assert!(state.validate().is_clean());
     }
 
