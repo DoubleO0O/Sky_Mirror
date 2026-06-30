@@ -19,6 +19,7 @@ use crate::{
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
+        RuntimeSurfaceCommitDrainReport,
     },
 };
 
@@ -421,6 +422,81 @@ impl NestedRuntimeLiveUnmapRunSummary {
     }
 }
 
+/// 一次 bounded run 中由 `wl_surface.commit` backlog drain 产生的纯数据汇总。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NestedRuntimeSurfaceCommitRunSummary {
+    /// runtime commit drain seam 被调用的次数。
+    pub drain_invocations: usize,
+
+    /// 成功 drain 的 adapter-owned commit observation 数量。
+    pub commit_observations_drained: usize,
+
+    /// drain 到 structured adapter identity error 的数量。
+    pub commit_observation_errors: usize,
+
+    /// 按 FIFO drain 顺序保存的 commit sequence。
+    pub drained_commit_sequences: Vec<u64>,
+
+    /// 是否处理 buffer attach；本阶段固定保持 false。
+    pub buffer_attached: bool,
+
+    /// 是否处理 damage；本阶段固定保持 false。
+    pub damage_submitted: bool,
+
+    /// 是否处理/request frame callback；本阶段固定保持 false。
+    pub frame_callback_requested: bool,
+
+    /// 是否调用 render；本阶段固定保持 false。
+    pub render_invoked: bool,
+
+    /// 是否调用 input；本阶段固定保持 false。
+    pub input_invoked: bool,
+
+    /// 是否调用 admission ledger 或 core mutation；本阶段固定保持 false。
+    pub core_mutation_invoked: bool,
+}
+
+impl NestedRuntimeSurfaceCommitRunSummary {
+    fn from_surface_commit_drain(report: &RuntimeSurfaceCommitDrainReport) -> Self {
+        Self {
+            drain_invocations: usize::from(report.drain_invoked),
+            commit_observations_drained: usize::from(report.commit_observation_resolved),
+            commit_observation_errors: usize::from(report.commit_observation_failed),
+            drained_commit_sequences: report.commit_sequence.into_iter().collect(),
+            buffer_attached: report.buffer_attached,
+            damage_submitted: report.damage_submitted,
+            frame_callback_requested: report.frame_callback_requested,
+            render_invoked: report.render_invoked,
+            input_invoked: report.input_invoked,
+            core_mutation_invoked: report.core_mutation_invoked,
+        }
+    }
+
+    fn has_progress(&self) -> bool {
+        self.commit_observations_drained > 0 || self.commit_observation_errors > 0
+    }
+
+    fn observe(&mut self, delta: Self) {
+        self.drain_invocations = self
+            .drain_invocations
+            .saturating_add(delta.drain_invocations);
+        self.commit_observations_drained = self
+            .commit_observations_drained
+            .saturating_add(delta.commit_observations_drained);
+        self.commit_observation_errors = self
+            .commit_observation_errors
+            .saturating_add(delta.commit_observation_errors);
+        self.drained_commit_sequences
+            .extend(delta.drained_commit_sequences);
+        self.buffer_attached |= delta.buffer_attached;
+        self.damage_submitted |= delta.damage_submitted;
+        self.frame_callback_requested |= delta.frame_callback_requested;
+        self.render_invoked |= delta.render_invoked;
+        self.input_invoked |= delta.input_invoked;
+        self.core_mutation_invoked |= delta.core_mutation_invoked;
+    }
+}
+
 /// 一次 bounded loop run 的纯数据汇总报告。
 #[must_use = "loop report 包含退出原因、pump 错误和 validation，不能忽略"]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -460,6 +536,9 @@ pub struct NestedRuntimeLoopReport {
 
     /// 本轮 live toplevel unmap drain 事实。
     pub live_unmap: NestedRuntimeLiveUnmapRunSummary,
+
+    /// 本轮 `wl_surface.commit` backlog drain 事实。
+    pub surface_commit: NestedRuntimeSurfaceCommitRunSummary,
 }
 
 impl NestedRuntimeLoopReport {
@@ -536,6 +615,7 @@ struct ObservedNestedRuntimePumpReport {
     lifecycle_report: NestedRuntimePumpReport,
     live_admission: NestedRuntimeLiveAdmissionRunSummary,
     live_unmap: NestedRuntimeLiveUnmapRunSummary,
+    surface_commit: NestedRuntimeSurfaceCommitRunSummary,
 }
 
 impl ObservedNestedRuntimePumpReport {
@@ -544,6 +624,7 @@ impl ObservedNestedRuntimePumpReport {
             lifecycle_report,
             live_admission: NestedRuntimeLiveAdmissionRunSummary::default(),
             live_unmap: NestedRuntimeLiveUnmapRunSummary::default(),
+            surface_commit: NestedRuntimeSurfaceCommitRunSummary::default(),
         }
     }
 
@@ -557,6 +638,9 @@ impl ObservedNestedRuntimePumpReport {
                 },
             ),
             live_unmap: NestedRuntimeLiveUnmapRunSummary::from_live_admission_unmap(&report),
+            surface_commit: NestedRuntimeSurfaceCommitRunSummary::from_surface_commit_drain(
+                &report.surface_commit_drain_report,
+            ),
             lifecycle_report: report.lifecycle_report,
         }
     }
@@ -590,6 +674,7 @@ where
     let mut pump_reports = Vec::new();
     let mut live_admission = NestedRuntimeLiveAdmissionRunSummary::default();
     let mut live_unmap = NestedRuntimeLiveUnmapRunSummary::default();
+    let mut surface_commit = NestedRuntimeSurfaceCommitRunSummary::default();
     let mut connected_clients_registered = 0usize;
     let mut disconnected_clients_closed = 0usize;
     let mut dispatch_calls = 0usize;
@@ -615,8 +700,10 @@ where
             let iteration = pump_reports.len().saturating_add(1);
             let live_admission_has_progress = observed_report.live_admission.has_progress();
             let live_unmap_has_progress = observed_report.live_unmap.has_progress();
+            let surface_commit_has_progress = observed_report.surface_commit.has_progress();
             live_admission.observe(observed_report.live_admission);
             live_unmap.observe(observed_report.live_unmap);
+            surface_commit.observe(observed_report.surface_commit);
             let report = observed_report.lifecycle_report;
             let report_is_idle = pump_report_is_idle(&report);
             let report_has_errors = !report.errors.is_empty();
@@ -654,6 +741,7 @@ where
                 && report_is_idle
                 && !live_admission_has_progress
                 && !live_unmap_has_progress
+                && !surface_commit_has_progress
             {
                 exit_reason = NestedRuntimeLoopExitReason::Idle;
                 break;
@@ -684,6 +772,7 @@ where
         },
         live_admission,
         live_unmap,
+        surface_commit,
     }
 }
 
@@ -745,13 +834,15 @@ mod tests {
     use super::{
         NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLiveUnmapRunSummary, NestedRuntimeLoop,
         NestedRuntimeLoopBlocker, NestedRuntimeLoopConfig, NestedRuntimeLoopExitReason,
-        NestedRuntimeLoopStopHandle, ObservedNestedRuntimePumpReport,
-        nested_runtime_loop_readiness_report, run_with_observed_pump, run_with_pump,
+        NestedRuntimeLoopStopHandle, NestedRuntimeSurfaceCommitRunSummary,
+        ObservedNestedRuntimePumpReport, nested_runtime_loop_readiness_report,
+        run_with_observed_pump, run_with_pump,
     };
     use crate::{
         core::state::State,
         smithay_backend::{
             linux_toplevel_identity_registration::adapter_toplevel_identity_registration_report,
+            linux_wl_surface_identity::controlled_wl_surface_commit_observation_report,
             nested_runtime_coordinator::{
                 NestedRuntimePumpError, NestedRuntimePumpErrorKind, NestedRuntimePumpReport,
                 nested_runtime_coordinator_readiness_report,
@@ -1254,6 +1345,7 @@ mod tests {
                     lifecycle_report: synthetic_pump_report(Vec::new()),
                     live_admission: NestedRuntimeLiveAdmissionRunSummary::default(),
                     live_unmap,
+                    surface_commit: NestedRuntimeSurfaceCommitRunSummary::default(),
                 }
             },
         );
@@ -1330,6 +1422,65 @@ mod tests {
         assert!(state.surfaces.get(1).is_some());
         assert!(state.surfaces.get(2).is_some());
         assert_eq!(state.surfaces.records().len(), 2);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：bounded loop drains pure-data `wl_surface.commit` backlog FIFO.
+    #[test]
+    fn nested_runtime_loop_drains_wl_surface_commit_backlog_fifo_without_render() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-surface-commit-backlog");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let (first_commit, second_commit) = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("首个 controlled commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 controlled commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let mut state = State::new();
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = runtime_loop.run_for_iterations(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 3,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: true,
+                continue_after_error: false,
+            },
+        );
+
+        assert_eq!(report.iterations_run, 3);
+        assert_eq!(report.exit_reason, NestedRuntimeLoopExitReason::Idle);
+        assert!(report.is_successful());
+        assert_eq!(report.surface_commit.drain_invocations, 3);
+        assert_eq!(report.surface_commit.commit_observations_drained, 2);
+        assert_eq!(report.surface_commit.commit_observation_errors, 0);
+        assert_eq!(
+            report.surface_commit.drained_commit_sequences,
+            vec![first_commit.commit_sequence, second_commit.commit_sequence]
+        );
+        assert_eq!(report.surface_commit.drained_commit_sequences, vec![1, 2]);
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
+        assert_eq!(report.live_admission.admissions_consumed, 0);
+        assert_eq!(report.live_unmap.core_detaches, 0);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
         assert!(state.validate().is_clean());
     }
 }

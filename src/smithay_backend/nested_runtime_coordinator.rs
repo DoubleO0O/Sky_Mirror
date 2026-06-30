@@ -20,6 +20,9 @@ use crate::{
             RuntimeToplevelAdmissionEnqueueReport, RuntimeToplevelAdmissionQueueOwner,
             RuntimeToplevelUnmapDrainReport,
         },
+        linux_wl_surface_identity::{
+            AdapterSurfaceCommitObservation, SurfaceIdentityError, SurfaceIdentityKey,
+        },
         real_accept_flow::NestedRealAcceptFlow,
         surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId},
     },
@@ -222,7 +225,92 @@ pub struct NestedRuntimeLiveUnmapPumpReport {
     pub unmap_drain_report: RuntimeToplevelUnmapDrainReport,
 }
 
-/// 一次 lifecycle pump 后同时追加 live admission drain 与 live unmap drain 的组合报告。
+/// 一次 runtime pump 后追加 `wl_surface.commit` pure-data backlog drain 的报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitDrainReport {
+    /// runtime commit drain seam 是否被调用。
+    pub drain_invoked: bool,
+
+    /// display owner 是否交出了一条 pending commit observation。
+    pub commit_observation_present: bool,
+
+    /// commit observation 是否成功解析为 adapter-owned surface identity。
+    pub commit_observation_resolved: bool,
+
+    /// commit observation 是否记录为 adapter identity error。
+    pub commit_observation_failed: bool,
+
+    /// 成功解析出的 adapter-only surface identity；不是 core `SurfaceId`。
+    pub adapter_surface_id: Option<AdapterSurfaceId>,
+
+    /// 成功解析出的 adapter-only surface identity key。
+    pub surface_identity_key: Option<SurfaceIdentityKey>,
+
+    /// 成功解析出的 FIFO commit sequence。
+    pub commit_sequence: Option<u64>,
+
+    /// 失败时保存 adapter identity error；只用于诊断。
+    pub surface_identity_error: Option<SurfaceIdentityError>,
+
+    /// 是否处理 buffer attach；本阶段固定为 false。
+    pub buffer_attached: bool,
+
+    /// 是否处理 damage；本阶段固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否处理/request frame callback；本阶段固定为 false。
+    pub frame_callback_requested: bool,
+
+    /// 是否调用 render；本阶段固定为 false。
+    pub render_invoked: bool,
+
+    /// 是否调用 input；本阶段固定为 false。
+    pub input_invoked: bool,
+
+    /// 是否调用 admission ledger 或 core mutation；本阶段固定为 false。
+    pub core_mutation_invoked: bool,
+}
+
+impl RuntimeSurfaceCommitDrainReport {
+    fn from_observation(
+        observation: Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>>,
+    ) -> Self {
+        let mut report = Self {
+            drain_invoked: true,
+            commit_observation_present: observation.is_some(),
+            commit_observation_resolved: false,
+            commit_observation_failed: false,
+            adapter_surface_id: None,
+            surface_identity_key: None,
+            commit_sequence: None,
+            surface_identity_error: None,
+            buffer_attached: false,
+            damage_submitted: false,
+            frame_callback_requested: false,
+            render_invoked: false,
+            input_invoked: false,
+            core_mutation_invoked: false,
+        };
+
+        match observation {
+            Some(Ok(commit)) => {
+                report.commit_observation_resolved = true;
+                report.adapter_surface_id = Some(commit.adapter_surface_id);
+                report.surface_identity_key = Some(commit.surface_identity_key);
+                report.commit_sequence = Some(commit.commit_sequence);
+            }
+            Some(Err(error)) => {
+                report.commit_observation_failed = true;
+                report.surface_identity_error = Some(error);
+            }
+            None => {}
+        }
+
+        report
+    }
+}
+
+/// 一次 lifecycle pump 后同时追加 live admission、live unmap 与 surface commit drain 的组合报告。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// 既有 accept/connected/dispatch/disconnected lifecycle pump report。
@@ -236,6 +324,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// live destroyed observation 经 runtime owner 调用 ledger unmap 的 report。
     pub unmap_drain_report: RuntimeToplevelUnmapDrainReport,
+
+    /// `wl_surface.commit` observation backlog 的 pure-data drain report。
+    pub surface_commit_drain_report: RuntimeSurfaceCommitDrainReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -411,11 +502,11 @@ impl NestedRuntimeCoordinator {
         }
     }
 
-    /// 执行一次 lifecycle pump，然后依次 drain live admission 与 live toplevel unmap。
+    /// 执行一次 lifecycle pump，然后依次 drain live admission、live toplevel unmap 与 commit backlog。
     ///
     /// 该组合 seam 让 bounded loop 每轮只执行一次 lifecycle pump，同时把 callback
-    /// admission 与 destroyed unmap 都交给 runtime owners。handler/display 仍只提供
-    /// 纯数据 observation，不持有 `State` 或 admission ledger。
+    /// admission、destroyed unmap 与 `wl_surface.commit` observation 交给 runtime owners。
+    /// handler/display 仍只提供纯数据 observation，不持有 `State` 或 admission ledger。
     pub fn pump_once_with_live_toplevel_admission_and_unmap_drain(
         &mut self,
         state: &mut State,
@@ -433,12 +524,16 @@ impl NestedRuntimeCoordinator {
         let unmap_drain_report = self
             .admission_queue_owner
             .drain_live_toplevel_unmap_once(state, unmap_observation);
+        let surface_commit_drain_report = RuntimeSurfaceCommitDrainReport::from_observation(
+            self.flow.take_next_wl_surface_commit_observation(),
+        );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
             live_admission_owner_report,
             admission_drain_report,
             unmap_drain_report,
+            surface_commit_drain_report,
         }
     }
 
