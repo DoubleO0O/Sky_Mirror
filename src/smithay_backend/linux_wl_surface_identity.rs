@@ -793,6 +793,16 @@ pub fn controlled_wl_surface_frame_callback_commit_observation_report(
     controlled_wl_surface_commit_observation_report_with_options(server, false, false, true)
 }
 
+/// 证明 controlled client 可在同一次 `commit` 中携带 buffer、damage 与 frame evidence。
+///
+/// 本 proof 只产生 adapter-owned pure-data readiness intent 输入；不 import buffer、不创建
+/// texture、不调用 renderer、不发送 frame callback done、不接 input/core。
+pub fn controlled_wl_surface_render_dirty_readiness_commit_observation_report(
+    server: &mut SmithayWaylandDisplayProbe,
+) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
+    controlled_wl_surface_commit_observation_report_with_options(server, true, true, true)
+}
+
 fn controlled_wl_surface_commit_observation_report_with_options(
     server: &mut SmithayWaylandDisplayProbe,
     attach_null_buffer: bool,
