@@ -3148,6 +3148,102 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54E 必须把 wl_surface damage / damage_buffer evidence 保留为纯数据。
+    #[test]
+    fn wl_surface_commit_damage_observation_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let surface_identity =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_wl_surface_identity.rs"))
+                .expect("Phase 54E controlled surface commit module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54E coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54E loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54E orchestrator source 必须存在");
+
+        for required in [
+            "pub damage_observed: bool",
+            "pub surface_damage_rects: usize",
+            "pub buffer_damage_rects: usize",
+            "Damage::Surface(_) =>",
+            "Damage::Buffer(_) =>",
+            "controlled_wl_surface_damage_commit_observation_report",
+            "surface.damage_buffer(0, 0, 32, 24)",
+            "assert!(report.damage_observed)",
+            "assert_eq!(report.surface_damage_rects, 0)",
+            "assert_eq!(report.buffer_damage_rects, 1)",
+            "assert_eq!(first_pending.buffer_damage_rects, 1)",
+            "assert_eq!(second_pending.buffer_damage_rects, 0)",
+        ] {
+            assert!(
+                surface_identity.contains(required),
+                "Phase 54E commit damage observation proof 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "report.damage_observed = commit.damage_observed",
+            "report.surface_damage_rects = commit.surface_damage_rects",
+            "report.buffer_damage_rects = commit.buffer_damage_rects",
+            "damage_submitted: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54E coordinator damage evidence drain 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub damage_observations: usize",
+            "pub surface_damage_rects: usize",
+            "pub buffer_damage_rects: usize",
+            "damage_observations: usize::from(report.damage_observed)",
+            "surface_damage_rects: report.surface_damage_rects",
+            "buffer_damage_rects: report.buffer_damage_rects",
+            "assert_eq!(report.surface_commit.damage_observations, 1)",
+            "assert_eq!(report.surface_commit.buffer_damage_rects, 1)",
+            "assert!(!report.surface_commit.damage_submitted)",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54E loop damage evidence report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "assert_eq!(report.surface_commit.damage_observations, 1)",
+            "assert_eq!(report.surface_commit.buffer_damage_rects, 1)",
+            "assert!(!report.surface_commit.damage_submitted)",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54E orchestrator damage evidence report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "DamageHandler for LinuxXdgShellStateSkeleton",
+            "damage_submitted: true",
+            "render_invoked: true",
+            "input_invoked: true",
+            "frame_callback_requested: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !surface_identity.contains(forbidden)
+                    && !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54E damage observation seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

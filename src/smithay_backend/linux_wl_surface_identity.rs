@@ -15,7 +15,7 @@ use std::{
 
 use smithay::{
     reexports::wayland_server::{Resource, backend::ObjectId},
-    wayland::compositor::{self, BufferAssignment, SurfaceAttributes},
+    wayland::compositor::{self, BufferAssignment, Damage, SurfaceAttributes},
 };
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
@@ -73,6 +73,12 @@ pub struct AdapterSurfaceCommitObservation {
     pub buffer_removed: bool,
     /// 本次 commit 是否已可作为 renderable buffer；Phase 54D 固定为 false。
     pub renderable_buffer: bool,
+    /// 本次 commit 是否携带 damage / damage_buffer evidence。
+    pub damage_observed: bool,
+    /// 本次 commit 中 surface-coordinate damage rectangle 数量。
+    pub surface_damage_rects: usize,
+    /// 本次 commit 中 buffer-coordinate damage rectangle 数量。
+    pub buffer_damage_rects: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -81,6 +87,13 @@ struct AdapterSurfaceCommitBufferEvidence {
     buffer_present: bool,
     buffer_removed: bool,
     renderable_buffer: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct AdapterSurfaceCommitDamageEvidence {
+    damage_observed: bool,
+    surface_damage_rects: usize,
+    buffer_damage_rects: usize,
 }
 
 /// 从 server object 建立 adapter identity 时的结构化错误。
@@ -177,6 +190,7 @@ impl LinuxWlSurfaceIdentityRegistry {
             return Err(error);
         };
         let buffer_evidence = observe_surface_commit_buffer_evidence(surface);
+        let damage_evidence = observe_surface_commit_damage_evidence(surface);
         let observation = AdapterSurfaceCommitObservation {
             adapter_surface_id: mapping.adapter_surface_id,
             surface_identity_key: mapping.surface_identity_key,
@@ -185,6 +199,9 @@ impl LinuxWlSurfaceIdentityRegistry {
             buffer_present: buffer_evidence.buffer_present,
             buffer_removed: buffer_evidence.buffer_removed,
             renderable_buffer: buffer_evidence.renderable_buffer,
+            damage_observed: damage_evidence.damage_observed,
+            surface_damage_rects: damage_evidence.surface_damage_rects,
+            buffer_damage_rects: damage_evidence.buffer_damage_rects,
         };
         let result = Ok(observation);
         self.last_commit_observation = Some(result);
@@ -239,6 +256,28 @@ fn observe_surface_commit_buffer_evidence(
             },
             None => AdapterSurfaceCommitBufferEvidence::default(),
         }
+    })
+}
+
+fn observe_surface_commit_damage_evidence(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> AdapterSurfaceCommitDamageEvidence {
+    compositor::with_states(surface, |states| {
+        let mut guard = states.cached_state.get::<SurfaceAttributes>();
+        let mut evidence = AdapterSurfaceCommitDamageEvidence::default();
+        for damage in &guard.current().damage {
+            match damage {
+                Damage::Surface(_) => {
+                    evidence.surface_damage_rects = evidence.surface_damage_rects.saturating_add(1);
+                }
+                Damage::Buffer(_) => {
+                    evidence.buffer_damage_rects = evidence.buffer_damage_rects.saturating_add(1);
+                }
+            }
+        }
+        evidence.damage_observed =
+            evidence.surface_damage_rects > 0 || evidence.buffer_damage_rects > 0;
+        evidence
     })
 }
 
@@ -501,6 +540,12 @@ pub struct ControlledWlSurfaceCommitReport {
     pub buffer_removed: bool,
     /// 本次 commit 是否已可作为 renderable buffer；Phase 54D 固定为 false。
     pub renderable_buffer: bool,
+    /// 本次 commit 是否携带 damage / damage_buffer evidence。
+    pub damage_observed: bool,
+    /// 本次 commit 中 surface-coordinate damage rectangle 数量。
+    pub surface_damage_rects: usize,
+    /// 本次 commit 中 buffer-coordinate damage rectangle 数量。
+    pub buffer_damage_rects: usize,
     /// 是否 attach 了 buffer；本阶段固定为 false。
     pub buffer_attached: bool,
     /// 是否提交 damage；本阶段固定为 false。
@@ -681,7 +726,7 @@ pub fn controlled_wl_surface_creation_report(
 pub fn controlled_wl_surface_commit_observation_report(
     server: &mut SmithayWaylandDisplayProbe,
 ) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
-    controlled_wl_surface_commit_observation_report_with_attach(server, false)
+    controlled_wl_surface_commit_observation_report_with_attach(server, false, false)
 }
 
 /// 证明 controlled client 的 `attach(NULL) + commit` 只产生纯数据 buffer removal evidence。
@@ -691,12 +736,23 @@ pub fn controlled_wl_surface_commit_observation_report(
 pub fn controlled_wl_surface_null_attach_commit_observation_report(
     server: &mut SmithayWaylandDisplayProbe,
 ) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
-    controlled_wl_surface_commit_observation_report_with_attach(server, true)
+    controlled_wl_surface_commit_observation_report_with_attach(server, true, false)
+}
+
+/// 证明 controlled client 的 `damage_buffer + commit` 只产生纯数据 damage evidence。
+///
+/// damage observation 不是 render damage submission；本 proof 不 import buffer、不发 frame
+/// callback、不调用 renderer/input/core，也不把 surface 标记为 renderable。
+pub fn controlled_wl_surface_damage_commit_observation_report(
+    server: &mut SmithayWaylandDisplayProbe,
+) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
+    controlled_wl_surface_commit_observation_report_with_attach(server, false, true)
 }
 
 fn controlled_wl_surface_commit_observation_report_with_attach(
     server: &mut SmithayWaylandDisplayProbe,
     attach_null_buffer: bool,
+    damage_buffer: bool,
 ) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
     if !server.is_wl_compositor_global_initialized() {
         return Err(ControlledWlSurfaceCommitError::Blocked(
@@ -728,7 +784,8 @@ fn controlled_wl_surface_commit_observation_report_with_attach(
 
     let (result_sender, result_receiver) = mpsc::channel();
     let client_thread = thread::spawn(move || {
-        let result = run_controlled_surface_commit_client(client_stream, attach_null_buffer);
+        let result =
+            run_controlled_surface_commit_client(client_stream, attach_null_buffer, damage_buffer);
         let _ = result_sender.send(result);
     });
 
@@ -808,6 +865,9 @@ fn controlled_wl_surface_commit_observation_report_with_attach(
         buffer_present: commit.buffer_present,
         buffer_removed: commit.buffer_removed,
         renderable_buffer: commit.renderable_buffer,
+        damage_observed: commit.damage_observed,
+        surface_damage_rects: commit.surface_damage_rects,
+        buffer_damage_rects: commit.buffer_damage_rects,
         buffer_attached: false,
         damage_submitted: false,
         frame_callback_requested: false,
@@ -866,6 +926,7 @@ fn run_controlled_surface_client(
 fn run_controlled_surface_commit_client(
     client_stream: UnixStream,
     attach_null_buffer: bool,
+    damage_buffer: bool,
 ) -> Result<(), ControlledWlSurfaceCommitError> {
     let connection = Connection::from_socket(client_stream).map_err(|_| {
         ControlledWlSurfaceCommitError::ClientProtocol {
@@ -890,6 +951,9 @@ fn run_controlled_surface_commit_client(
     if attach_null_buffer {
         surface.attach(None, 0, 0);
     }
+    if damage_buffer {
+        surface.damage_buffer(0, 0, 32, 24);
+    }
     surface.commit();
     let mut client_state = ControlledSurfaceClientState;
     event_queue.roundtrip(&mut client_state).map_err(|_| {
@@ -907,6 +971,7 @@ mod tests {
         ControlledWlSurfaceCommitBlocker, ControlledWlSurfaceCommitError,
         ControlledWlSurfaceCreationBlocker, ControlledWlSurfaceCreationError,
         controlled_wl_surface_commit_observation_report, controlled_wl_surface_creation_report,
+        controlled_wl_surface_damage_commit_observation_report,
         controlled_wl_surface_null_attach_commit_observation_report,
     };
     use crate::smithay_backend::wayland_display::SmithayWaylandDisplayProbe;
@@ -1036,6 +1101,9 @@ mod tests {
         assert!(!report.buffer_present);
         assert!(!report.buffer_removed);
         assert!(!report.renderable_buffer);
+        assert!(!report.damage_observed);
+        assert_eq!(report.surface_damage_rects, 0);
+        assert_eq!(report.buffer_damage_rects, 0);
         assert!(!report.buffer_attached);
         assert!(!report.damage_submitted);
         assert!(!report.frame_callback_requested);
@@ -1071,6 +1139,37 @@ mod tests {
         assert!(!report.buffer_present);
         assert!(report.buffer_removed);
         assert!(!report.renderable_buffer);
+        assert!(!report.damage_observed);
+        assert_eq!(report.surface_damage_rects, 0);
+        assert_eq!(report.buffer_damage_rects, 0);
+        assert!(!report.buffer_attached);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_requested);
+        assert!(!report.render_support);
+        assert!(!report.input_support);
+        assert!(!report.real_compositor_runtime_available);
+        assert!(report.blockers.is_empty());
+    }
+
+    #[test]
+    fn controlled_wl_surface_damage_commit_records_buffer_damage_evidence() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 compositor owner 必须初始化");
+
+        let report = controlled_wl_surface_damage_commit_observation_report(&mut server)
+            .expect("controlled damage commit proof 必须完成");
+
+        assert!(report.server_surface_commit_observed);
+        assert!(report.adapter_surface_commit_observation_available);
+        assert!(!report.buffer_attach_observed);
+        assert!(!report.buffer_present);
+        assert!(!report.buffer_removed);
+        assert!(!report.renderable_buffer);
+        assert!(report.damage_observed);
+        assert_eq!(report.surface_damage_rects, 0);
+        assert_eq!(report.buffer_damage_rects, 1);
         assert!(!report.buffer_attached);
         assert!(!report.damage_submitted);
         assert!(!report.frame_callback_requested);
@@ -1108,6 +1207,9 @@ mod tests {
             first.surface_identity_key
         );
         assert_eq!(first_pending.buffer_removed, false);
+        assert!(!first_pending.damage_observed);
+        assert_eq!(first_pending.surface_damage_rects, 0);
+        assert_eq!(first_pending.buffer_damage_rects, 0);
         assert_eq!(second_pending.commit_sequence, 2);
         assert_eq!(second_pending.adapter_surface_id, second.adapter_surface_id);
         assert_eq!(
@@ -1115,6 +1217,9 @@ mod tests {
             second.surface_identity_key
         );
         assert_eq!(second_pending.buffer_removed, false);
+        assert!(!second_pending.damage_observed);
+        assert_eq!(second_pending.surface_damage_rects, 0);
+        assert_eq!(second_pending.buffer_damage_rects, 0);
         assert_ne!(
             first_pending.adapter_surface_id,
             second_pending.adapter_surface_id
@@ -1148,10 +1253,50 @@ mod tests {
         assert!(!first_pending.buffer_present);
         assert_eq!(first_pending.buffer_removed, true);
         assert!(!first_pending.renderable_buffer);
+        assert!(!first_pending.damage_observed);
+        assert_eq!(first_pending.surface_damage_rects, 0);
+        assert_eq!(first_pending.buffer_damage_rects, 0);
         assert_eq!(second_pending.commit_sequence, second.commit_sequence);
         assert!(!second_pending.buffer_attach_observed);
         assert!(!second_pending.buffer_present);
         assert_eq!(second_pending.buffer_removed, false);
+        assert!(!second_pending.renderable_buffer);
+        assert!(!second_pending.damage_observed);
+        assert_eq!(second_pending.surface_damage_rects, 0);
+        assert_eq!(second_pending.buffer_damage_rects, 0);
+        assert_eq!(server.take_next_wl_surface_commit_observation(), None);
+    }
+
+    #[test]
+    fn controlled_wl_surface_commit_damage_evidence_is_fifo_not_latest_snapshot() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 compositor owner 必须初始化");
+
+        let first = controlled_wl_surface_damage_commit_observation_report(&mut server)
+            .expect("首个 damage commit proof 必须完成");
+        let second = controlled_wl_surface_commit_observation_report(&mut server)
+            .expect("第二个 plain commit proof 必须完成");
+
+        let first_pending = server
+            .take_next_wl_surface_commit_observation()
+            .expect("首个 commit observation 必须进入 FIFO")
+            .expect("首个 commit observation 必须成功解析");
+        let second_pending = server
+            .take_next_wl_surface_commit_observation()
+            .expect("第二个 commit observation 必须进入 FIFO")
+            .expect("第二个 commit observation 必须成功解析");
+
+        assert_eq!(first_pending.commit_sequence, first.commit_sequence);
+        assert!(first_pending.damage_observed);
+        assert_eq!(first_pending.surface_damage_rects, 0);
+        assert_eq!(first_pending.buffer_damage_rects, 1);
+        assert!(!first_pending.renderable_buffer);
+        assert_eq!(second_pending.commit_sequence, second.commit_sequence);
+        assert!(!second_pending.damage_observed);
+        assert_eq!(second_pending.surface_damage_rects, 0);
+        assert_eq!(second_pending.buffer_damage_rects, 0);
         assert!(!second_pending.renderable_buffer);
         assert_eq!(server.take_next_wl_surface_commit_observation(), None);
     }
