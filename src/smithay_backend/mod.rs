@@ -2873,6 +2873,8 @@ mod nested_socket_probe_gate_tests {
             .filter(|line| !line.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
+        let code_without_phase54f_frame_proof =
+            code.replace("let _callback = surface.frame(&queue_handle, ());", "");
 
         for required in [
             "AdapterSurfaceCommitObservation",
@@ -2920,7 +2922,7 @@ mod nested_socket_probe_gate_tests {
             ["input", "_support: true"].concat(),
         ] {
             assert!(
-                !code.contains(&forbidden),
+                !code_without_phase54f_frame_proof.contains(&forbidden),
                 "Phase 54A controlled commit proof 包含禁止 token: {forbidden}"
             );
         }
@@ -3240,6 +3242,97 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 54E damage observation seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 54F 必须把 wl_surface frame callback request 保留为纯数据 observation。
+    #[test]
+    fn wl_surface_commit_frame_callback_observation_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let surface_identity =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_wl_surface_identity.rs"))
+                .expect("Phase 54F controlled surface commit module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54F coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54F loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54F orchestrator source 必须存在");
+
+        for required in [
+            "pub frame_callback_observed: bool",
+            "pub frame_callback_count: usize",
+            "guard.current().frame_callbacks.len()",
+            "controlled_wl_surface_frame_callback_commit_observation_report",
+            "let _callback = surface.frame(&queue_handle, ())",
+            "assert!(report.frame_callback_observed)",
+            "assert_eq!(report.frame_callback_count, 1)",
+            "assert_eq!(first_pending.frame_callback_count, 1)",
+            "assert_eq!(second_pending.frame_callback_count, 0)",
+            "assert!(!report.frame_callback_requested)",
+        ] {
+            assert!(
+                surface_identity.contains(required),
+                "Phase 54F commit frame callback observation proof 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "report.frame_callback_observed = commit.frame_callback_observed",
+            "report.frame_callback_count = commit.frame_callback_count",
+            "frame_callback_requested: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54F coordinator frame callback evidence drain 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub frame_callback_observations: usize",
+            "pub frame_callback_count: usize",
+            "frame_callback_observations: usize::from(report.frame_callback_observed)",
+            "frame_callback_count: report.frame_callback_count",
+            "assert_eq!(report.surface_commit.frame_callback_observations, 1)",
+            "assert_eq!(report.surface_commit.frame_callback_count, 1)",
+            "assert!(!report.surface_commit.frame_callback_requested)",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54F loop frame callback evidence report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "assert_eq!(report.surface_commit.frame_callback_observations, 1)",
+            "assert_eq!(report.surface_commit.frame_callback_count, 1)",
+            "assert!(!report.surface_commit.frame_callback_requested)",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54F orchestrator frame callback evidence report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            ".done(",
+            "frame_callback_requested: true",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !surface_identity.contains(forbidden)
+                    && !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54F frame callback observation seam 包含禁止 token: {forbidden}"
             );
         }
     }
