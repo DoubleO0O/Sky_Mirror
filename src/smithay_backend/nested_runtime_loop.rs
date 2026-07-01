@@ -437,6 +437,18 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// 按 FIFO drain 顺序保存的 commit sequence。
     pub drained_commit_sequences: Vec<u64>,
 
+    /// 成功 drain 的 commit 中携带 buffer attach/remove evidence 的数量。
+    pub buffer_attach_observations: usize,
+
+    /// 成功 drain 的 commit 中携带真实 buffer presence evidence 的数量。
+    pub buffer_presence_observations: usize,
+
+    /// 成功 drain 的 commit 中携带 `attach(NULL)` / buffer removal evidence 的数量。
+    pub buffer_removed_observations: usize,
+
+    /// 成功 drain 的 commit 中已可作为 renderable buffer 的数量；Phase 54D 保持 0。
+    pub renderable_buffer_observations: usize,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -463,6 +475,10 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             commit_observations_drained: usize::from(report.commit_observation_resolved),
             commit_observation_errors: usize::from(report.commit_observation_failed),
             drained_commit_sequences: report.commit_sequence.into_iter().collect(),
+            buffer_attach_observations: usize::from(report.buffer_attach_observed),
+            buffer_presence_observations: usize::from(report.buffer_present),
+            buffer_removed_observations: usize::from(report.buffer_removed),
+            renderable_buffer_observations: usize::from(report.renderable_buffer),
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -488,6 +504,18 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             .saturating_add(delta.commit_observation_errors);
         self.drained_commit_sequences
             .extend(delta.drained_commit_sequences);
+        self.buffer_attach_observations = self
+            .buffer_attach_observations
+            .saturating_add(delta.buffer_attach_observations);
+        self.buffer_presence_observations = self
+            .buffer_presence_observations
+            .saturating_add(delta.buffer_presence_observations);
+        self.buffer_removed_observations = self
+            .buffer_removed_observations
+            .saturating_add(delta.buffer_removed_observations);
+        self.renderable_buffer_observations = self
+            .renderable_buffer_observations
+            .saturating_add(delta.renderable_buffer_observations);
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -842,7 +870,10 @@ mod tests {
         core::state::State,
         smithay_backend::{
             linux_toplevel_identity_registration::adapter_toplevel_identity_registration_report,
-            linux_wl_surface_identity::controlled_wl_surface_commit_observation_report,
+            linux_wl_surface_identity::{
+                controlled_wl_surface_commit_observation_report,
+                controlled_wl_surface_null_attach_commit_observation_report,
+            },
             nested_runtime_coordinator::{
                 NestedRuntimePumpError, NestedRuntimePumpErrorKind, NestedRuntimePumpReport,
                 nested_runtime_coordinator_readiness_report,
@@ -1471,6 +1502,67 @@ mod tests {
             vec![first_commit.commit_sequence, second_commit.commit_sequence]
         );
         assert_eq!(report.surface_commit.drained_commit_sequences, vec![1, 2]);
+        assert_eq!(report.surface_commit.buffer_attach_observations, 0);
+        assert_eq!(report.surface_commit.buffer_presence_observations, 0);
+        assert_eq!(report.surface_commit.buffer_removed_observations, 0);
+        assert_eq!(report.surface_commit.renderable_buffer_observations, 0);
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
+        assert_eq!(report.live_admission.admissions_consumed, 0);
+        assert_eq!(report.live_unmap.core_detaches, 0);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：runtime drain report 保留 commit buffer evidence 纯数据。
+    #[test]
+    fn nested_runtime_loop_drains_wl_surface_commit_buffer_evidence_without_render() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-surface-commit-buffer-evidence");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let (first_commit, second_commit) = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit = controlled_wl_surface_null_attach_commit_observation_report(display)
+                .expect("首个 null attach commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 plain commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let mut state = State::new();
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = runtime_loop.run_for_iterations(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 3,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: true,
+                continue_after_error: false,
+            },
+        );
+
+        assert!(report.is_successful());
+        assert_eq!(
+            report.surface_commit.drained_commit_sequences,
+            vec![first_commit.commit_sequence, second_commit.commit_sequence]
+        );
+        assert_eq!(report.surface_commit.buffer_attach_observations, 1);
+        assert_eq!(report.surface_commit.buffer_presence_observations, 0);
+        assert_eq!(report.surface_commit.buffer_removed_observations, 1);
+        assert_eq!(report.surface_commit.renderable_buffer_observations, 0);
         assert!(!report.surface_commit.buffer_attached);
         assert!(!report.surface_commit.damage_submitted);
         assert!(!report.surface_commit.frame_callback_requested);

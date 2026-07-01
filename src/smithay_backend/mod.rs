@@ -3050,6 +3050,104 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54D 必须把 wl_surface commit 的 buffer presence / attach evidence 保留为纯数据。
+    #[test]
+    fn wl_surface_commit_buffer_presence_observation_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let surface_identity =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_wl_surface_identity.rs"))
+                .expect("Phase 54D controlled surface commit module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54D coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54D loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54D orchestrator source 必须存在");
+
+        for required in [
+            "pub buffer_attach_observed: bool",
+            "pub buffer_present: bool",
+            "pub buffer_removed: bool",
+            "pub renderable_buffer: bool",
+            "Some(BufferAssignment::NewBuffer(_)) =>",
+            "Some(BufferAssignment::Removed) =>",
+            "controlled_wl_surface_null_attach_commit_observation_report",
+            "surface.attach(None, 0, 0)",
+            "assert!(report.buffer_attach_observed)",
+            "assert!(!report.buffer_present)",
+            "assert!(report.buffer_removed)",
+            "assert!(!report.renderable_buffer)",
+            "assert_eq!(first_pending.buffer_removed, true)",
+            "assert_eq!(second_pending.buffer_removed, false)",
+        ] {
+            assert!(
+                surface_identity.contains(required),
+                "Phase 54D commit buffer presence proof 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "report.buffer_attach_observed = commit.buffer_attach_observed",
+            "report.buffer_present = commit.buffer_present",
+            "report.buffer_removed = commit.buffer_removed",
+            "report.renderable_buffer = commit.renderable_buffer",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54D coordinator buffer evidence drain 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub buffer_attach_observations: usize",
+            "pub buffer_presence_observations: usize",
+            "pub buffer_removed_observations: usize",
+            "pub renderable_buffer_observations: usize",
+            "buffer_attach_observations: usize::from(report.buffer_attach_observed)",
+            "buffer_presence_observations: usize::from(report.buffer_present)",
+            "assert_eq!(report.surface_commit.buffer_attach_observations, 1)",
+            "assert_eq!(report.surface_commit.buffer_presence_observations, 0)",
+            "assert_eq!(report.surface_commit.buffer_removed_observations, 1)",
+            "assert_eq!(report.surface_commit.renderable_buffer_observations, 0)",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54D loop buffer evidence report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "assert_eq!(report.surface_commit.buffer_attach_observations, 1)",
+            "assert_eq!(report.surface_commit.renderable_buffer_observations, 0)",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54D orchestrator buffer evidence report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "BufferHandler for LinuxXdgShellStateSkeleton",
+            "renderable_buffer: true",
+            "render_invoked: true",
+            "input_invoked: true",
+            "frame_callback_requested: true",
+            "damage_submitted: true",
+        ] {
+            assert!(
+                !surface_identity.contains(forbidden)
+                    && !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54D buffer presence seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

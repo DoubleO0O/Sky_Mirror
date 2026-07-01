@@ -252,6 +252,18 @@ pub struct RuntimeSurfaceCommitDrainReport {
     /// 失败时保存 adapter identity error；只用于诊断。
     pub surface_identity_error: Option<SurfaceIdentityError>,
 
+    /// 本次 commit 是否携带 buffer attach/remove evidence；只保留纯数据。
+    pub buffer_attach_observed: bool,
+
+    /// 本次 commit 是否携带真实 buffer presence evidence；不代表可 render。
+    pub buffer_present: bool,
+
+    /// 本次 commit 是否携带 `attach(NULL)` / buffer removal evidence。
+    pub buffer_removed: bool,
+
+    /// 本次 commit 是否已可作为 renderable buffer；Phase 54D 固定为 false。
+    pub renderable_buffer: bool,
+
     /// 是否处理 buffer attach；本阶段固定为 false。
     pub buffer_attached: bool,
 
@@ -284,6 +296,10 @@ impl RuntimeSurfaceCommitDrainReport {
             surface_identity_key: None,
             commit_sequence: None,
             surface_identity_error: None,
+            buffer_attach_observed: false,
+            buffer_present: false,
+            buffer_removed: false,
+            renderable_buffer: false,
             buffer_attached: false,
             damage_submitted: false,
             frame_callback_requested: false,
@@ -298,6 +314,10 @@ impl RuntimeSurfaceCommitDrainReport {
                 report.adapter_surface_id = Some(commit.adapter_surface_id);
                 report.surface_identity_key = Some(commit.surface_identity_key);
                 report.commit_sequence = Some(commit.commit_sequence);
+                report.buffer_attach_observed = commit.buffer_attach_observed;
+                report.buffer_present = commit.buffer_present;
+                report.buffer_removed = commit.buffer_removed;
+                report.renderable_buffer = commit.renderable_buffer;
             }
             Some(Err(error)) => {
                 report.commit_observation_failed = true;

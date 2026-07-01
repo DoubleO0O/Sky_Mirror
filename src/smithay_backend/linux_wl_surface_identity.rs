@@ -13,7 +13,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use smithay::reexports::wayland_server::{Resource, backend::ObjectId};
+use smithay::{
+    reexports::wayland_server::{Resource, backend::ObjectId},
+    wayland::compositor::{self, BufferAssignment, SurfaceAttributes},
+};
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
     globals::{GlobalListContents, registry_queue_init},
@@ -62,6 +65,22 @@ pub struct AdapterSurfaceCommitObservation {
     pub surface_identity_key: SurfaceIdentityKey,
     /// 本 registry 内观察到的单调 commit 序号。
     pub commit_sequence: u64,
+    /// 本次 commit 是否携带 buffer attach/remove evidence。
+    pub buffer_attach_observed: bool,
+    /// 本次 commit 是否携带真实 buffer presence evidence。
+    pub buffer_present: bool,
+    /// 本次 commit 是否携带 `attach(NULL)` / buffer removal evidence。
+    pub buffer_removed: bool,
+    /// 本次 commit 是否已可作为 renderable buffer；Phase 54D 固定为 false。
+    pub renderable_buffer: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct AdapterSurfaceCommitBufferEvidence {
+    buffer_attach_observed: bool,
+    buffer_present: bool,
+    buffer_removed: bool,
+    renderable_buffer: bool,
 }
 
 /// 从 server object 建立 adapter identity 时的结构化错误。
@@ -157,10 +176,15 @@ impl LinuxWlSurfaceIdentityRegistry {
             self.pending_commit_observations.push_back(result);
             return Err(error);
         };
+        let buffer_evidence = observe_surface_commit_buffer_evidence(surface);
         let observation = AdapterSurfaceCommitObservation {
             adapter_surface_id: mapping.adapter_surface_id,
             surface_identity_key: mapping.surface_identity_key,
             commit_sequence,
+            buffer_attach_observed: buffer_evidence.buffer_attach_observed,
+            buffer_present: buffer_evidence.buffer_present,
+            buffer_removed: buffer_evidence.buffer_removed,
+            renderable_buffer: buffer_evidence.renderable_buffer,
         };
         let result = Ok(observation);
         self.last_commit_observation = Some(result);
@@ -193,6 +217,29 @@ impl LinuxWlSurfaceIdentityRegistry {
     ) -> Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>> {
         self.pending_commit_observations.pop_front()
     }
+}
+
+fn observe_surface_commit_buffer_evidence(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> AdapterSurfaceCommitBufferEvidence {
+    compositor::with_states(surface, |states| {
+        let mut guard = states.cached_state.get::<SurfaceAttributes>();
+        match guard.current().buffer.as_ref() {
+            Some(BufferAssignment::NewBuffer(_)) => AdapterSurfaceCommitBufferEvidence {
+                buffer_attach_observed: true,
+                buffer_present: true,
+                buffer_removed: false,
+                renderable_buffer: false,
+            },
+            Some(BufferAssignment::Removed) => AdapterSurfaceCommitBufferEvidence {
+                buffer_attach_observed: true,
+                buffer_present: false,
+                buffer_removed: true,
+                renderable_buffer: false,
+            },
+            None => AdapterSurfaceCommitBufferEvidence::default(),
+        }
+    })
 }
 
 impl Default for LinuxWlSurfaceIdentityRegistry {
@@ -446,6 +493,14 @@ pub struct ControlledWlSurfaceCommitReport {
     pub committed_surface_identity_key: SurfaceIdentityKey,
     /// Commit observation 序号。
     pub commit_sequence: u64,
+    /// 本次 commit 是否携带 buffer attach/remove evidence。
+    pub buffer_attach_observed: bool,
+    /// 本次 commit 是否携带真实 buffer presence evidence。
+    pub buffer_present: bool,
+    /// 本次 commit 是否携带 `attach(NULL)` / buffer removal evidence。
+    pub buffer_removed: bool,
+    /// 本次 commit 是否已可作为 renderable buffer；Phase 54D 固定为 false。
+    pub renderable_buffer: bool,
     /// 是否 attach 了 buffer；本阶段固定为 false。
     pub buffer_attached: bool,
     /// 是否提交 damage；本阶段固定为 false。
@@ -626,6 +681,23 @@ pub fn controlled_wl_surface_creation_report(
 pub fn controlled_wl_surface_commit_observation_report(
     server: &mut SmithayWaylandDisplayProbe,
 ) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
+    controlled_wl_surface_commit_observation_report_with_attach(server, false)
+}
+
+/// 证明 controlled client 的 `attach(NULL) + commit` 只产生纯数据 buffer removal evidence。
+///
+/// `attach(NULL)` 不是 buffer import，也不代表 renderable buffer；本 proof 不创建 shm/dmabuf、
+/// 不实现 BufferHandler、不处理 damage/frame/render/input/core。
+pub fn controlled_wl_surface_null_attach_commit_observation_report(
+    server: &mut SmithayWaylandDisplayProbe,
+) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
+    controlled_wl_surface_commit_observation_report_with_attach(server, true)
+}
+
+fn controlled_wl_surface_commit_observation_report_with_attach(
+    server: &mut SmithayWaylandDisplayProbe,
+    attach_null_buffer: bool,
+) -> Result<ControlledWlSurfaceCommitReport, ControlledWlSurfaceCommitError> {
     if !server.is_wl_compositor_global_initialized() {
         return Err(ControlledWlSurfaceCommitError::Blocked(
             ControlledWlSurfaceCommitBlocker::MissingServerWlCompositorOwner,
@@ -656,7 +728,7 @@ pub fn controlled_wl_surface_commit_observation_report(
 
     let (result_sender, result_receiver) = mpsc::channel();
     let client_thread = thread::spawn(move || {
-        let result = run_controlled_surface_commit_client(client_stream);
+        let result = run_controlled_surface_commit_client(client_stream, attach_null_buffer);
         let _ = result_sender.send(result);
     });
 
@@ -732,6 +804,10 @@ pub fn controlled_wl_surface_commit_observation_report(
         committed_adapter_surface_id: commit.adapter_surface_id,
         committed_surface_identity_key: commit.surface_identity_key,
         commit_sequence: commit.commit_sequence,
+        buffer_attach_observed: commit.buffer_attach_observed,
+        buffer_present: commit.buffer_present,
+        buffer_removed: commit.buffer_removed,
+        renderable_buffer: commit.renderable_buffer,
         buffer_attached: false,
         damage_submitted: false,
         frame_callback_requested: false,
@@ -789,6 +865,7 @@ fn run_controlled_surface_client(
 
 fn run_controlled_surface_commit_client(
     client_stream: UnixStream,
+    attach_null_buffer: bool,
 ) -> Result<(), ControlledWlSurfaceCommitError> {
     let connection = Connection::from_socket(client_stream).map_err(|_| {
         ControlledWlSurfaceCommitError::ClientProtocol {
@@ -810,6 +887,9 @@ fn run_controlled_surface_commit_client(
             )
         })?;
     let surface = compositor.create_surface(&queue_handle, ());
+    if attach_null_buffer {
+        surface.attach(None, 0, 0);
+    }
     surface.commit();
     let mut client_state = ControlledSurfaceClientState;
     event_queue.roundtrip(&mut client_state).map_err(|_| {
@@ -827,6 +907,7 @@ mod tests {
         ControlledWlSurfaceCommitBlocker, ControlledWlSurfaceCommitError,
         ControlledWlSurfaceCreationBlocker, ControlledWlSurfaceCreationError,
         controlled_wl_surface_commit_observation_report, controlled_wl_surface_creation_report,
+        controlled_wl_surface_null_attach_commit_observation_report,
     };
     use crate::smithay_backend::wayland_display::SmithayWaylandDisplayProbe;
 
@@ -951,6 +1032,10 @@ mod tests {
             report.committed_surface_identity_key
         );
         assert_eq!(report.commit_sequence, 1);
+        assert!(!report.buffer_attach_observed);
+        assert!(!report.buffer_present);
+        assert!(!report.buffer_removed);
+        assert!(!report.renderable_buffer);
         assert!(!report.buffer_attached);
         assert!(!report.damage_submitted);
         assert!(!report.frame_callback_requested);
@@ -967,6 +1052,31 @@ mod tests {
         assert!(!report.input_support);
         assert!(!report.real_compositor_runtime_available);
         assert!(!report.real_xdg_shell_runtime_available);
+        assert!(report.blockers.is_empty());
+    }
+
+    #[test]
+    fn controlled_wl_surface_null_attach_commit_records_buffer_removal_evidence() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 compositor owner 必须初始化");
+
+        let report = controlled_wl_surface_null_attach_commit_observation_report(&mut server)
+            .expect("controlled null attach commit proof 必须完成");
+
+        assert!(report.server_surface_commit_observed);
+        assert!(report.adapter_surface_commit_observation_available);
+        assert!(report.buffer_attach_observed);
+        assert!(!report.buffer_present);
+        assert!(report.buffer_removed);
+        assert!(!report.renderable_buffer);
+        assert!(!report.buffer_attached);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_requested);
+        assert!(!report.render_support);
+        assert!(!report.input_support);
+        assert!(!report.real_compositor_runtime_available);
         assert!(report.blockers.is_empty());
     }
 
@@ -997,16 +1107,52 @@ mod tests {
             first_pending.surface_identity_key,
             first.surface_identity_key
         );
+        assert_eq!(first_pending.buffer_removed, false);
         assert_eq!(second_pending.commit_sequence, 2);
         assert_eq!(second_pending.adapter_surface_id, second.adapter_surface_id);
         assert_eq!(
             second_pending.surface_identity_key,
             second.surface_identity_key
         );
+        assert_eq!(second_pending.buffer_removed, false);
         assert_ne!(
             first_pending.adapter_surface_id,
             second_pending.adapter_surface_id
         );
+        assert_eq!(server.take_next_wl_surface_commit_observation(), None);
+    }
+
+    #[test]
+    fn controlled_wl_surface_commit_buffer_evidence_is_fifo_not_latest_snapshot() {
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 compositor owner 必须初始化");
+
+        let first = controlled_wl_surface_null_attach_commit_observation_report(&mut server)
+            .expect("首个 null attach commit proof 必须完成");
+        let second = controlled_wl_surface_commit_observation_report(&mut server)
+            .expect("第二个 plain commit proof 必须完成");
+
+        let first_pending = server
+            .take_next_wl_surface_commit_observation()
+            .expect("首个 commit observation 必须进入 FIFO")
+            .expect("首个 commit observation 必须成功解析");
+        let second_pending = server
+            .take_next_wl_surface_commit_observation()
+            .expect("第二个 commit observation 必须进入 FIFO")
+            .expect("第二个 commit observation 必须成功解析");
+
+        assert_eq!(first_pending.commit_sequence, first.commit_sequence);
+        assert!(first_pending.buffer_attach_observed);
+        assert!(!first_pending.buffer_present);
+        assert_eq!(first_pending.buffer_removed, true);
+        assert!(!first_pending.renderable_buffer);
+        assert_eq!(second_pending.commit_sequence, second.commit_sequence);
+        assert!(!second_pending.buffer_attach_observed);
+        assert!(!second_pending.buffer_present);
+        assert_eq!(second_pending.buffer_removed, false);
+        assert!(!second_pending.renderable_buffer);
         assert_eq!(server.take_next_wl_surface_commit_observation(), None);
     }
 }
