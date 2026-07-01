@@ -509,6 +509,184 @@ impl RuntimeSurfaceCommitRenderDirtyIntentQueueOwner {
     }
 }
 
+/// Renderer-admission seam 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererAdmissionOperation {
+    /// 读取 runtime queue drain report。
+    ReadRenderDirtyIntentDrain,
+    /// 从 drained render-dirty intent 创建 renderer work intent。
+    BuildRendererWorkIntent,
+    /// 生成 renderer-admission report。
+    BuildReport,
+}
+
+/// Renderer-admission seam 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererAdmissionBlocker {
+    /// 本轮没有 drained render-dirty/readiness intent 可供 admission。
+    MissingRenderDirtyIntent,
+}
+
+/// 从 drained render-dirty/readiness intent 派生出的 renderer work 纯数据意图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererAdmissionWorkIntent {
+    /// adapter-only surface identity；不是 core `SurfaceId`。
+    pub adapter_surface_id: AdapterSurfaceId,
+
+    /// adapter-only surface identity key。
+    pub surface_identity_key: SurfaceIdentityKey,
+
+    /// 触发该 work intent 的 FIFO commit sequence。
+    pub commit_sequence: u64,
+
+    /// commit 是否携带 buffer attach/remove evidence。
+    pub buffer_attach_observed: bool,
+
+    /// commit 是否携带真实 buffer presence evidence；不代表已 import。
+    pub buffer_present: bool,
+
+    /// commit 是否携带 `attach(NULL)` / buffer removal evidence。
+    pub buffer_removed: bool,
+
+    /// commit 是否已可作为 renderable buffer；当前仍固定为 false。
+    pub renderable_buffer: bool,
+
+    /// commit 是否携带 damage / damage_buffer evidence。
+    pub damage_observed: bool,
+
+    /// surface-coordinate damage rectangle 数量。
+    pub surface_damage_rects: usize,
+
+    /// buffer-coordinate damage rectangle 数量。
+    pub buffer_damage_rects: usize,
+
+    /// commit 是否携带 frame callback request evidence。
+    pub frame_callback_observed: bool,
+
+    /// frame callback request 数量。
+    pub frame_callback_count: usize,
+
+    /// 是否 import buffer；Phase 54I 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 54I 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否提交 render；Phase 54I 固定为 false。
+    pub render_submitted: bool,
+
+    /// 是否提交 damage；Phase 54I 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 54I 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 54I 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 54I 固定为 false。
+    pub core_mutation_invoked: bool,
+}
+
+/// Renderer-admission seam 的一次纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererAdmissionReport {
+    /// 本轮是否执行 renderer-admission seam。
+    pub renderer_admission_invoked: bool,
+
+    /// 来源 render-dirty runtime queue drain 是否提供了 drained intent。
+    pub source_render_dirty_intent_drained: bool,
+
+    /// 本轮是否创建 renderer work intent。
+    pub work_intent_created: bool,
+
+    /// 从 drained render-dirty intent 派生出的 renderer work 纯数据意图。
+    pub work_intent: Option<RuntimeSurfaceCommitRendererAdmissionWorkIntent>,
+
+    /// 是否 import buffer；Phase 54I 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 54I 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否提交 render；Phase 54I 固定为 false。
+    pub render_submitted: bool,
+
+    /// 是否提交 damage；Phase 54I 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 54I 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 54I 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 54I 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitRendererAdmissionOperation>,
+
+    /// 失败或未完成原因。
+    pub blockers: Vec<RuntimeSurfaceCommitRendererAdmissionBlocker>,
+}
+
+/// 从 runtime queue drain report 派生 renderer-admission report；不触发真实 render。
+pub fn renderer_admission_report_from_render_dirty_intent_drain(
+    report: &RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
+) -> RuntimeSurfaceCommitRendererAdmissionReport {
+    let mut operations =
+        vec![RuntimeSurfaceCommitRendererAdmissionOperation::ReadRenderDirtyIntentDrain];
+    let source_render_dirty_intent_drained = report.intent_drained;
+    let work_intent = report.drained_intent.as_ref().map(|intent| {
+        operations.push(RuntimeSurfaceCommitRendererAdmissionOperation::BuildRendererWorkIntent);
+        RuntimeSurfaceCommitRendererAdmissionWorkIntent {
+            adapter_surface_id: intent.adapter_surface_id,
+            surface_identity_key: intent.surface_identity_key,
+            commit_sequence: intent.commit_sequence,
+            buffer_attach_observed: intent.buffer_attach_observed,
+            buffer_present: intent.buffer_present,
+            buffer_removed: intent.buffer_removed,
+            renderable_buffer: intent.renderable_buffer,
+            damage_observed: intent.damage_observed,
+            surface_damage_rects: intent.surface_damage_rects,
+            buffer_damage_rects: intent.buffer_damage_rects,
+            frame_callback_observed: intent.frame_callback_observed,
+            frame_callback_count: intent.frame_callback_count,
+            buffer_imported: false,
+            texture_created: false,
+            render_submitted: false,
+            damage_submitted: false,
+            frame_callback_done_sent: false,
+            input_support: false,
+            core_mutation_invoked: false,
+        }
+    });
+    let work_intent_created = work_intent.is_some();
+    operations.push(RuntimeSurfaceCommitRendererAdmissionOperation::BuildReport);
+    let blockers = if work_intent_created {
+        Vec::new()
+    } else {
+        vec![RuntimeSurfaceCommitRendererAdmissionBlocker::MissingRenderDirtyIntent]
+    };
+
+    RuntimeSurfaceCommitRendererAdmissionReport {
+        renderer_admission_invoked: true,
+        source_render_dirty_intent_drained,
+        work_intent_created,
+        work_intent,
+        buffer_imported: false,
+        texture_created: false,
+        render_submitted: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations,
+        blockers,
+    }
+}
+
 /// 从 commit drain report 派生 render-dirty/readiness intent；不触发真实 render。
 pub fn render_dirty_readiness_intent_from_commit_drain_report(
     report: &RuntimeSurfaceCommitDrainReport,
@@ -623,6 +801,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// render-dirty/readiness intent runtime-owned queue drain report。
     pub render_dirty_intent_drain_report: RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
+
+    /// renderer-admission pure-data work intent report。
+    pub renderer_admission_report: RuntimeSurfaceCommitRendererAdmissionReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -833,6 +1014,9 @@ impl NestedRuntimeCoordinator {
         let render_dirty_intent_drain_report = self
             .render_dirty_intent_queue_owner
             .enqueue_from_commit_drain_and_drain_once(&surface_commit_drain_report);
+        let renderer_admission_report = renderer_admission_report_from_render_dirty_intent_drain(
+            &render_dirty_intent_drain_report,
+        );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -841,6 +1025,7 @@ impl NestedRuntimeCoordinator {
             unmap_drain_report,
             surface_commit_drain_report,
             render_dirty_intent_drain_report,
+            renderer_admission_report,
         }
     }
 

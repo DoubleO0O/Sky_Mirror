@@ -21,6 +21,8 @@ use crate::{
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
         RuntimeSurfaceCommitDrainReport, RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
         RuntimeSurfaceCommitRenderDirtyReadinessIntent,
+        RuntimeSurfaceCommitRendererAdmissionReport,
+        RuntimeSurfaceCommitRendererAdmissionWorkIntent,
         render_dirty_readiness_intent_from_commit_drain_report,
     },
 };
@@ -496,6 +498,36 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// runtime queue drain 是否接入 input；Phase 54H 固定保持 false。
     pub render_dirty_queue_input_support: bool,
 
+    /// renderer-admission seam 被调用的次数。
+    pub renderer_admission_invocations: usize,
+
+    /// 从 drained render-dirty intent 成功创建的 renderer work intent 数量。
+    pub renderer_work_intents_created: usize,
+
+    /// 按 FIFO 顺序保存的 renderer-admission pure-data work intent。
+    pub renderer_work_intents: Vec<RuntimeSurfaceCommitRendererAdmissionWorkIntent>,
+
+    /// renderer-admission seam 是否 import buffer；Phase 54I 固定保持 false。
+    pub renderer_admission_buffer_imported: bool,
+
+    /// renderer-admission seam 是否创建 texture；Phase 54I 固定保持 false。
+    pub renderer_admission_texture_created: bool,
+
+    /// renderer-admission seam 是否提交 render；Phase 54I 固定保持 false。
+    pub renderer_admission_render_submitted: bool,
+
+    /// renderer-admission seam 是否提交 damage；Phase 54I 固定保持 false。
+    pub renderer_admission_damage_submitted: bool,
+
+    /// renderer-admission seam 是否发送 frame callback done；Phase 54I 固定保持 false。
+    pub renderer_admission_frame_callback_done_sent: bool,
+
+    /// renderer-admission seam 是否接入 input；Phase 54I 固定保持 false。
+    pub renderer_admission_input_support: bool,
+
+    /// renderer-admission seam 是否触发 core mutation；Phase 54I 固定保持 false。
+    pub renderer_admission_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -545,6 +577,16 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             render_dirty_queue_render_submitted: false,
             render_dirty_queue_frame_callback_done_sent: false,
             render_dirty_queue_input_support: false,
+            renderer_admission_invocations: 0,
+            renderer_work_intents_created: 0,
+            renderer_work_intents: Vec::new(),
+            renderer_admission_buffer_imported: false,
+            renderer_admission_texture_created: false,
+            renderer_admission_render_submitted: false,
+            renderer_admission_damage_submitted: false,
+            renderer_admission_frame_callback_done_sent: false,
+            renderer_admission_input_support: false,
+            renderer_admission_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -571,11 +613,28 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_renderer_admission(report: &RuntimeSurfaceCommitRendererAdmissionReport) -> Self {
+        Self {
+            renderer_admission_invocations: usize::from(report.renderer_admission_invoked),
+            renderer_work_intents_created: usize::from(report.work_intent_created),
+            renderer_work_intents: report.work_intent.clone().into_iter().collect(),
+            renderer_admission_buffer_imported: report.buffer_imported,
+            renderer_admission_texture_created: report.texture_created,
+            renderer_admission_render_submitted: report.render_submitted,
+            renderer_admission_damage_submitted: report.damage_submitted,
+            renderer_admission_frame_callback_done_sent: report.frame_callback_done_sent,
+            renderer_admission_input_support: report.input_support,
+            renderer_admission_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
             || self.render_dirty_intents_enqueued > 0
             || self.render_dirty_intents_drained > 0
+            || self.renderer_work_intents_created > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -636,6 +695,23 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.render_dirty_queue_frame_callback_done_sent |=
             delta.render_dirty_queue_frame_callback_done_sent;
         self.render_dirty_queue_input_support |= delta.render_dirty_queue_input_support;
+        self.renderer_admission_invocations = self
+            .renderer_admission_invocations
+            .saturating_add(delta.renderer_admission_invocations);
+        self.renderer_work_intents_created = self
+            .renderer_work_intents_created
+            .saturating_add(delta.renderer_work_intents_created);
+        self.renderer_work_intents
+            .extend(delta.renderer_work_intents);
+        self.renderer_admission_buffer_imported |= delta.renderer_admission_buffer_imported;
+        self.renderer_admission_texture_created |= delta.renderer_admission_texture_created;
+        self.renderer_admission_render_submitted |= delta.renderer_admission_render_submitted;
+        self.renderer_admission_damage_submitted |= delta.renderer_admission_damage_submitted;
+        self.renderer_admission_frame_callback_done_sent |=
+            delta.renderer_admission_frame_callback_done_sent;
+        self.renderer_admission_input_support |= delta.renderer_admission_input_support;
+        self.renderer_admission_core_mutation_invoked |=
+            delta.renderer_admission_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -783,6 +859,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_render_dirty_intent_drain(
                 &report.render_dirty_intent_drain_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_renderer_admission(
+                &report.renderer_admission_report,
             ),
         );
 
@@ -2007,6 +2088,100 @@ mod tests {
                 .render_dirty_queue_frame_callback_done_sent
         );
         assert!(!report.surface_commit.render_dirty_queue_input_support);
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：runtime reports renderer-admission work intents without rendering.
+    #[test]
+    fn nested_runtime_loop_reports_renderer_admission_work_intents_fifo_without_render() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-renderer-admission-work-intent");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let (first_commit, second_commit) = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit =
+                controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
+                    .expect("首个 render-dirty readiness commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 plain commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let mut state = State::new();
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = runtime_loop.run_for_iterations(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 3,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: true,
+                continue_after_error: false,
+            },
+        );
+
+        assert!(report.is_successful());
+        assert_eq!(
+            report.surface_commit.drained_commit_sequences,
+            vec![first_commit.commit_sequence, second_commit.commit_sequence]
+        );
+        assert_eq!(report.surface_commit.render_dirty_intents_drained, 2);
+        assert_eq!(report.surface_commit.renderer_work_intents_created, 2);
+        assert_eq!(report.surface_commit.renderer_work_intents.len(), 2);
+        let first_work = &report.surface_commit.renderer_work_intents[0];
+        let second_work = &report.surface_commit.renderer_work_intents[1];
+        assert_eq!(
+            first_work.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(first_work.commit_sequence, first_commit.commit_sequence);
+        assert_eq!(second_work.commit_sequence, second_commit.commit_sequence);
+        assert!(first_work.buffer_attach_observed);
+        assert!(first_work.buffer_removed);
+        assert!(first_work.damage_observed);
+        assert_eq!(first_work.buffer_damage_rects, 1);
+        assert!(first_work.frame_callback_observed);
+        assert_eq!(first_work.frame_callback_count, 1);
+        assert!(!first_work.render_submitted);
+        assert!(!first_work.buffer_imported);
+        assert!(!first_work.texture_created);
+        assert!(!first_work.damage_submitted);
+        assert!(!first_work.frame_callback_done_sent);
+        assert!(!first_work.input_support);
+        assert!(!first_work.core_mutation_invoked);
+        assert!(!second_work.buffer_attach_observed);
+        assert!(!second_work.damage_observed);
+        assert_eq!(second_work.frame_callback_count, 0);
+        assert!(!report.surface_commit.renderer_admission_render_submitted);
+        assert!(!report.surface_commit.renderer_admission_buffer_imported);
+        assert!(!report.surface_commit.renderer_admission_texture_created);
+        assert!(!report.surface_commit.renderer_admission_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .renderer_admission_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.renderer_admission_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .renderer_admission_core_mutation_invoked
+        );
         assert!(!report.surface_commit.buffer_attached);
         assert!(!report.surface_commit.damage_submitted);
         assert!(!report.surface_commit.frame_callback_requested);

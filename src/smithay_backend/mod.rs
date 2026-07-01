@@ -3559,6 +3559,110 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54I 必须从 render-dirty queue drain 派生 renderer-admission 纯数据 work intent。
+    #[test]
+    fn wl_surface_render_dirty_renderer_admission_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54I coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54I loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54I orchestrator source 必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRendererAdmissionWorkIntent",
+            "pub struct RuntimeSurfaceCommitRendererAdmissionReport",
+            "pub enum RuntimeSurfaceCommitRendererAdmissionOperation",
+            "pub enum RuntimeSurfaceCommitRendererAdmissionBlocker",
+            "pub fn renderer_admission_report_from_render_dirty_intent_drain",
+            "source_render_dirty_intent_drained",
+            "pub work_intent: Option<RuntimeSurfaceCommitRendererAdmissionWorkIntent>",
+            "pub adapter_surface_id: AdapterSurfaceId",
+            "pub commit_sequence: u64",
+            "pub buffer_attach_observed: bool",
+            "pub damage_observed: bool",
+            "pub frame_callback_count: usize",
+            "buffer_imported: false",
+            "texture_created: false",
+            "render_submitted: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54I coordinator renderer-admission seam 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitRendererAdmissionWorkIntent",
+            "pub renderer_admission_invocations: usize",
+            "pub renderer_work_intents_created: usize",
+            "pub renderer_work_intents: Vec<RuntimeSurfaceCommitRendererAdmissionWorkIntent>",
+            "NestedRuntimeSurfaceCommitRunSummary::from_renderer_admission",
+            "report.renderer_admission_report",
+            "self.renderer_work_intents",
+            "assert_eq!(report.surface_commit.renderer_work_intents_created, 2)",
+            "assert_eq!(first_work.commit_sequence, first_commit.commit_sequence)",
+            "assert_eq!(second_work.commit_sequence, second_commit.commit_sequence)",
+            "assert!(first_work.buffer_attach_observed)",
+            "assert!(first_work.damage_observed)",
+            "assert_eq!(first_work.frame_callback_count, 1)",
+            "assert!(!first_work.render_submitted)",
+            "assert!(!first_work.buffer_imported)",
+            "assert!(!first_work.frame_callback_done_sent)",
+            "assert!(!first_work.input_support)",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54I loop renderer-admission report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "assert_eq!(report.surface_commit.renderer_work_intents_created, 2)",
+            "assert_eq!(first_work.commit_sequence, first_commit.commit_sequence)",
+            "assert_eq!(second_work.commit_sequence, second_commit.commit_sequence)",
+            "assert!(!first_work.render_submitted)",
+            "assert!(!first_work.buffer_imported)",
+            "assert!(!first_work.frame_callback_done_sent)",
+            "assert!(!first_work.input_support)",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54I orchestrator renderer-admission report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54I renderer-admission seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
