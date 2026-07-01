@@ -19,7 +19,8 @@ use crate::{
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
-        RuntimeSurfaceCommitDrainReport, RuntimeSurfaceCommitRenderDirtyReadinessIntent,
+        RuntimeSurfaceCommitDrainReport, RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
+        RuntimeSurfaceCommitRenderDirtyReadinessIntent,
         render_dirty_readiness_intent_from_commit_drain_report,
     },
 };
@@ -468,6 +469,33 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// 按 FIFO drain 顺序保存的 render-dirty/readiness 纯数据意图。
     pub render_dirty_readiness_intents: Vec<RuntimeSurfaceCommitRenderDirtyReadinessIntent>,
 
+    /// render-dirty intent runtime queue drain seam 被调用的次数。
+    pub render_dirty_queue_drain_invocations: usize,
+
+    /// 成功入队到 runtime-owned render-dirty queue 的 intent 数量。
+    pub render_dirty_intents_enqueued: usize,
+
+    /// 成功从 runtime-owned render-dirty queue drain 的 intent 数量。
+    pub render_dirty_intents_drained: usize,
+
+    /// 按 FIFO drain 顺序保存的 runtime queue render-dirty/readiness intent。
+    pub render_dirty_queue_drained_intents: Vec<RuntimeSurfaceCommitRenderDirtyReadinessIntent>,
+
+    /// runtime queue drain 是否 import buffer；Phase 54H 固定保持 false。
+    pub render_dirty_queue_buffer_imported: bool,
+
+    /// runtime queue drain 是否创建 texture；Phase 54H 固定保持 false。
+    pub render_dirty_queue_texture_created: bool,
+
+    /// runtime queue drain 是否提交 render；Phase 54H 固定保持 false。
+    pub render_dirty_queue_render_submitted: bool,
+
+    /// runtime queue drain 是否发送 frame callback done；Phase 54H 固定保持 false。
+    pub render_dirty_queue_frame_callback_done_sent: bool,
+
+    /// runtime queue drain 是否接入 input；Phase 54H 固定保持 false。
+    pub render_dirty_queue_input_support: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -508,6 +536,15 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             )
             .into_iter()
             .collect(),
+            render_dirty_queue_drain_invocations: 0,
+            render_dirty_intents_enqueued: 0,
+            render_dirty_intents_drained: 0,
+            render_dirty_queue_drained_intents: Vec::new(),
+            render_dirty_queue_buffer_imported: false,
+            render_dirty_queue_texture_created: false,
+            render_dirty_queue_render_submitted: false,
+            render_dirty_queue_frame_callback_done_sent: false,
+            render_dirty_queue_input_support: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -517,8 +554,28 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_render_dirty_intent_drain(
+        report: &RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
+    ) -> Self {
+        Self {
+            render_dirty_queue_drain_invocations: usize::from(report.drain_invoked),
+            render_dirty_intents_enqueued: usize::from(report.intent_enqueued),
+            render_dirty_intents_drained: usize::from(report.intent_drained),
+            render_dirty_queue_drained_intents: report.drained_intent.clone().into_iter().collect(),
+            render_dirty_queue_buffer_imported: report.buffer_imported,
+            render_dirty_queue_texture_created: report.texture_created,
+            render_dirty_queue_render_submitted: report.render_submitted,
+            render_dirty_queue_frame_callback_done_sent: report.frame_callback_done_sent,
+            render_dirty_queue_input_support: report.input_support,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
-        self.commit_observations_drained > 0 || self.commit_observation_errors > 0
+        self.commit_observations_drained > 0
+            || self.commit_observation_errors > 0
+            || self.render_dirty_intents_enqueued > 0
+            || self.render_dirty_intents_drained > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -562,6 +619,23 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             .saturating_add(delta.frame_callback_count);
         self.render_dirty_readiness_intents
             .extend(delta.render_dirty_readiness_intents);
+        self.render_dirty_queue_drain_invocations = self
+            .render_dirty_queue_drain_invocations
+            .saturating_add(delta.render_dirty_queue_drain_invocations);
+        self.render_dirty_intents_enqueued = self
+            .render_dirty_intents_enqueued
+            .saturating_add(delta.render_dirty_intents_enqueued);
+        self.render_dirty_intents_drained = self
+            .render_dirty_intents_drained
+            .saturating_add(delta.render_dirty_intents_drained);
+        self.render_dirty_queue_drained_intents
+            .extend(delta.render_dirty_queue_drained_intents);
+        self.render_dirty_queue_buffer_imported |= delta.render_dirty_queue_buffer_imported;
+        self.render_dirty_queue_texture_created |= delta.render_dirty_queue_texture_created;
+        self.render_dirty_queue_render_submitted |= delta.render_dirty_queue_render_submitted;
+        self.render_dirty_queue_frame_callback_done_sent |=
+            delta.render_dirty_queue_frame_callback_done_sent;
+        self.render_dirty_queue_input_support |= delta.render_dirty_queue_input_support;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -703,6 +777,15 @@ impl ObservedNestedRuntimePumpReport {
     }
 
     fn from_live_admission_unmap(report: NestedRuntimeLiveAdmissionUnmapPumpReport) -> Self {
+        let mut surface_commit = NestedRuntimeSurfaceCommitRunSummary::from_surface_commit_drain(
+            &report.surface_commit_drain_report,
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_render_dirty_intent_drain(
+                &report.render_dirty_intent_drain_report,
+            ),
+        );
+
         Self {
             live_admission: NestedRuntimeLiveAdmissionRunSummary::from_live_pump(
                 &NestedRuntimeLiveAdmissionPumpReport {
@@ -712,9 +795,7 @@ impl ObservedNestedRuntimePumpReport {
                 },
             ),
             live_unmap: NestedRuntimeLiveUnmapRunSummary::from_live_admission_unmap(&report),
-            surface_commit: NestedRuntimeSurfaceCommitRunSummary::from_surface_commit_drain(
-                &report.surface_commit_drain_report,
-            ),
+            surface_commit,
             lifecycle_report: report.lifecycle_report,
         }
     }
@@ -1834,6 +1915,98 @@ mod tests {
         assert!(!second_intent.buffer_attach_observed);
         assert!(!second_intent.damage_observed);
         assert_eq!(second_intent.frame_callback_count, 0);
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：render-dirty intent runtime queue preserves FIFO without rendering.
+    #[test]
+    fn nested_runtime_loop_drains_render_dirty_intent_runtime_queue_fifo_without_render() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-render-dirty-intent-queue");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let (first_commit, second_commit) = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit =
+                controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
+                    .expect("首个 render-dirty readiness commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 plain commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let mut state = State::new();
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = runtime_loop.run_for_iterations(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 3,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: true,
+                continue_after_error: false,
+            },
+        );
+
+        assert!(report.is_successful());
+        assert_eq!(
+            report.surface_commit.drained_commit_sequences,
+            vec![first_commit.commit_sequence, second_commit.commit_sequence]
+        );
+        assert_eq!(report.surface_commit.render_dirty_intents_enqueued, 2);
+        assert_eq!(report.surface_commit.render_dirty_intents_drained, 2);
+        assert_eq!(
+            runtime_loop.coordinator.render_dirty_intent_pending_count(),
+            0
+        );
+        let first_drained = &report.surface_commit.render_dirty_queue_drained_intents[0];
+        let second_drained = &report.surface_commit.render_dirty_queue_drained_intents[1];
+        assert_eq!(
+            first_drained.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(first_drained.commit_sequence, first_commit.commit_sequence);
+        assert_eq!(
+            second_drained.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_drained.buffer_attach_observed);
+        assert!(first_drained.buffer_removed);
+        assert!(first_drained.damage_observed);
+        assert_eq!(first_drained.buffer_damage_rects, 1);
+        assert!(first_drained.frame_callback_observed);
+        assert_eq!(first_drained.frame_callback_count, 1);
+        assert!(!first_drained.render_submitted);
+        assert!(!first_drained.buffer_imported);
+        assert!(!first_drained.texture_created);
+        assert!(!first_drained.frame_callback_done_sent);
+        assert!(!first_drained.input_support);
+        assert!(!second_drained.buffer_attach_observed);
+        assert!(!second_drained.damage_observed);
+        assert_eq!(second_drained.frame_callback_count, 0);
+        assert!(!report.surface_commit.render_dirty_queue_render_submitted);
+        assert!(!report.surface_commit.render_dirty_queue_buffer_imported);
+        assert!(!report.surface_commit.render_dirty_queue_texture_created);
+        assert!(
+            !report
+                .surface_commit
+                .render_dirty_queue_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.render_dirty_queue_input_support);
         assert!(!report.surface_commit.buffer_attached);
         assert!(!report.surface_commit.damage_submitted);
         assert!(!report.surface_commit.frame_callback_requested);

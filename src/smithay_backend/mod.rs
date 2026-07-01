@@ -3458,6 +3458,107 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54H 必须把 render-dirty/readiness intent 接入 runtime-owned FIFO queue。
+    #[test]
+    fn wl_surface_render_dirty_intent_runtime_queue_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54H coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54H loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54H orchestrator source 必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRenderDirtyIntentQueueOwner",
+            "render_dirty_intent_queue_owner: RuntimeSurfaceCommitRenderDirtyIntentQueueOwner",
+            "pub struct RuntimeSurfaceCommitRenderDirtyIntentDrainReport",
+            "pub enum RuntimeSurfaceCommitRenderDirtyIntentQueueOperation",
+            "pub enum RuntimeSurfaceCommitRenderDirtyIntentQueueBlocker",
+            "pub fn pending_count(&self) -> usize",
+            "pub fn enqueue_from_commit_drain_and_drain_once",
+            "render_dirty_readiness_intent_from_commit_drain_report(report)",
+            "pending_intent_count_before_enqueue",
+            "pending_intent_count_after_enqueue",
+            "pending_intent_count_before_drain",
+            "pending_intent_count_after_drain",
+            "pub drained_intent: Option<RuntimeSurfaceCommitRenderDirtyReadinessIntent>",
+            "buffer_imported: false",
+            "texture_created: false",
+            "render_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54H coordinator render-dirty queue 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub render_dirty_queue_drain_invocations: usize",
+            "pub render_dirty_intents_enqueued: usize",
+            "pub render_dirty_intents_drained: usize",
+            "pub render_dirty_queue_drained_intents: Vec<RuntimeSurfaceCommitRenderDirtyReadinessIntent>",
+            "NestedRuntimeSurfaceCommitRunSummary::from_render_dirty_intent_drain",
+            "report.render_dirty_intent_drain_report",
+            "self.render_dirty_queue_drained_intents",
+            "assert_eq!(report.surface_commit.render_dirty_intents_enqueued, 2)",
+            "assert_eq!(report.surface_commit.render_dirty_intents_drained, 2)",
+            "assert_eq!(first_drained.commit_sequence, first_commit.commit_sequence)",
+            "second_drained.commit_sequence",
+            "assert!(!first_drained.render_submitted)",
+            "assert!(!first_drained.buffer_imported)",
+            "assert!(!first_drained.frame_callback_done_sent)",
+            "assert!(!first_drained.input_support)",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54H loop render-dirty queue report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "assert_eq!(report.surface_commit.render_dirty_intents_enqueued, 2)",
+            "assert_eq!(report.surface_commit.render_dirty_intents_drained, 2)",
+            "assert_eq!(first_drained.commit_sequence, first_commit.commit_sequence)",
+            "second_drained.commit_sequence",
+            "assert!(!first_drained.render_submitted)",
+            "assert!(!first_drained.buffer_imported)",
+            "assert!(!first_drained.frame_callback_done_sent)",
+            "assert!(!first_drained.input_support)",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54H orchestrator render-dirty queue report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54H render-dirty queue seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

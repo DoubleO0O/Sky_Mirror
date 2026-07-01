@@ -4,7 +4,11 @@
 //! connected bridge、一次 Display dispatch、disconnected bridge。它不直接修改 core
 //! registry，也不把单次 pump 冒充长期 compositor event loop。
 
-use std::{collections::BTreeSet, io, time::Duration};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    io,
+    time::Duration,
+};
 
 use crate::{
     core::{
@@ -353,6 +357,158 @@ pub struct RuntimeSurfaceCommitRenderDirtyReadinessIntent {
     pub input_support: bool,
 }
 
+/// Runtime render-dirty intent queue 中可定位的操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRenderDirtyIntentQueueOperation {
+    /// 从 commit drain report 派生 render-dirty/readiness intent。
+    BuildIntent,
+    /// 将 intent 放入 runtime-owned queue。
+    EnqueueIntent,
+    /// 读取 runtime-owned queue。
+    ReadRuntimeQueue,
+    /// 从 runtime-owned queue drain 一条 intent。
+    DrainIntent,
+    /// 生成保守 capability report。
+    BuildReport,
+}
+
+/// Runtime render-dirty intent queue 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRenderDirtyIntentQueueBlocker {
+    /// 当前没有可入队或可 drain 的 render-dirty/readiness intent。
+    MissingRenderDirtyIntent,
+}
+
+/// Runtime-owned render-dirty/readiness intent queue 的一次 drain 报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRenderDirtyIntentDrainReport {
+    /// runtime 是否拥有 queue。
+    pub runtime_queue_owned: bool,
+
+    /// 本轮是否尝试从 commit drain report 入队。
+    pub enqueue_invoked: bool,
+
+    /// 本轮是否尝试 drain runtime-owned queue。
+    pub drain_invoked: bool,
+
+    /// 来源 commit observation 是否成功解析。
+    pub source_commit_observation_resolved: bool,
+
+    /// 入队前 pending intent 数量。
+    pub pending_intent_count_before_enqueue: usize,
+
+    /// 入队后 pending intent 数量。
+    pub pending_intent_count_after_enqueue: usize,
+
+    /// drain 前 pending intent 数量。
+    pub pending_intent_count_before_drain: usize,
+
+    /// drain 后 pending intent 数量。
+    pub pending_intent_count_after_drain: usize,
+
+    /// 本轮是否从 commit drain report 成功入队 intent。
+    pub intent_enqueued: bool,
+
+    /// 本轮是否从 runtime-owned queue 成功 drain intent。
+    pub intent_drained: bool,
+
+    /// 被 drain 的 pure-data render-dirty/readiness intent。
+    pub drained_intent: Option<RuntimeSurfaceCommitRenderDirtyReadinessIntent>,
+
+    /// 是否 import buffer；Phase 54H 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 54H 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否提交 render；Phase 54H 固定为 false。
+    pub render_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 54H 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 54H 固定为 false。
+    pub input_support: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitRenderDirtyIntentQueueOperation>,
+
+    /// 失败或未完成原因。
+    pub blockers: Vec<RuntimeSurfaceCommitRenderDirtyIntentQueueBlocker>,
+}
+
+/// Runtime-owned render-dirty/readiness intent FIFO queue。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitRenderDirtyIntentQueueOwner {
+    queue: VecDeque<RuntimeSurfaceCommitRenderDirtyReadinessIntent>,
+}
+
+impl RuntimeSurfaceCommitRenderDirtyIntentQueueOwner {
+    /// 创建空 runtime-owned render-dirty intent queue。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 返回当前 pending render-dirty intent 数量。
+    pub fn pending_count(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// 从 commit drain report 入队一条 intent，然后从 runtime queue drain 一条 intent。
+    pub fn enqueue_from_commit_drain_and_drain_once(
+        &mut self,
+        report: &RuntimeSurfaceCommitDrainReport,
+    ) -> RuntimeSurfaceCommitRenderDirtyIntentDrainReport {
+        let pending_intent_count_before_enqueue = self.pending_count();
+        let mut operations = vec![RuntimeSurfaceCommitRenderDirtyIntentQueueOperation::BuildIntent];
+        let intent = render_dirty_readiness_intent_from_commit_drain_report(report);
+        let intent_enqueued = if let Some(intent) = intent {
+            operations.push(RuntimeSurfaceCommitRenderDirtyIntentQueueOperation::EnqueueIntent);
+            self.queue.push_back(intent);
+            true
+        } else {
+            false
+        };
+        let pending_intent_count_after_enqueue = self.pending_count();
+        let pending_intent_count_before_drain = self.pending_count();
+        operations.push(RuntimeSurfaceCommitRenderDirtyIntentQueueOperation::ReadRuntimeQueue);
+        let drained_intent = self.queue.pop_front();
+        let intent_drained = drained_intent.is_some();
+        if intent_drained {
+            operations.push(RuntimeSurfaceCommitRenderDirtyIntentQueueOperation::DrainIntent);
+        }
+        let pending_intent_count_after_drain = self.pending_count();
+        operations.push(RuntimeSurfaceCommitRenderDirtyIntentQueueOperation::BuildReport);
+
+        let blockers = if intent_enqueued || intent_drained {
+            Vec::new()
+        } else {
+            vec![RuntimeSurfaceCommitRenderDirtyIntentQueueBlocker::MissingRenderDirtyIntent]
+        };
+
+        RuntimeSurfaceCommitRenderDirtyIntentDrainReport {
+            runtime_queue_owned: true,
+            enqueue_invoked: true,
+            drain_invoked: true,
+            source_commit_observation_resolved: report.commit_observation_resolved,
+            pending_intent_count_before_enqueue,
+            pending_intent_count_after_enqueue,
+            pending_intent_count_before_drain,
+            pending_intent_count_after_drain,
+            intent_enqueued,
+            intent_drained,
+            drained_intent,
+            buffer_imported: false,
+            texture_created: false,
+            render_submitted: false,
+            frame_callback_done_sent: false,
+            input_support: false,
+            operations,
+            blockers,
+        }
+    }
+}
+
 /// 从 commit drain report 派生 render-dirty/readiness intent；不触发真实 render。
 pub fn render_dirty_readiness_intent_from_commit_drain_report(
     report: &RuntimeSurfaceCommitDrainReport,
@@ -464,6 +620,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// `wl_surface.commit` observation backlog 的 pure-data drain report。
     pub surface_commit_drain_report: RuntimeSurfaceCommitDrainReport,
+
+    /// render-dirty/readiness intent runtime-owned queue drain report。
+    pub render_dirty_intent_drain_report: RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -475,6 +634,7 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 pub struct NestedRuntimeCoordinator {
     flow: NestedRealAcceptFlow,
     admission_queue_owner: RuntimeToplevelAdmissionQueueOwner,
+    render_dirty_intent_queue_owner: RuntimeSurfaceCommitRenderDirtyIntentQueueOwner,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -500,6 +660,7 @@ impl NestedRuntimeCoordinator {
         Ok(Self {
             flow: NestedRealAcceptFlow::with_socket_name(name)?,
             admission_queue_owner: RuntimeToplevelAdmissionQueueOwner::new(next_core_surface_id),
+            render_dirty_intent_queue_owner: RuntimeSurfaceCommitRenderDirtyIntentQueueOwner::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -531,6 +692,11 @@ impl NestedRuntimeCoordinator {
     /// 返回 coordinator admission owner 下一次将使用的 core surface identity。
     pub fn admission_next_core_surface_id(&self) -> SurfaceId {
         self.admission_queue_owner.next_core_surface_id()
+    }
+
+    /// 返回 coordinator render-dirty intent owner 中的 pending 数量。
+    pub fn render_dirty_intent_pending_count(&self) -> usize {
+        self.render_dirty_intent_queue_owner.pending_count()
     }
 
     /// 查询 adapter surface 到 core surface 的 admission ledger mapping。
@@ -664,6 +830,9 @@ impl NestedRuntimeCoordinator {
         let surface_commit_drain_report = RuntimeSurfaceCommitDrainReport::from_observation(
             self.flow.take_next_wl_surface_commit_observation(),
         );
+        let render_dirty_intent_drain_report = self
+            .render_dirty_intent_queue_owner
+            .enqueue_from_commit_drain_and_drain_once(&surface_commit_drain_report);
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -671,6 +840,7 @@ impl NestedRuntimeCoordinator {
             admission_drain_report,
             unmap_drain_report,
             surface_commit_drain_report,
+            render_dirty_intent_drain_report,
         }
     }
 

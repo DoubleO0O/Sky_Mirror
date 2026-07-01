@@ -1103,6 +1103,86 @@ mod tests {
         assert!(state.validate().is_clean());
     }
 
+    /// Linux-only proof：orchestrator final report exposes render-dirty intent queue drain.
+    #[test]
+    fn runtime_orchestrator_run_reports_render_dirty_intent_queue_drain() {
+        assert_runtime_dir();
+        let mut config = config("orchestrator-render-dirty-intent-queue", 3);
+        config.loop_config.stop_when_idle = true;
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config);
+        let mut state = State::new();
+        let _start_report = orchestrator.start().expect("Created 必须允许 start");
+        let (first_commit, second_commit) = {
+            let display = orchestrator
+                .runtime_loop
+                .as_mut()
+                .expect("Started 必须持有 runtime loop")
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit =
+                controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
+                    .expect("首个 render-dirty readiness commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 plain commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
+
+        assert!(report.is_clean_shutdown());
+        assert_eq!(report.surface_commit, report.loop_report.surface_commit);
+        assert_eq!(report.surface_commit.render_dirty_intents_enqueued, 2);
+        assert_eq!(report.surface_commit.render_dirty_intents_drained, 2);
+        let first_drained = &report.surface_commit.render_dirty_queue_drained_intents[0];
+        let second_drained = &report.surface_commit.render_dirty_queue_drained_intents[1];
+        assert_eq!(
+            first_drained.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(first_drained.commit_sequence, first_commit.commit_sequence);
+        assert_eq!(
+            second_drained.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_drained.buffer_attach_observed);
+        assert!(first_drained.buffer_removed);
+        assert!(first_drained.damage_observed);
+        assert_eq!(first_drained.buffer_damage_rects, 1);
+        assert!(first_drained.frame_callback_observed);
+        assert_eq!(first_drained.frame_callback_count, 1);
+        assert!(!first_drained.render_submitted);
+        assert!(!first_drained.buffer_imported);
+        assert!(!first_drained.texture_created);
+        assert!(!first_drained.frame_callback_done_sent);
+        assert!(!first_drained.input_support);
+        assert!(!second_drained.buffer_attach_observed);
+        assert!(!second_drained.damage_observed);
+        assert_eq!(second_drained.frame_callback_count, 0);
+        assert!(!report.surface_commit.render_dirty_queue_render_submitted);
+        assert!(!report.surface_commit.render_dirty_queue_buffer_imported);
+        assert!(!report.surface_commit.render_dirty_queue_texture_created);
+        assert!(
+            !report
+                .surface_commit
+                .render_dirty_queue_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.render_dirty_queue_input_support);
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
+        assert!(state.validate().is_clean());
+    }
+
     /// loop 返回 pump error 时，orchestrator 必须保留原始结构并进入 Failed。
     #[test]
     fn runtime_orchestrator_preserves_structured_pump_errors() {
