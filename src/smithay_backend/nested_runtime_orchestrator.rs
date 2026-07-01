@@ -469,7 +469,10 @@ mod tests {
         core::state::State,
         smithay_backend::{
             linux_toplevel_identity_registration::adapter_toplevel_identity_registration_report,
-            linux_wl_surface_identity::controlled_wl_surface_commit_observation_report,
+            linux_wl_surface_identity::{
+                controlled_wl_surface_commit_observation_report,
+                controlled_wl_surface_null_attach_commit_observation_report,
+            },
             nested_runtime_coordinator::{NestedRuntimePumpError, NestedRuntimePumpErrorKind},
             nested_runtime_loop::{
                 NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
@@ -825,6 +828,63 @@ mod tests {
             vec![first_commit.commit_sequence, second_commit.commit_sequence]
         );
         assert_eq!(report.surface_commit.drained_commit_sequences, vec![1, 2]);
+        assert_eq!(report.surface_commit.buffer_attach_observations, 0);
+        assert_eq!(report.surface_commit.buffer_presence_observations, 0);
+        assert_eq!(report.surface_commit.buffer_removed_observations, 0);
+        assert_eq!(report.surface_commit.renderable_buffer_observations, 0);
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
+        assert_eq!(report.live_admission.admissions_consumed, 0);
+        assert_eq!(report.live_unmap.core_detaches, 0);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：orchestrator final report exposes drained commit buffer evidence.
+    #[test]
+    fn runtime_orchestrator_run_reports_wl_surface_commit_buffer_evidence() {
+        assert_runtime_dir();
+        let mut config = config("orchestrator-surface-commit-buffer-evidence", 3);
+        config.loop_config.stop_when_idle = true;
+        let mut orchestrator = NestedRuntimeOrchestrator::new(config);
+        let mut state = State::new();
+        let _start_report = orchestrator.start().expect("Created 必须允许 start");
+        let (first_commit, second_commit) = {
+            let display = orchestrator
+                .runtime_loop
+                .as_mut()
+                .expect("Started 必须持有 runtime loop")
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit = controlled_wl_surface_null_attach_commit_observation_report(display)
+                .expect("首个 null attach commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 plain commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
+
+        assert!(report.is_clean_shutdown());
+        assert_eq!(report.surface_commit, report.loop_report.surface_commit);
+        assert_eq!(
+            report.surface_commit.drained_commit_sequences,
+            vec![first_commit.commit_sequence, second_commit.commit_sequence]
+        );
+        assert_eq!(report.surface_commit.buffer_attach_observations, 1);
+        assert_eq!(report.surface_commit.buffer_presence_observations, 0);
+        assert_eq!(report.surface_commit.buffer_removed_observations, 1);
+        assert_eq!(report.surface_commit.renderable_buffer_observations, 0);
         assert!(!report.surface_commit.buffer_attached);
         assert!(!report.surface_commit.damage_submitted);
         assert!(!report.surface_commit.frame_callback_requested);
