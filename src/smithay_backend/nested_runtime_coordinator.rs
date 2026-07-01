@@ -264,6 +264,15 @@ pub struct RuntimeSurfaceCommitDrainReport {
     /// 本次 commit 是否已可作为 renderable buffer；Phase 54D 固定为 false。
     pub renderable_buffer: bool,
 
+    /// 本次 commit 是否携带 damage / damage_buffer evidence；不代表已提交 render damage。
+    pub damage_observed: bool,
+
+    /// 本次 commit 中 surface-coordinate damage rectangle 数量。
+    pub surface_damage_rects: usize,
+
+    /// 本次 commit 中 buffer-coordinate damage rectangle 数量。
+    pub buffer_damage_rects: usize,
+
     /// 是否处理 buffer attach；本阶段固定为 false。
     pub buffer_attached: bool,
 
@@ -300,6 +309,9 @@ impl RuntimeSurfaceCommitDrainReport {
             buffer_present: false,
             buffer_removed: false,
             renderable_buffer: false,
+            damage_observed: false,
+            surface_damage_rects: 0,
+            buffer_damage_rects: 0,
             buffer_attached: false,
             damage_submitted: false,
             frame_callback_requested: false,
@@ -318,6 +330,9 @@ impl RuntimeSurfaceCommitDrainReport {
                 report.buffer_present = commit.buffer_present;
                 report.buffer_removed = commit.buffer_removed;
                 report.renderable_buffer = commit.renderable_buffer;
+                report.damage_observed = commit.damage_observed;
+                report.surface_damage_rects = commit.surface_damage_rects;
+                report.buffer_damage_rects = commit.buffer_damage_rects;
             }
             Some(Err(error)) => {
                 report.commit_observation_failed = true;
