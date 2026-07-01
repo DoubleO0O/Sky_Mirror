@@ -19,7 +19,8 @@ use crate::{
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
-        RuntimeSurfaceCommitDrainReport,
+        RuntimeSurfaceCommitDrainReport, RuntimeSurfaceCommitRenderDirtyReadinessIntent,
+        render_dirty_readiness_intent_from_commit_drain_report,
     },
 };
 
@@ -464,6 +465,9 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// 成功 drain 的 commit 中累计 frame callback request 数量。
     pub frame_callback_count: usize,
 
+    /// 按 FIFO drain 顺序保存的 render-dirty/readiness 纯数据意图。
+    pub render_dirty_readiness_intents: Vec<RuntimeSurfaceCommitRenderDirtyReadinessIntent>,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -499,6 +503,11 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             buffer_damage_rects: report.buffer_damage_rects,
             frame_callback_observations: usize::from(report.frame_callback_observed),
             frame_callback_count: report.frame_callback_count,
+            render_dirty_readiness_intents: render_dirty_readiness_intent_from_commit_drain_report(
+                report,
+            )
+            .into_iter()
+            .collect(),
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -551,6 +560,8 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.frame_callback_count = self
             .frame_callback_count
             .saturating_add(delta.frame_callback_count);
+        self.render_dirty_readiness_intents
+            .extend(delta.render_dirty_readiness_intents);
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -910,6 +921,7 @@ mod tests {
                 controlled_wl_surface_damage_commit_observation_report,
                 controlled_wl_surface_frame_callback_commit_observation_report,
                 controlled_wl_surface_null_attach_commit_observation_report,
+                controlled_wl_surface_render_dirty_readiness_commit_observation_report,
             },
             nested_runtime_coordinator::{
                 NestedRuntimePumpError, NestedRuntimePumpErrorKind, NestedRuntimePumpReport,
@@ -1743,6 +1755,91 @@ mod tests {
         assert!(!report.surface_commit.core_mutation_invoked);
         assert_eq!(report.live_admission.admissions_consumed, 0);
         assert_eq!(report.live_unmap.core_detaches, 0);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：runtime drain report 从 commit evidence 生成 render-dirty intent。
+    #[test]
+    fn nested_runtime_loop_builds_render_dirty_readiness_intents_fifo_without_render() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-render-dirty-readiness-intent");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let (first_commit, second_commit) = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit =
+                controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
+                    .expect("首个 render-dirty readiness commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 plain commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let mut state = State::new();
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = runtime_loop.run_for_iterations(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 3,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: true,
+                continue_after_error: false,
+            },
+        );
+
+        assert!(report.is_successful());
+        assert_eq!(
+            report.surface_commit.drained_commit_sequences,
+            vec![first_commit.commit_sequence, second_commit.commit_sequence]
+        );
+        assert_eq!(
+            report.surface_commit.render_dirty_readiness_intents.len(),
+            2
+        );
+        let first_intent = &report.surface_commit.render_dirty_readiness_intents[0];
+        let second_intent = &report.surface_commit.render_dirty_readiness_intents[1];
+        assert_eq!(
+            first_intent.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_intent.surface_identity_key,
+            first_commit.surface_identity_key
+        );
+        assert_eq!(first_intent.commit_sequence, first_commit.commit_sequence);
+        assert_eq!(second_intent.commit_sequence, second_commit.commit_sequence);
+        assert!(first_intent.buffer_attach_observed);
+        assert!(!first_intent.buffer_present);
+        assert!(first_intent.buffer_removed);
+        assert!(!first_intent.renderable_buffer);
+        assert!(first_intent.damage_observed);
+        assert_eq!(first_intent.surface_damage_rects, 0);
+        assert_eq!(first_intent.buffer_damage_rects, 1);
+        assert!(first_intent.frame_callback_observed);
+        assert_eq!(first_intent.frame_callback_count, 1);
+        assert!(!first_intent.buffer_imported);
+        assert!(!first_intent.texture_created);
+        assert!(!first_intent.render_submitted);
+        assert!(!first_intent.frame_callback_done_sent);
+        assert!(!first_intent.input_support);
+        assert!(!second_intent.buffer_attach_observed);
+        assert!(!second_intent.damage_observed);
+        assert_eq!(second_intent.frame_callback_count, 0);
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
         assert_eq!(state.surfaces.records().len(), surface_records_before);
         assert_eq!(state.registry.records().len(), registry_records_before);
         assert!(state.validate().is_clean());

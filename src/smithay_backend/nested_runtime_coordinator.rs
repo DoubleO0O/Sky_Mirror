@@ -298,6 +298,98 @@ pub struct RuntimeSurfaceCommitDrainReport {
     pub core_mutation_invoked: bool,
 }
 
+/// 从一次 `wl_surface.commit` drain report 派生出的 render-dirty/readiness 纯数据意图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRenderDirtyReadinessIntent {
+    /// adapter-only surface identity；不是 core `SurfaceId`。
+    pub adapter_surface_id: AdapterSurfaceId,
+
+    /// adapter-only surface identity key。
+    pub surface_identity_key: SurfaceIdentityKey,
+
+    /// 触发该 intent 的 FIFO commit sequence。
+    pub commit_sequence: u64,
+
+    /// commit 是否携带 buffer attach/remove evidence。
+    pub buffer_attach_observed: bool,
+
+    /// commit 是否携带真实 buffer presence evidence；不代表已 import。
+    pub buffer_present: bool,
+
+    /// commit 是否携带 `attach(NULL)` / buffer removal evidence。
+    pub buffer_removed: bool,
+
+    /// commit 是否已可作为 renderable buffer；当前仍固定为 false。
+    pub renderable_buffer: bool,
+
+    /// commit 是否携带 damage / damage_buffer evidence。
+    pub damage_observed: bool,
+
+    /// surface-coordinate damage rectangle 数量。
+    pub surface_damage_rects: usize,
+
+    /// buffer-coordinate damage rectangle 数量。
+    pub buffer_damage_rects: usize,
+
+    /// commit 是否携带 frame callback request evidence。
+    pub frame_callback_observed: bool,
+
+    /// frame callback request 数量。
+    pub frame_callback_count: usize,
+
+    /// 是否 import buffer；Phase 54G 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 54G 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否提交 render；Phase 54G 固定为 false。
+    pub render_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 54G 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 54G 固定为 false。
+    pub input_support: bool,
+}
+
+/// 从 commit drain report 派生 render-dirty/readiness intent；不触发真实 render。
+pub fn render_dirty_readiness_intent_from_commit_drain_report(
+    report: &RuntimeSurfaceCommitDrainReport,
+) -> Option<RuntimeSurfaceCommitRenderDirtyReadinessIntent> {
+    let (Some(adapter_surface_id), Some(surface_identity_key), Some(commit_sequence)) = (
+        report.adapter_surface_id,
+        report.surface_identity_key,
+        report.commit_sequence,
+    ) else {
+        return None;
+    };
+
+    if !report.commit_observation_resolved {
+        return None;
+    }
+
+    Some(RuntimeSurfaceCommitRenderDirtyReadinessIntent {
+        adapter_surface_id,
+        surface_identity_key,
+        commit_sequence,
+        buffer_attach_observed: report.buffer_attach_observed,
+        buffer_present: report.buffer_present,
+        buffer_removed: report.buffer_removed,
+        renderable_buffer: report.renderable_buffer,
+        damage_observed: report.damage_observed,
+        surface_damage_rects: report.surface_damage_rects,
+        buffer_damage_rects: report.buffer_damage_rects,
+        frame_callback_observed: report.frame_callback_observed,
+        frame_callback_count: report.frame_callback_count,
+        buffer_imported: false,
+        texture_created: false,
+        render_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+    })
+}
+
 impl RuntimeSurfaceCommitDrainReport {
     fn from_observation(
         observation: Option<Result<AdapterSurfaceCommitObservation, SurfaceIdentityError>>,

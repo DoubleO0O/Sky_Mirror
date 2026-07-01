@@ -3337,6 +3337,127 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54G 必须把 commit evidence 汇总为 render-dirty/readiness intent 纯数据。
+    #[test]
+    fn wl_surface_commit_render_dirty_readiness_intent_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let surface_identity =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_wl_surface_identity.rs"))
+                .expect("Phase 54G controlled surface commit module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54G coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54G loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54G orchestrator source 必须存在");
+
+        for required in [
+            "controlled_wl_surface_render_dirty_readiness_commit_observation_report",
+            "controlled_wl_surface_commit_observation_report_with_options(server, true, true, true)",
+            "assert!(report.buffer_attach_observed)",
+            "assert!(report.buffer_removed)",
+            "assert!(report.damage_observed)",
+            "assert_eq!(report.buffer_damage_rects, 1)",
+            "assert!(report.frame_callback_observed)",
+            "assert_eq!(report.frame_callback_count, 1)",
+        ] {
+            assert!(
+                surface_identity.contains(required),
+                "Phase 54G commit evidence source proof 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRenderDirtyReadinessIntent",
+            "pub adapter_surface_id: AdapterSurfaceId",
+            "pub commit_sequence: u64",
+            "pub buffer_attach_observed: bool",
+            "pub buffer_present: bool",
+            "pub buffer_removed: bool",
+            "pub renderable_buffer: bool",
+            "pub damage_observed: bool",
+            "pub surface_damage_rects: usize",
+            "pub buffer_damage_rects: usize",
+            "pub frame_callback_observed: bool",
+            "pub frame_callback_count: usize",
+            "pub buffer_imported: bool",
+            "pub render_submitted: bool",
+            "pub frame_callback_done_sent: bool",
+            "pub input_support: bool",
+            "pub fn render_dirty_readiness_intent_from_commit_drain_report",
+            "buffer_imported: false",
+            "render_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54G coordinator render-dirty intent 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitRenderDirtyReadinessIntent",
+            "pub render_dirty_readiness_intents: Vec<RuntimeSurfaceCommitRenderDirtyReadinessIntent>",
+            "render_dirty_readiness_intent_from_commit_drain_report",
+            "self.render_dirty_readiness_intents",
+            "render_dirty_readiness_intents.len()",
+            "assert_eq!(first_intent.commit_sequence, first_commit.commit_sequence)",
+            "assert_eq!(second_intent.commit_sequence, second_commit.commit_sequence)",
+            "assert!(first_intent.buffer_attach_observed)",
+            "assert!(first_intent.damage_observed)",
+            "assert_eq!(first_intent.frame_callback_count, 1)",
+            "assert!(!first_intent.buffer_imported)",
+            "assert!(!first_intent.render_submitted)",
+            "assert!(!first_intent.frame_callback_done_sent)",
+            "assert!(!first_intent.input_support)",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54G loop render-dirty intent report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "render_dirty_readiness_intents.len()",
+            "assert_eq!(first_intent.commit_sequence, first_commit.commit_sequence)",
+            "assert!(!first_intent.render_submitted)",
+            "assert!(!first_intent.buffer_imported)",
+            "assert!(!first_intent.frame_callback_done_sent)",
+            "assert!(!first_intent.input_support)",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54G orchestrator render-dirty intent report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "texture_created: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !surface_identity.contains(forbidden)
+                    && !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54G render-dirty readiness seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
