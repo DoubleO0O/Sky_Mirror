@@ -4576,6 +4576,109 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55A 必须建立 basic render pipeline skeleton / renderer owner skeleton。
+    #[test]
+    fn basic_render_pipeline_skeleton_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55A coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55A loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55A orchestrator source 必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRenderPipelineSkeletonOwner",
+            "render_pipeline_skeleton_owner: RuntimeSurfaceCommitRenderPipelineSkeletonOwner",
+            "pub struct RuntimeSurfaceCommitRenderPipelineSkeletonReadinessReport",
+            "pub enum RuntimeSurfaceCommitRenderPipelineSkeletonOperation",
+            "pub enum RuntimeSurfaceCommitRenderPipelineSkeletonBlocker",
+            "pub fn render_pipeline_skeleton_readiness_from_execution_owner_shell",
+            "pub source_render_execution_owner_shell_report_observed: bool",
+            "pub observed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub renderer_pipeline_owner_available: bool",
+            "renderer_pipeline_owner_available: true",
+            "pub buffer_imported: bool",
+            "pub texture_created: bool",
+            "pub renderer_called: bool",
+            "pub damage_submitted: bool",
+            "pub frame_callback_done_sent: bool",
+            "pub input_support: bool",
+            "pub core_mutation_invoked: bool",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55A coordinator render pipeline skeleton 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitRenderPipelineSkeletonReadinessReport",
+            "pub render_pipeline_skeleton_readiness_invocations: usize",
+            "pub render_pipeline_skeleton_intents_observed: usize",
+            "pub render_pipeline_skeleton_observed_intents:",
+            "pub render_pipeline_skeleton_owner_available: bool",
+            "pub render_pipeline_skeleton_renderer_called: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_render_pipeline_skeleton_readiness",
+            "report.render_pipeline_skeleton_readiness_report",
+            "render_pipeline_skeleton_intents_observed",
+            "first_render_pipeline_skeleton.commit_sequence",
+            "second_render_pipeline_skeleton.commit_sequence",
+            "render_pipeline_skeleton_renderer_called",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55A loop render pipeline skeleton report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "render_pipeline_skeleton_intents_observed",
+            "render_pipeline_skeleton_owner_available",
+            "first_render_pipeline_skeleton.commit_sequence",
+            "second_render_pipeline_skeleton.commit_sequence",
+            "render_pipeline_skeleton_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55A orchestrator render pipeline skeleton report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55A render pipeline skeleton 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

@@ -1837,6 +1837,122 @@ mod tests {
                 .surface_commit
                 .render_execution_owner_shell_core_mutation_invoked
         );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_readiness_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_observed_intents
+                .len(),
+            2
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_owner_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_pipeline_skeleton_missing_execution_owner_shell
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_missing_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_pipeline_skeleton_missing_frame_callback_done
+        );
+        let first_render_pipeline_skeleton = &report
+            .surface_commit
+            .render_pipeline_skeleton_observed_intents[0];
+        let second_render_pipeline_skeleton = &report
+            .surface_commit
+            .render_pipeline_skeleton_observed_intents[1];
+        assert_eq!(
+            first_render_pipeline_skeleton.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_render_pipeline_skeleton.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_render_pipeline_skeleton.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_render_pipeline_skeleton.buffer_attach_observed);
+        assert!(first_render_pipeline_skeleton.damage_observed);
+        assert_eq!(
+            first_render_pipeline_skeleton.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_render_pipeline_skeleton.frame_callback_count, 1);
+        assert!(!second_render_pipeline_skeleton.buffer_attach_observed);
+        assert!(!second_render_pipeline_skeleton.damage_observed);
+        assert_eq!(second_render_pipeline_skeleton.damage_rect_count, 0);
+        assert_eq!(second_render_pipeline_skeleton.frame_callback_count, 0);
+        assert!(
+            !report
+                .surface_commit
+                .render_pipeline_skeleton_buffer_imported
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_pipeline_skeleton_texture_created
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_pipeline_skeleton_renderer_called
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_pipeline_skeleton_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_pipeline_skeleton_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.render_pipeline_skeleton_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .render_pipeline_skeleton_core_mutation_invoked
+        );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);
