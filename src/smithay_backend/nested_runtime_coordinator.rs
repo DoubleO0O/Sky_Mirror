@@ -1300,6 +1300,169 @@ pub fn render_operation_readiness_from_texture_support_shell(
     }
 }
 
+/// Runtime-owned render operation intent queue 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRenderOperationIntentQueueOperation {
+    /// 读取 render operation readiness report。
+    ReadRenderOperationReadiness,
+    /// 入队 render operation intent。
+    EnqueueIntent,
+    /// 读取 runtime-owned FIFO queue。
+    ReadRuntimeQueue,
+    /// 从 runtime-owned FIFO queue drain intent。
+    DrainIntent,
+    /// 生成 drain report。
+    BuildReport,
+}
+
+/// Runtime-owned render operation intent queue 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRenderOperationIntentQueueBlocker {
+    /// 本轮没有 render operation intent 可入队或 drain。
+    MissingRenderOperationIntent,
+}
+
+/// Runtime-owned render operation intent queue 的一次 drain 报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRenderOperationIntentDrainReport {
+    /// runtime 是否拥有 queue。
+    pub runtime_queue_owned: bool,
+
+    /// 本轮是否尝试从 render operation readiness report 入队。
+    pub enqueue_invoked: bool,
+
+    /// 本轮是否尝试 drain runtime-owned queue。
+    pub drain_invoked: bool,
+
+    /// 来源 render operation readiness 是否创建了 intent。
+    pub source_render_operation_intent_created: bool,
+
+    /// 入队前 pending intent 数量。
+    pub pending_intent_count_before_enqueue: usize,
+
+    /// 入队后 pending intent 数量。
+    pub pending_intent_count_after_enqueue: usize,
+
+    /// drain 前 pending intent 数量。
+    pub pending_intent_count_before_drain: usize,
+
+    /// drain 后 pending intent 数量。
+    pub pending_intent_count_after_drain: usize,
+
+    /// 本轮是否从 readiness report 成功入队 intent。
+    pub intent_enqueued: bool,
+
+    /// 本轮是否从 runtime-owned queue 成功 drain intent。
+    pub intent_drained: bool,
+
+    /// 被 drain 的 pure-data render operation intent。
+    pub drained_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// 是否 import buffer；Phase 54O 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 54O 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否调用 renderer；Phase 54O 固定为 false。
+    pub renderer_called: bool,
+
+    /// 是否提交 damage；Phase 54O 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 54O 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 54O 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 54O 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitRenderOperationIntentQueueOperation>,
+
+    /// 失败或未完成原因。
+    pub blockers: Vec<RuntimeSurfaceCommitRenderOperationIntentQueueBlocker>,
+}
+
+/// Runtime-owned render operation intent FIFO queue。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitRenderOperationIntentQueueOwner {
+    queue: VecDeque<RuntimeSurfaceCommitRenderOperationIntent>,
+}
+
+impl RuntimeSurfaceCommitRenderOperationIntentQueueOwner {
+    /// 创建空 runtime-owned render operation intent queue。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 返回当前 pending render operation intent 数量。
+    pub fn pending_count(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// 从 render operation readiness report 入队一条 intent，然后从 runtime queue drain 一条。
+    pub fn enqueue_from_render_operation_readiness_and_drain_once(
+        &mut self,
+        report: &RuntimeSurfaceCommitRenderOperationReadinessReport,
+    ) -> RuntimeSurfaceCommitRenderOperationIntentDrainReport {
+        let pending_intent_count_before_enqueue = self.pending_count();
+        let mut operations = vec![
+            RuntimeSurfaceCommitRenderOperationIntentQueueOperation::ReadRenderOperationReadiness,
+        ];
+        let intent_enqueued = if let Some(intent) = report.render_operation_intent.clone() {
+            operations.push(RuntimeSurfaceCommitRenderOperationIntentQueueOperation::EnqueueIntent);
+            self.queue.push_back(intent);
+            true
+        } else {
+            false
+        };
+        let pending_intent_count_after_enqueue = self.pending_count();
+        let pending_intent_count_before_drain = self.pending_count();
+        operations.push(RuntimeSurfaceCommitRenderOperationIntentQueueOperation::ReadRuntimeQueue);
+        let drained_intent = self.queue.pop_front();
+        let intent_drained = drained_intent.is_some();
+        if intent_drained {
+            operations.push(RuntimeSurfaceCommitRenderOperationIntentQueueOperation::DrainIntent);
+        }
+        let pending_intent_count_after_drain = self.pending_count();
+        operations.push(RuntimeSurfaceCommitRenderOperationIntentQueueOperation::BuildReport);
+
+        let blockers = if intent_enqueued || intent_drained {
+            Vec::new()
+        } else {
+            vec![
+                RuntimeSurfaceCommitRenderOperationIntentQueueBlocker::MissingRenderOperationIntent,
+            ]
+        };
+
+        RuntimeSurfaceCommitRenderOperationIntentDrainReport {
+            runtime_queue_owned: true,
+            enqueue_invoked: true,
+            drain_invoked: true,
+            source_render_operation_intent_created: report.render_operation_intent_created,
+            pending_intent_count_before_enqueue,
+            pending_intent_count_after_enqueue,
+            pending_intent_count_before_drain,
+            pending_intent_count_after_drain,
+            intent_enqueued,
+            intent_drained,
+            drained_intent,
+            buffer_imported: false,
+            texture_created: false,
+            renderer_called: false,
+            damage_submitted: false,
+            frame_callback_done_sent: false,
+            input_support: false,
+            core_mutation_invoked: false,
+            operations,
+            blockers,
+        }
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -1546,6 +1709,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// render operation / render execution readiness intent report。
     pub render_operation_readiness_report: RuntimeSurfaceCommitRenderOperationReadinessReport,
+
+    /// render operation intent runtime-owned queue drain report。
+    pub render_operation_intent_drain_report: RuntimeSurfaceCommitRenderOperationIntentDrainReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -1562,6 +1728,7 @@ pub struct NestedRuntimeCoordinator {
     renderer_owner_shell: RuntimeSurfaceCommitRendererOwnerShell,
     buffer_importer_shell: RuntimeSurfaceCommitBufferImporterShell,
     texture_support_shell: RuntimeSurfaceCommitTextureSupportShell,
+    render_operation_intent_queue_owner: RuntimeSurfaceCommitRenderOperationIntentQueueOwner,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -1592,6 +1759,8 @@ impl NestedRuntimeCoordinator {
             renderer_owner_shell: RuntimeSurfaceCommitRendererOwnerShell::new(),
             buffer_importer_shell: RuntimeSurfaceCommitBufferImporterShell::new(),
             texture_support_shell: RuntimeSurfaceCommitTextureSupportShell::new(),
+            render_operation_intent_queue_owner:
+                RuntimeSurfaceCommitRenderOperationIntentQueueOwner::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -1628,6 +1797,11 @@ impl NestedRuntimeCoordinator {
     /// 返回 coordinator render-dirty intent owner 中的 pending 数量。
     pub fn render_dirty_intent_pending_count(&self) -> usize {
         self.render_dirty_intent_queue_owner.pending_count()
+    }
+
+    /// 返回 coordinator render operation intent owner 中的 pending 数量。
+    pub fn render_operation_intent_pending_count(&self) -> usize {
+        self.render_operation_intent_queue_owner.pending_count()
     }
 
     /// 查询 adapter surface 到 core surface 的 admission ledger mapping。
@@ -1787,6 +1961,11 @@ impl NestedRuntimeCoordinator {
             render_operation_readiness_from_texture_support_shell(
                 &texture_support_shell_readiness_report,
             );
+        let render_operation_intent_drain_report = self
+            .render_operation_intent_queue_owner
+            .enqueue_from_render_operation_readiness_and_drain_once(
+                &render_operation_readiness_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -1801,6 +1980,7 @@ impl NestedRuntimeCoordinator {
             buffer_importer_shell_readiness_report,
             texture_support_shell_readiness_report,
             render_operation_readiness_report,
+            render_operation_intent_drain_report,
         }
     }
 

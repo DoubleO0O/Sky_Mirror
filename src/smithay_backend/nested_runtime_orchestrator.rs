@@ -1568,6 +1568,69 @@ mod tests {
         );
         assert!(!report.surface_commit.render_operation_input_support);
         assert!(!report.surface_commit.render_operation_core_mutation_invoked);
+        assert_eq!(
+            report
+                .surface_commit
+                .render_operation_queue_drain_invocations,
+            3
+        );
+        assert_eq!(report.surface_commit.render_operation_intents_enqueued, 2);
+        assert_eq!(report.surface_commit.render_operation_intents_drained, 2);
+        assert_eq!(
+            report
+                .surface_commit
+                .render_operation_queue_drained_intents
+                .len(),
+            2
+        );
+        let first_render_operation_drained =
+            &report.surface_commit.render_operation_queue_drained_intents[0];
+        let second_render_operation_drained =
+            &report.surface_commit.render_operation_queue_drained_intents[1];
+        assert_eq!(
+            first_render_operation_drained.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_render_operation_drained.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_render_operation_drained.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_render_operation_drained.buffer_attach_observed);
+        assert!(first_render_operation_drained.damage_observed);
+        assert_eq!(
+            first_render_operation_drained.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_render_operation_drained.frame_callback_count, 1);
+        assert!(!second_render_operation_drained.buffer_attach_observed);
+        assert!(!second_render_operation_drained.damage_observed);
+        assert_eq!(second_render_operation_drained.damage_rect_count, 0);
+        assert_eq!(second_render_operation_drained.frame_callback_count, 0);
+        assert!(!report.surface_commit.render_operation_queue_buffer_imported);
+        assert!(!report.surface_commit.render_operation_queue_texture_created);
+        assert!(!report.surface_commit.render_operation_queue_renderer_called);
+        assert!(
+            !report
+                .surface_commit
+                .render_operation_queue_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_operation_queue_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.render_operation_queue_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .render_operation_queue_core_mutation_invoked
+        );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);
