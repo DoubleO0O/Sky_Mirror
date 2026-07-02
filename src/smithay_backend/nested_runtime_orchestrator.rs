@@ -1331,6 +1331,70 @@ mod tests {
         assert!(report.surface_commit.renderer_owner_missing_renderer_owner);
         assert!(report.surface_commit.renderer_owner_missing_buffer_importer);
         assert!(report.surface_commit.renderer_owner_missing_texture_support);
+        assert_eq!(
+            report
+                .surface_commit
+                .renderer_owner_shell_readiness_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .renderer_owner_shell_work_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .renderer_owner_shell_observed_work_intents
+                .len(),
+            2
+        );
+        assert!(report.surface_commit.renderer_owner_shell_available);
+        assert!(
+            !report
+                .surface_commit
+                .renderer_owner_shell_missing_renderer_owner
+        );
+        assert!(
+            report
+                .surface_commit
+                .renderer_owner_shell_missing_buffer_importer
+        );
+        assert!(
+            report
+                .surface_commit
+                .renderer_owner_shell_missing_texture_support
+        );
+        let first_shell = &report
+            .surface_commit
+            .renderer_owner_shell_observed_work_intents[0];
+        let second_shell = &report
+            .surface_commit
+            .renderer_owner_shell_observed_work_intents[1];
+        assert_eq!(first_shell.commit_sequence, first_commit.commit_sequence);
+        assert_eq!(second_shell.commit_sequence, second_commit.commit_sequence);
+        assert!(first_shell.buffer_attach_observed);
+        assert!(first_shell.damage_observed);
+        assert_eq!(first_shell.frame_callback_count, 1);
+        assert!(!second_shell.buffer_attach_observed);
+        assert!(!second_shell.damage_observed);
+        assert_eq!(second_shell.frame_callback_count, 0);
+        assert!(!report.surface_commit.renderer_owner_shell_buffer_imported);
+        assert!(!report.surface_commit.renderer_owner_shell_texture_created);
+        assert!(!report.surface_commit.renderer_owner_shell_renderer_called);
+        assert!(!report.surface_commit.renderer_owner_shell_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .renderer_owner_shell_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.renderer_owner_shell_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .renderer_owner_shell_core_mutation_invoked
+        );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);
