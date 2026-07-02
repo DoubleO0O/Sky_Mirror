@@ -4679,6 +4679,128 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55B 必须建立 render backend capability report seam。
+    #[test]
+    fn render_backend_capability_report_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55B coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55B loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55B orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55B_RENDER_BACKEND_CAPABILITY_REPORT.md"),
+        )
+        .expect("Phase 55B 文档必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRenderBackendCapabilityOwner",
+            "render_backend_capability_owner: RuntimeSurfaceCommitRenderBackendCapabilityOwner",
+            "pub struct RuntimeSurfaceCommitRenderBackendCapabilityReport",
+            "pub enum RuntimeSurfaceCommitRenderBackendCapabilityOperation",
+            "pub enum RuntimeSurfaceCommitRenderBackendCapabilityBlocker",
+            "pub fn render_backend_capability_report_from_pipeline_skeleton",
+            "pub source_render_pipeline_skeleton_report_observed: bool",
+            "pub source_renderer_pipeline_owner_available: bool",
+            "pub observed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub render_backend_capability_owner_available: bool",
+            "pub renderer_backend_registered: bool",
+            "pub renderer_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>",
+            "renderer_backend_registered: false",
+            "renderer_backend_kind: None",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55B coordinator render backend capability 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitRenderBackendCapabilityReport",
+            "pub render_backend_capability_report_invocations: usize",
+            "pub render_backend_capability_intents_observed: usize",
+            "pub render_backend_capability_observed_intents:",
+            "pub render_backend_capability_owner_available: bool",
+            "pub render_backend_capability_backend_registered: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_render_backend_capability_report",
+            "report.render_backend_capability_report",
+            "render_backend_capability_intents_observed",
+            "first_render_backend_capability.commit_sequence",
+            "second_render_backend_capability.commit_sequence",
+            "render_backend_capability_renderer_called",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55B loop render backend capability report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "render_backend_capability_intents_observed",
+            "render_backend_capability_owner_available",
+            "render_backend_capability_backend_registered",
+            "first_render_backend_capability.commit_sequence",
+            "second_render_backend_capability.commit_sequence",
+            "render_backend_capability_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55B orchestrator render backend capability report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55B render backend capability 包含禁止 token: {forbidden}"
+            );
+        }
+
+        for required in [
+            "renderer_backend_registered = false",
+            "renderer_backend_kind = None",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55B doc 缺少 capability truth: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
