@@ -3884,6 +3884,116 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54L 必须建立 runtime-owned buffer importer shell readiness seam。
+    #[test]
+    fn wl_surface_buffer_importer_shell_readiness_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54L coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54L loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54L orchestrator source 必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitBufferImporterShell",
+            "buffer_importer_shell: RuntimeSurfaceCommitBufferImporterShell",
+            "pub struct RuntimeSurfaceCommitBufferImporterShellReadinessReport",
+            "pub enum RuntimeSurfaceCommitBufferImporterShellOperation",
+            "pub enum RuntimeSurfaceCommitBufferImporterShellBlocker",
+            "pub fn buffer_importer_shell_readiness_from_renderer_owner_shell",
+            "pub renderer_owner_shell_report_observed: bool",
+            "pub observed_work_intent: Option<RuntimeSurfaceCommitRendererAdmissionWorkIntent>",
+            "pub buffer_importer_shell_available: bool",
+            "buffer_importer_shell_available: true",
+            "pub buffer_importer_available: bool",
+            "buffer_importer_available: true",
+            "MissingTextureSupport",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54L coordinator buffer importer shell readiness 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitBufferImporterShellReadinessReport",
+            "pub buffer_importer_shell_readiness_invocations: usize",
+            "pub buffer_importer_shell_work_intents_observed: usize",
+            "pub buffer_importer_shell_observed_work_intents:",
+            "Vec<RuntimeSurfaceCommitRendererAdmissionWorkIntent>",
+            "pub buffer_importer_shell_available: bool",
+            "pub buffer_importer_shell_missing_renderer_owner_shell: bool",
+            "pub buffer_importer_shell_missing_buffer_importer: bool",
+            "pub buffer_importer_shell_missing_texture_support: bool",
+            "pub buffer_importer_shell_renderer_called: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_buffer_importer_shell_readiness",
+            "report.buffer_importer_shell_readiness_report",
+            "buffer_importer_shell_work_intents_observed",
+            "buffer_importer_shell_available",
+            "buffer_importer_shell_missing_renderer_owner_shell",
+            "buffer_importer_shell_missing_buffer_importer",
+            "buffer_importer_shell_missing_texture_support",
+            "first_importer.commit_sequence",
+            "second_importer.commit_sequence",
+            "buffer_importer_shell_renderer_called",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54L loop buffer importer shell readiness 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_importer_shell_work_intents_observed",
+            "buffer_importer_shell_available",
+            "buffer_importer_shell_missing_renderer_owner_shell",
+            "buffer_importer_shell_missing_buffer_importer",
+            "buffer_importer_shell_missing_texture_support",
+            "first_importer.commit_sequence",
+            "second_importer.commit_sequence",
+            "buffer_importer_shell_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54L orchestrator buffer importer shell readiness 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54L buffer importer shell readiness seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
