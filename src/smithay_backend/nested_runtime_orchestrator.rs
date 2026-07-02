@@ -1524,6 +1524,50 @@ mod tests {
                 .surface_commit
                 .texture_support_shell_core_mutation_invoked
         );
+        assert_eq!(
+            report.surface_commit.render_operation_readiness_invocations,
+            3
+        );
+        assert_eq!(report.surface_commit.render_operation_intents_created, 2);
+        assert_eq!(report.surface_commit.render_operation_intents.len(), 2);
+        let first_render_operation = &report.surface_commit.render_operation_intents[0];
+        let second_render_operation = &report.surface_commit.render_operation_intents[1];
+        assert_eq!(
+            first_render_operation.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_render_operation.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_render_operation.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_render_operation.buffer_attach_observed);
+        assert!(first_render_operation.damage_observed);
+        assert_eq!(
+            first_render_operation.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_render_operation.frame_callback_count, 1);
+        assert!(!second_render_operation.buffer_attach_observed);
+        assert!(!second_render_operation.damage_observed);
+        assert_eq!(second_render_operation.damage_rect_count, 0);
+        assert_eq!(second_render_operation.frame_callback_count, 0);
+        assert!(!report.surface_commit.render_operation_buffer_imported);
+        assert!(!report.surface_commit.render_operation_texture_created);
+        assert!(!report.surface_commit.render_operation_renderer_called);
+        assert!(!report.surface_commit.render_operation_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .render_operation_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.render_operation_input_support);
+        assert!(!report.surface_commit.render_operation_core_mutation_invoked);
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);
