@@ -1770,6 +1770,150 @@ pub fn render_execution_owner_shell_readiness_from_owner_boundary(
     }
 }
 
+/// Basic render pipeline skeleton 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRenderPipelineSkeletonOperation {
+    /// 读取 render execution owner shell readiness report。
+    ObserveRenderExecutionOwnerShellReadiness,
+    /// 绑定 runtime-owned render pipeline skeleton owner。
+    BindRenderPipelineSkeletonOwner,
+    /// 生成 render pipeline skeleton readiness report。
+    BuildReadinessReport,
+}
+
+/// Basic render pipeline skeleton 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRenderPipelineSkeletonBlocker {
+    /// 本轮没有 render operation intent 可观察。
+    MissingRenderOperationIntent,
+    /// 上游 render execution owner shell 尚未可用。
+    MissingRenderExecutionOwnerShell,
+    /// buffer import 尚未接入。
+    MissingBufferImport,
+    /// texture creation 尚未接入。
+    MissingTextureCreation,
+    /// renderer call 尚未接入。
+    MissingRendererCall,
+    /// damage submit 尚未接入。
+    MissingDamageSubmit,
+    /// frame callback done 尚未接入。
+    MissingFrameCallbackDone,
+}
+
+/// Runtime-owned basic render pipeline skeleton readiness 纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRenderPipelineSkeletonReadinessReport {
+    /// 本轮是否执行 render pipeline skeleton seam。
+    pub readiness_invoked: bool,
+
+    /// 是否观察到上游 render execution owner shell report。
+    pub source_render_execution_owner_shell_report_observed: bool,
+
+    /// 上游 render execution owner shell 是否可用。
+    pub source_render_execution_owner_shell_available: bool,
+
+    /// 上游 shell 是否观察到 render operation intent。
+    pub source_render_operation_intent_observed: bool,
+
+    /// 从上游 shell 观察到的 render operation intent。
+    pub observed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// runtime-owned renderer pipeline skeleton owner 是否可用；不代表真实 renderer 可调用。
+    pub renderer_pipeline_owner_available: bool,
+
+    /// 是否 import buffer；Phase 55A 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 55A 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否调用 renderer；Phase 55A 固定为 false。
+    pub renderer_called: bool,
+
+    /// 是否提交 damage；Phase 55A 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 55A 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 55A 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 55A 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitRenderPipelineSkeletonOperation>,
+
+    /// 阻止进入真实 render pipeline 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitRenderPipelineSkeletonBlocker>,
+}
+
+/// Runtime-owned render pipeline skeleton owner；不持有真实 renderer、buffer、texture 或 core state。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitRenderPipelineSkeletonOwner;
+
+impl RuntimeSurfaceCommitRenderPipelineSkeletonOwner {
+    /// 创建 runtime-owned render pipeline skeleton owner。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 从 render execution owner shell readiness 派生 skeleton readiness report；不执行 render。
+    pub fn render_pipeline_skeleton_readiness_from_execution_owner_shell(
+        &mut self,
+        report: &RuntimeSurfaceCommitRenderExecutionOwnerShellReadinessReport,
+    ) -> RuntimeSurfaceCommitRenderPipelineSkeletonReadinessReport {
+        render_pipeline_skeleton_readiness_from_execution_owner_shell(report)
+    }
+}
+
+/// 从 render execution owner shell readiness 派生 skeleton readiness report；不执行 render。
+pub fn render_pipeline_skeleton_readiness_from_execution_owner_shell(
+    report: &RuntimeSurfaceCommitRenderExecutionOwnerShellReadinessReport,
+) -> RuntimeSurfaceCommitRenderPipelineSkeletonReadinessReport {
+    let observed_intent = report.observed_intent.clone();
+    let mut blockers = Vec::new();
+    if observed_intent.is_none() {
+        blockers
+            .push(RuntimeSurfaceCommitRenderPipelineSkeletonBlocker::MissingRenderOperationIntent);
+    }
+    if !report.render_execution_owner_shell_available {
+        blockers.push(
+            RuntimeSurfaceCommitRenderPipelineSkeletonBlocker::MissingRenderExecutionOwnerShell,
+        );
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitRenderPipelineSkeletonBlocker::MissingBufferImport,
+        RuntimeSurfaceCommitRenderPipelineSkeletonBlocker::MissingTextureCreation,
+        RuntimeSurfaceCommitRenderPipelineSkeletonBlocker::MissingRendererCall,
+        RuntimeSurfaceCommitRenderPipelineSkeletonBlocker::MissingDamageSubmit,
+        RuntimeSurfaceCommitRenderPipelineSkeletonBlocker::MissingFrameCallbackDone,
+    ]);
+
+    RuntimeSurfaceCommitRenderPipelineSkeletonReadinessReport {
+        readiness_invoked: true,
+        source_render_execution_owner_shell_report_observed: report.readiness_invoked,
+        source_render_execution_owner_shell_available: report.render_execution_owner_shell_available,
+        source_render_operation_intent_observed: observed_intent.is_some(),
+        observed_intent,
+        renderer_pipeline_owner_available: true,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitRenderPipelineSkeletonOperation::ObserveRenderExecutionOwnerShellReadiness,
+            RuntimeSurfaceCommitRenderPipelineSkeletonOperation::BindRenderPipelineSkeletonOwner,
+            RuntimeSurfaceCommitRenderPipelineSkeletonOperation::BuildReadinessReport,
+        ],
+        blockers,
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -2027,6 +2171,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// render execution owner shell readiness report。
     pub render_execution_owner_shell_readiness_report:
         RuntimeSurfaceCommitRenderExecutionOwnerShellReadinessReport,
+
+    /// basic render pipeline skeleton readiness report。
+    pub render_pipeline_skeleton_readiness_report:
+        RuntimeSurfaceCommitRenderPipelineSkeletonReadinessReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -2046,6 +2194,7 @@ pub struct NestedRuntimeCoordinator {
     render_operation_intent_queue_owner: RuntimeSurfaceCommitRenderOperationIntentQueueOwner,
     render_execution_owner_boundary: RuntimeSurfaceCommitRenderExecutionOwnerBoundary,
     render_execution_owner_shell: RuntimeSurfaceCommitRenderExecutionOwnerShell,
+    render_pipeline_skeleton_owner: RuntimeSurfaceCommitRenderPipelineSkeletonOwner,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -2081,6 +2230,7 @@ impl NestedRuntimeCoordinator {
             render_execution_owner_boundary: RuntimeSurfaceCommitRenderExecutionOwnerBoundary::new(
             ),
             render_execution_owner_shell: RuntimeSurfaceCommitRenderExecutionOwnerShell::new(),
+            render_pipeline_skeleton_owner: RuntimeSurfaceCommitRenderPipelineSkeletonOwner::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -2294,6 +2444,11 @@ impl NestedRuntimeCoordinator {
             .render_execution_owner_shell_readiness_from_owner_boundary(
                 &render_execution_owner_boundary_report,
             );
+        let render_pipeline_skeleton_readiness_report = self
+            .render_pipeline_skeleton_owner
+            .render_pipeline_skeleton_readiness_from_execution_owner_shell(
+                &render_execution_owner_shell_readiness_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -2311,6 +2466,7 @@ impl NestedRuntimeCoordinator {
             render_operation_intent_drain_report,
             render_execution_owner_boundary_report,
             render_execution_owner_shell_readiness_report,
+            render_pipeline_skeleton_readiness_report,
         }
     }
 
