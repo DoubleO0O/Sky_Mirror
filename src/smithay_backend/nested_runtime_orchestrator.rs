@@ -1462,6 +1462,68 @@ mod tests {
                 .surface_commit
                 .buffer_importer_shell_core_mutation_invoked
         );
+        assert_eq!(
+            report
+                .surface_commit
+                .texture_support_shell_readiness_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .texture_support_shell_work_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .texture_support_shell_observed_work_intents
+                .len(),
+            2
+        );
+        assert!(report.surface_commit.texture_support_shell_available);
+        assert!(
+            !report
+                .surface_commit
+                .texture_support_shell_missing_buffer_importer_shell
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_support_shell_missing_texture_support
+        );
+        let first_texture = &report
+            .surface_commit
+            .texture_support_shell_observed_work_intents[0];
+        let second_texture = &report
+            .surface_commit
+            .texture_support_shell_observed_work_intents[1];
+        assert_eq!(first_texture.commit_sequence, first_commit.commit_sequence);
+        assert_eq!(
+            second_texture.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_texture.buffer_attach_observed);
+        assert!(first_texture.damage_observed);
+        assert_eq!(first_texture.frame_callback_count, 1);
+        assert!(!second_texture.buffer_attach_observed);
+        assert!(!second_texture.damage_observed);
+        assert_eq!(second_texture.frame_callback_count, 0);
+        assert!(!report.surface_commit.texture_support_shell_buffer_imported);
+        assert!(!report.surface_commit.texture_support_shell_texture_created);
+        assert!(!report.surface_commit.texture_support_shell_renderer_called);
+        assert!(!report.surface_commit.texture_support_shell_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .texture_support_shell_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.texture_support_shell_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .texture_support_shell_core_mutation_invoked
+        );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);

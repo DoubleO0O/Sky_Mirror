@@ -974,6 +974,133 @@ pub fn buffer_importer_shell_readiness_from_renderer_owner_shell(
     }
 }
 
+/// Texture support shell readiness 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureSupportShellOperation {
+    /// 读取 buffer importer shell readiness report。
+    ObserveBufferImporterShellReadiness,
+    /// 绑定 runtime-owned texture support shell。
+    BindTextureSupportShell,
+    /// 生成 texture support shell readiness report。
+    BuildReadinessReport,
+}
+
+/// Texture support shell readiness 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureSupportShellBlocker {
+    /// 本轮没有 renderer work intent 可观察。
+    MissingRendererWorkIntent,
+    /// buffer importer shell 尚未可用。
+    MissingBufferImporterShell,
+    /// texture support shell 尚未可用。
+    MissingTextureSupport,
+}
+
+/// Runtime-owned texture support shell readiness 纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureSupportShellReadinessReport {
+    /// 本轮是否执行 texture support shell readiness seam。
+    pub readiness_invoked: bool,
+
+    /// 是否观察到上游 buffer importer shell report。
+    pub buffer_importer_shell_report_observed: bool,
+
+    /// 上游 buffer importer shell 是否可用。
+    pub buffer_importer_shell_available: bool,
+
+    /// 从上游 importer shell 观察到的 renderer work intent。
+    pub observed_work_intent: Option<RuntimeSurfaceCommitRendererAdmissionWorkIntent>,
+
+    /// runtime-owned texture support shell 是否可用；不代表已创建 texture。
+    pub texture_support_shell_available: bool,
+
+    /// texture support 边界是否可用；不代表已创建 texture。
+    pub texture_support_available: bool,
+
+    /// 是否 import buffer；Phase 54M 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 54M 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否调用 renderer；Phase 54M 固定为 false。
+    pub renderer_called: bool,
+
+    /// 是否提交 damage；Phase 54M 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 54M 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 54M 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 54M 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitTextureSupportShellOperation>,
+
+    /// 阻止进入真实 render 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitTextureSupportShellBlocker>,
+}
+
+/// Runtime-owned texture support shell；不持有真实 texture 或 renderer state。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitTextureSupportShell;
+
+impl RuntimeSurfaceCommitTextureSupportShell {
+    /// 创建 runtime-owned texture support shell readiness 边界。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 从 importer shell readiness report 派生 texture support shell readiness report；不创建 texture。
+    pub fn texture_support_shell_readiness_from_buffer_importer_shell(
+        &mut self,
+        report: &RuntimeSurfaceCommitBufferImporterShellReadinessReport,
+    ) -> RuntimeSurfaceCommitTextureSupportShellReadinessReport {
+        texture_support_shell_readiness_from_buffer_importer_shell(report)
+    }
+}
+
+/// 从 buffer importer shell readiness report 派生 texture support shell readiness report；不创建 texture。
+pub fn texture_support_shell_readiness_from_buffer_importer_shell(
+    report: &RuntimeSurfaceCommitBufferImporterShellReadinessReport,
+) -> RuntimeSurfaceCommitTextureSupportShellReadinessReport {
+    let observed_work_intent = report.observed_work_intent.clone();
+    let buffer_importer_shell_available = report.buffer_importer_shell_available;
+    let mut blockers = Vec::new();
+    if observed_work_intent.is_none() {
+        blockers.push(RuntimeSurfaceCommitTextureSupportShellBlocker::MissingRendererWorkIntent);
+    }
+    if !buffer_importer_shell_available || !report.buffer_importer_available {
+        blockers.push(RuntimeSurfaceCommitTextureSupportShellBlocker::MissingBufferImporterShell);
+    }
+
+    RuntimeSurfaceCommitTextureSupportShellReadinessReport {
+        readiness_invoked: true,
+        buffer_importer_shell_report_observed: report.readiness_invoked,
+        buffer_importer_shell_available,
+        observed_work_intent,
+        texture_support_shell_available: true,
+        texture_support_available: true,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitTextureSupportShellOperation::ObserveBufferImporterShellReadiness,
+            RuntimeSurfaceCommitTextureSupportShellOperation::BindTextureSupportShell,
+            RuntimeSurfaceCommitTextureSupportShellOperation::BuildReadinessReport,
+        ],
+        blockers,
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -1213,6 +1340,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// buffer importer shell readiness report。
     pub buffer_importer_shell_readiness_report:
         RuntimeSurfaceCommitBufferImporterShellReadinessReport,
+
+    /// texture support shell readiness report。
+    pub texture_support_shell_readiness_report:
+        RuntimeSurfaceCommitTextureSupportShellReadinessReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -1228,6 +1359,7 @@ pub struct NestedRuntimeCoordinator {
     renderer_admission_owner: RuntimeSurfaceCommitRendererAdmissionOwner,
     renderer_owner_shell: RuntimeSurfaceCommitRendererOwnerShell,
     buffer_importer_shell: RuntimeSurfaceCommitBufferImporterShell,
+    texture_support_shell: RuntimeSurfaceCommitTextureSupportShell,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -1257,6 +1389,7 @@ impl NestedRuntimeCoordinator {
             renderer_admission_owner: RuntimeSurfaceCommitRendererAdmissionOwner::new(),
             renderer_owner_shell: RuntimeSurfaceCommitRendererOwnerShell::new(),
             buffer_importer_shell: RuntimeSurfaceCommitBufferImporterShell::new(),
+            texture_support_shell: RuntimeSurfaceCommitTextureSupportShell::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -1443,6 +1576,11 @@ impl NestedRuntimeCoordinator {
             .buffer_importer_shell_readiness_from_renderer_owner_shell(
                 &renderer_owner_shell_readiness_report,
             );
+        let texture_support_shell_readiness_report = self
+            .texture_support_shell
+            .texture_support_shell_readiness_from_buffer_importer_shell(
+                &buffer_importer_shell_readiness_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -1455,6 +1593,7 @@ impl NestedRuntimeCoordinator {
             renderer_owner_boundary_report,
             renderer_owner_shell_readiness_report,
             buffer_importer_shell_readiness_report,
+            texture_support_shell_readiness_report,
         }
     }
 
