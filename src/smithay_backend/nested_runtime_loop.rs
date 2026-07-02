@@ -21,6 +21,8 @@ use crate::{
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
         RuntimeSurfaceCommitBufferImporterShellBlocker,
         RuntimeSurfaceCommitBufferImporterShellReadinessReport, RuntimeSurfaceCommitDrainReport,
+        RuntimeSurfaceCommitRenderBackendCapabilityBlocker,
+        RuntimeSurfaceCommitRenderBackendCapabilityReport, RuntimeSurfaceCommitRenderBackendKind,
         RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
         RuntimeSurfaceCommitRenderDirtyReadinessIntent,
         RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker,
@@ -921,6 +923,66 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// render pipeline skeleton 是否触发 core mutation；Phase 55A 固定保持 false。
     pub render_pipeline_skeleton_core_mutation_invoked: bool,
 
+    /// render backend capability report seam 被调用的次数。
+    pub render_backend_capability_report_invocations: usize,
+
+    /// render backend capability report 观察到的 intent 数量。
+    pub render_backend_capability_intents_observed: usize,
+
+    /// 按 FIFO 顺序保存的 render backend capability observed intents。
+    pub render_backend_capability_observed_intents: Vec<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// runtime-owned render backend capability owner 是否可用。
+    pub render_backend_capability_owner_available: bool,
+
+    /// 是否已注册真实 renderer backend；Phase 55B 固定保持 false。
+    pub render_backend_capability_backend_registered: bool,
+
+    /// 已注册 renderer backend 种类；Phase 55B 固定保持 None。
+    pub render_backend_capability_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// render backend capability 是否仍缺少 pipeline skeleton。
+    pub render_backend_capability_missing_pipeline_skeleton: bool,
+
+    /// render backend capability 是否仍缺少 renderer backend registration。
+    pub render_backend_capability_missing_backend_registration: bool,
+
+    /// render backend capability 是否仍缺少 buffer import。
+    pub render_backend_capability_missing_buffer_import: bool,
+
+    /// render backend capability 是否仍缺少 texture creation。
+    pub render_backend_capability_missing_texture_creation: bool,
+
+    /// render backend capability 是否仍缺少 renderer call。
+    pub render_backend_capability_missing_renderer_call: bool,
+
+    /// render backend capability 是否仍缺少 damage submit。
+    pub render_backend_capability_missing_damage_submit: bool,
+
+    /// render backend capability 是否仍缺少 frame callback done。
+    pub render_backend_capability_missing_frame_callback_done: bool,
+
+    /// render backend capability 是否 import buffer；Phase 55B 固定保持 false。
+    pub render_backend_capability_buffer_imported: bool,
+
+    /// render backend capability 是否创建 texture；Phase 55B 固定保持 false。
+    pub render_backend_capability_texture_created: bool,
+
+    /// render backend capability 是否调用 renderer；Phase 55B 固定保持 false。
+    pub render_backend_capability_renderer_called: bool,
+
+    /// render backend capability 是否提交 damage；Phase 55B 固定保持 false。
+    pub render_backend_capability_damage_submitted: bool,
+
+    /// render backend capability 是否发送 frame callback done；Phase 55B 固定保持 false。
+    pub render_backend_capability_frame_callback_done_sent: bool,
+
+    /// render backend capability 是否接入 input；Phase 55B 固定保持 false。
+    pub render_backend_capability_input_support: bool,
+
+    /// render backend capability 是否触发 core mutation；Phase 55B 固定保持 false。
+    pub render_backend_capability_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -1104,6 +1166,26 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             render_pipeline_skeleton_frame_callback_done_sent: false,
             render_pipeline_skeleton_input_support: false,
             render_pipeline_skeleton_core_mutation_invoked: false,
+            render_backend_capability_report_invocations: 0,
+            render_backend_capability_intents_observed: 0,
+            render_backend_capability_observed_intents: Vec::new(),
+            render_backend_capability_owner_available: false,
+            render_backend_capability_backend_registered: false,
+            render_backend_capability_backend_kind: None,
+            render_backend_capability_missing_pipeline_skeleton: false,
+            render_backend_capability_missing_backend_registration: false,
+            render_backend_capability_missing_buffer_import: false,
+            render_backend_capability_missing_texture_creation: false,
+            render_backend_capability_missing_renderer_call: false,
+            render_backend_capability_missing_damage_submit: false,
+            render_backend_capability_missing_frame_callback_done: false,
+            render_backend_capability_buffer_imported: false,
+            render_backend_capability_texture_created: false,
+            render_backend_capability_renderer_called: false,
+            render_backend_capability_damage_submitted: false,
+            render_backend_capability_frame_callback_done_sent: false,
+            render_backend_capability_input_support: false,
+            render_backend_capability_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -1451,6 +1533,56 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_render_backend_capability_report(
+        report: &RuntimeSurfaceCommitRenderBackendCapabilityReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            render_backend_capability_report_invocations: usize::from(report.report_invoked),
+            render_backend_capability_intents_observed: usize::from(
+                report.observed_intent.is_some(),
+            ),
+            render_backend_capability_observed_intents: report
+                .observed_intent
+                .clone()
+                .into_iter()
+                .collect(),
+            render_backend_capability_owner_available: report
+                .render_backend_capability_owner_available,
+            render_backend_capability_backend_registered: report.renderer_backend_registered,
+            render_backend_capability_backend_kind: report.renderer_backend_kind,
+            render_backend_capability_missing_pipeline_skeleton: has_blocker(
+                RuntimeSurfaceCommitRenderBackendCapabilityBlocker::MissingRenderPipelineSkeleton,
+            ),
+            render_backend_capability_missing_backend_registration: has_blocker(
+                RuntimeSurfaceCommitRenderBackendCapabilityBlocker::MissingRendererBackendRegistration,
+            ),
+            render_backend_capability_missing_buffer_import: has_blocker(
+                RuntimeSurfaceCommitRenderBackendCapabilityBlocker::MissingBufferImport,
+            ),
+            render_backend_capability_missing_texture_creation: has_blocker(
+                RuntimeSurfaceCommitRenderBackendCapabilityBlocker::MissingTextureCreation,
+            ),
+            render_backend_capability_missing_renderer_call: has_blocker(
+                RuntimeSurfaceCommitRenderBackendCapabilityBlocker::MissingRendererCall,
+            ),
+            render_backend_capability_missing_damage_submit: has_blocker(
+                RuntimeSurfaceCommitRenderBackendCapabilityBlocker::MissingDamageSubmit,
+            ),
+            render_backend_capability_missing_frame_callback_done: has_blocker(
+                RuntimeSurfaceCommitRenderBackendCapabilityBlocker::MissingFrameCallbackDone,
+            ),
+            render_backend_capability_buffer_imported: report.buffer_imported,
+            render_backend_capability_texture_created: report.texture_created,
+            render_backend_capability_renderer_called: report.renderer_called,
+            render_backend_capability_damage_submitted: report.damage_submitted,
+            render_backend_capability_frame_callback_done_sent: report.frame_callback_done_sent,
+            render_backend_capability_input_support: report.input_support,
+            render_backend_capability_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -1466,6 +1598,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.render_execution_owner_intents_consumed > 0
             || self.render_execution_owner_shell_intents_observed > 0
             || self.render_pipeline_skeleton_intents_observed > 0
+            || self.render_backend_capability_intents_observed > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -1766,6 +1899,49 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.render_pipeline_skeleton_input_support |= delta.render_pipeline_skeleton_input_support;
         self.render_pipeline_skeleton_core_mutation_invoked |=
             delta.render_pipeline_skeleton_core_mutation_invoked;
+        self.render_backend_capability_report_invocations = self
+            .render_backend_capability_report_invocations
+            .saturating_add(delta.render_backend_capability_report_invocations);
+        self.render_backend_capability_intents_observed = self
+            .render_backend_capability_intents_observed
+            .saturating_add(delta.render_backend_capability_intents_observed);
+        self.render_backend_capability_observed_intents
+            .extend(delta.render_backend_capability_observed_intents);
+        self.render_backend_capability_owner_available |=
+            delta.render_backend_capability_owner_available;
+        self.render_backend_capability_backend_registered |=
+            delta.render_backend_capability_backend_registered;
+        self.render_backend_capability_backend_kind = self
+            .render_backend_capability_backend_kind
+            .or(delta.render_backend_capability_backend_kind);
+        self.render_backend_capability_missing_pipeline_skeleton |=
+            delta.render_backend_capability_missing_pipeline_skeleton;
+        self.render_backend_capability_missing_backend_registration |=
+            delta.render_backend_capability_missing_backend_registration;
+        self.render_backend_capability_missing_buffer_import |=
+            delta.render_backend_capability_missing_buffer_import;
+        self.render_backend_capability_missing_texture_creation |=
+            delta.render_backend_capability_missing_texture_creation;
+        self.render_backend_capability_missing_renderer_call |=
+            delta.render_backend_capability_missing_renderer_call;
+        self.render_backend_capability_missing_damage_submit |=
+            delta.render_backend_capability_missing_damage_submit;
+        self.render_backend_capability_missing_frame_callback_done |=
+            delta.render_backend_capability_missing_frame_callback_done;
+        self.render_backend_capability_buffer_imported |=
+            delta.render_backend_capability_buffer_imported;
+        self.render_backend_capability_texture_created |=
+            delta.render_backend_capability_texture_created;
+        self.render_backend_capability_renderer_called |=
+            delta.render_backend_capability_renderer_called;
+        self.render_backend_capability_damage_submitted |=
+            delta.render_backend_capability_damage_submitted;
+        self.render_backend_capability_frame_callback_done_sent |=
+            delta.render_backend_capability_frame_callback_done_sent;
+        self.render_backend_capability_input_support |=
+            delta.render_backend_capability_input_support;
+        self.render_backend_capability_core_mutation_invoked |=
+            delta.render_backend_capability_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -1963,6 +2139,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_render_pipeline_skeleton_readiness(
                 &report.render_pipeline_skeleton_readiness_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_render_backend_capability_report(
+                &report.render_backend_capability_report,
             ),
         );
 
@@ -3991,6 +4172,142 @@ mod tests {
             !report
                 .surface_commit
                 .render_pipeline_skeleton_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_backend_capability_report_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_backend_capability_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_backend_capability_observed_intents
+                .len(),
+            2
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_backend_capability_owner_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_backend_registered
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_backend_capability_backend_kind
+                .is_none()
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_missing_pipeline_skeleton
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_backend_capability_missing_backend_registration
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_backend_capability_missing_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_backend_capability_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_backend_capability_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_backend_capability_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_backend_capability_missing_frame_callback_done
+        );
+        let first_render_backend_capability = &report
+            .surface_commit
+            .render_backend_capability_observed_intents[0];
+        let second_render_backend_capability = &report
+            .surface_commit
+            .render_backend_capability_observed_intents[1];
+        assert_eq!(
+            first_render_backend_capability.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_render_backend_capability.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_render_backend_capability.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_render_backend_capability.buffer_attach_observed);
+        assert!(first_render_backend_capability.damage_observed);
+        assert_eq!(
+            first_render_backend_capability.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_render_backend_capability.frame_callback_count, 1);
+        assert!(!second_render_backend_capability.buffer_attach_observed);
+        assert!(!second_render_backend_capability.damage_observed);
+        assert_eq!(second_render_backend_capability.damage_rect_count, 0);
+        assert_eq!(second_render_backend_capability.frame_callback_count, 0);
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_buffer_imported
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_texture_created
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_renderer_called
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_frame_callback_done_sent
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_input_support
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_backend_capability_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
