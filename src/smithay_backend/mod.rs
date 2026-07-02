@@ -4100,6 +4100,105 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54N 必须从 texture support shell readiness 派生 render operation 纯数据 intent。
+    #[test]
+    fn wl_surface_render_operation_intent_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54N coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54N loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54N orchestrator source 必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRenderOperationIntent",
+            "pub struct RuntimeSurfaceCommitRenderOperationReadinessReport",
+            "pub enum RuntimeSurfaceCommitRenderOperationOperation",
+            "pub enum RuntimeSurfaceCommitRenderOperationBlocker",
+            "pub fn render_operation_readiness_from_texture_support_shell",
+            "pub source_texture_support_shell_report_observed: bool",
+            "pub render_operation_intent_created: bool",
+            "pub render_operation_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub adapter_surface_id: AdapterSurfaceId",
+            "pub commit_sequence: u64",
+            "pub buffer_attach_observed: bool",
+            "pub damage_rect_count: usize",
+            "pub frame_callback_count: usize",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54N coordinator render operation intent 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitRenderOperationReadinessReport",
+            "pub render_operation_readiness_invocations: usize",
+            "pub render_operation_intents_created: usize",
+            "pub render_operation_intents: Vec<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub render_operation_renderer_called: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_render_operation_readiness",
+            "report.render_operation_readiness_report",
+            "render_operation_intents_created",
+            "first_render_operation.commit_sequence",
+            "second_render_operation.commit_sequence",
+            "first_render_operation.damage_rect_count",
+            "render_operation_renderer_called",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54N loop render operation intent report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "render_operation_intents_created",
+            "first_render_operation.commit_sequence",
+            "second_render_operation.commit_sequence",
+            "first_render_operation.damage_rect_count",
+            "render_operation_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54N orchestrator render operation intent report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54N render operation intent seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
