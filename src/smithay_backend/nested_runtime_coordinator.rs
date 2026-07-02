@@ -1463,6 +1463,159 @@ impl RuntimeSurfaceCommitRenderOperationIntentQueueOwner {
     }
 }
 
+/// Render execution owner boundary 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRenderExecutionOwnerBoundaryOperation {
+    /// 消费 runtime-drained render operation intent。
+    ConsumeRenderOperationIntent,
+    /// 检查 render execution owner boundary 是否具备真实执行能力。
+    CheckRenderExecutionBoundary,
+    /// 生成 blocked readiness report。
+    BuildBlockedReport,
+}
+
+/// Render execution owner boundary 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker {
+    /// 本轮没有 render operation intent 可消费。
+    MissingRenderOperationIntent,
+    /// 尚无 runtime-owned render execution owner。
+    MissingRenderExecutionOwner,
+    /// 尚未接入 buffer import。
+    MissingBufferImport,
+    /// 尚未接入 texture creation。
+    MissingTextureCreation,
+    /// 尚未接入 renderer call。
+    MissingRendererCall,
+    /// 尚未接入 damage submit。
+    MissingDamageSubmit,
+    /// 尚未接入 frame callback done。
+    MissingFrameCallbackDone,
+}
+
+/// Render execution owner boundary 的一次 pure-data blocked/readiness report。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport {
+    /// 是否已定义 render execution owner boundary。
+    pub owner_boundary_defined: bool,
+
+    /// 本轮是否尝试消费 render operation intent。
+    pub consume_invoked: bool,
+
+    /// 本轮是否消费到 render operation intent。
+    pub render_operation_intent_consumed: bool,
+
+    /// 被消费的 render operation pure-data intent。
+    pub consumed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// 是否已有真实 render execution owner；Phase 54P 固定为 false。
+    pub render_execution_owner_available: bool,
+
+    /// 是否已有 buffer import 能力；Phase 54P 固定为 false。
+    pub buffer_import_available: bool,
+
+    /// 是否已有 texture creation 能力；Phase 54P 固定为 false。
+    pub texture_creation_available: bool,
+
+    /// 是否已有 renderer call 能力；Phase 54P 固定为 false。
+    pub renderer_call_available: bool,
+
+    /// 是否已有 damage submit 能力；Phase 54P 固定为 false。
+    pub damage_submit_available: bool,
+
+    /// 是否已有 frame callback done 能力；Phase 54P 固定为 false。
+    pub frame_callback_done_available: bool,
+
+    /// 是否 import buffer；Phase 54P 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 54P 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否调用 renderer；Phase 54P 固定为 false。
+    pub renderer_called: bool,
+
+    /// 是否提交 damage；Phase 54P 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 54P 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 54P 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 54P 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitRenderExecutionOwnerBoundaryOperation>,
+
+    /// 阻止进入真实 render execution 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker>,
+}
+
+/// Runtime-owned render execution owner boundary consumer。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitRenderExecutionOwnerBoundary;
+
+impl RuntimeSurfaceCommitRenderExecutionOwnerBoundary {
+    /// 创建不持有 renderer/input/core 状态的 render execution owner boundary。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 消费 render operation intent，并返回 blocked readiness report。
+    pub fn consume_render_operation_intent(
+        &mut self,
+        report: &RuntimeSurfaceCommitRenderOperationIntentDrainReport,
+    ) -> RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport {
+        let consumed_intent = report.drained_intent.clone();
+        let render_operation_intent_consumed = consumed_intent.is_some();
+        let operations = vec![
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryOperation::ConsumeRenderOperationIntent,
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryOperation::CheckRenderExecutionBoundary,
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryOperation::BuildBlockedReport,
+        ];
+
+        let mut blockers = Vec::new();
+        if !render_operation_intent_consumed {
+            blockers.push(
+                RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingRenderOperationIntent,
+            );
+        }
+        blockers.extend([
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingRenderExecutionOwner,
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingBufferImport,
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingTextureCreation,
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingRendererCall,
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingDamageSubmit,
+            RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingFrameCallbackDone,
+        ]);
+
+        RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport {
+            owner_boundary_defined: true,
+            consume_invoked: true,
+            render_operation_intent_consumed,
+            consumed_intent,
+            render_execution_owner_available: false,
+            buffer_import_available: false,
+            texture_creation_available: false,
+            renderer_call_available: false,
+            damage_submit_available: false,
+            frame_callback_done_available: false,
+            buffer_imported: false,
+            texture_created: false,
+            renderer_called: false,
+            damage_submitted: false,
+            frame_callback_done_sent: false,
+            input_support: false,
+            core_mutation_invoked: false,
+            operations,
+            blockers,
+        }
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -1712,6 +1865,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// render operation intent runtime-owned queue drain report。
     pub render_operation_intent_drain_report: RuntimeSurfaceCommitRenderOperationIntentDrainReport,
+
+    /// render execution owner boundary blocked readiness report。
+    pub render_execution_owner_boundary_report:
+        RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -1729,6 +1886,7 @@ pub struct NestedRuntimeCoordinator {
     buffer_importer_shell: RuntimeSurfaceCommitBufferImporterShell,
     texture_support_shell: RuntimeSurfaceCommitTextureSupportShell,
     render_operation_intent_queue_owner: RuntimeSurfaceCommitRenderOperationIntentQueueOwner,
+    render_execution_owner_boundary: RuntimeSurfaceCommitRenderExecutionOwnerBoundary,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -1761,6 +1919,8 @@ impl NestedRuntimeCoordinator {
             texture_support_shell: RuntimeSurfaceCommitTextureSupportShell::new(),
             render_operation_intent_queue_owner:
                 RuntimeSurfaceCommitRenderOperationIntentQueueOwner::new(),
+            render_execution_owner_boundary: RuntimeSurfaceCommitRenderExecutionOwnerBoundary::new(
+            ),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -1966,6 +2126,9 @@ impl NestedRuntimeCoordinator {
             .enqueue_from_render_operation_readiness_and_drain_once(
                 &render_operation_readiness_report,
             );
+        let render_execution_owner_boundary_report = self
+            .render_execution_owner_boundary
+            .consume_render_operation_intent(&render_operation_intent_drain_report);
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -1981,6 +2144,7 @@ impl NestedRuntimeCoordinator {
             texture_support_shell_readiness_report,
             render_operation_readiness_report,
             render_operation_intent_drain_report,
+            render_execution_owner_boundary_report,
         }
     }
 
