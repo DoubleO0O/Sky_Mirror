@@ -3663,6 +3663,119 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54J 必须建立 renderer-admission work intent consumer / owner boundary。
+    #[test]
+    fn wl_surface_renderer_admission_owner_boundary_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54J coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54J loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54J orchestrator source 必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRendererAdmissionOwner",
+            "renderer_admission_owner: RuntimeSurfaceCommitRendererAdmissionOwner",
+            "pub struct RuntimeSurfaceCommitRendererOwnerBoundaryReport",
+            "pub enum RuntimeSurfaceCommitRendererOwnerBoundaryOperation",
+            "pub enum RuntimeSurfaceCommitRendererOwnerBoundaryBlocker",
+            "MissingRendererOwner",
+            "MissingBufferImporter",
+            "MissingTextureSupport",
+            "pub fn consume_renderer_admission_work_intent",
+            "pub consumed_work_intent: Option<RuntimeSurfaceCommitRendererAdmissionWorkIntent>",
+            "pub renderer_owner_available: bool",
+            "pub buffer_importer_available: bool",
+            "pub texture_support_available: bool",
+            "pub renderer_called: bool",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54J coordinator renderer owner boundary 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_owner_boundary_invocations: usize",
+            "pub renderer_owner_work_intents_consumed: usize",
+            "pub renderer_owner_consumed_work_intents: Vec<RuntimeSurfaceCommitRendererAdmissionWorkIntent>",
+            "pub renderer_owner_missing_renderer_owner: bool",
+            "pub renderer_owner_missing_buffer_importer: bool",
+            "pub renderer_owner_missing_texture_support: bool",
+            "pub renderer_owner_renderer_called: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_renderer_owner_boundary",
+            "report.renderer_owner_boundary_report",
+            "let consumed_count = report.surface_commit.renderer_owner_work_intents_consumed",
+            "assert_eq!(consumed_count, 2)",
+            "assert_eq!(first_consumed.commit_sequence, first_commit.commit_sequence)",
+            "let second_sequence = second_consumed.commit_sequence",
+            "assert_eq!(second_sequence, second_commit.commit_sequence)",
+            "assert!(first_consumed.buffer_attach_observed)",
+            "assert!(first_consumed.damage_observed)",
+            "assert_eq!(first_consumed.frame_callback_count, 1)",
+            "assert!(report.surface_commit.renderer_owner_missing_renderer_owner)",
+            "assert!(report.surface_commit.renderer_owner_missing_buffer_importer)",
+            "assert!(report.surface_commit.renderer_owner_missing_texture_support)",
+            "assert!(!report.surface_commit.renderer_owner_renderer_called)",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54J loop renderer owner boundary report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "let consumed_count = report.surface_commit.renderer_owner_work_intents_consumed",
+            "assert_eq!(consumed_count, 2)",
+            "assert_eq!(first_consumed.commit_sequence, first_commit.commit_sequence)",
+            "let second_sequence = second_consumed.commit_sequence",
+            "assert_eq!(second_sequence, second_commit.commit_sequence)",
+            "assert!(report.surface_commit.renderer_owner_missing_renderer_owner)",
+            "assert!(report.surface_commit.renderer_owner_missing_buffer_importer)",
+            "assert!(report.surface_commit.renderer_owner_missing_texture_support)",
+            "assert!(!report.surface_commit.renderer_owner_renderer_called)",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54J orchestrator renderer owner boundary report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54J renderer owner boundary seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

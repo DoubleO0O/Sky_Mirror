@@ -631,6 +631,137 @@ pub struct RuntimeSurfaceCommitRendererAdmissionReport {
     pub blockers: Vec<RuntimeSurfaceCommitRendererAdmissionBlocker>,
 }
 
+/// Renderer owner boundary 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererOwnerBoundaryOperation {
+    /// 消费 renderer-admission work intent。
+    ConsumeWorkIntent,
+    /// 检查 renderer owner 边界是否具备后续依赖。
+    CheckRendererOwnerBoundary,
+    /// 生成 blocked readiness report。
+    BuildBlockedReport,
+}
+
+/// Renderer owner boundary 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererOwnerBoundaryBlocker {
+    /// 本轮没有 renderer-admission work intent 可消费。
+    MissingRendererWorkIntent,
+    /// 真实 renderer owner 尚未接入。
+    MissingRendererOwner,
+    /// buffer importer 尚未接入。
+    MissingBufferImporter,
+    /// texture 创建支持尚未接入。
+    MissingTextureSupport,
+}
+
+/// Renderer owner boundary 消费 work intent 后生成的 blocked readiness report。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererOwnerBoundaryReport {
+    /// renderer owner 边界是否已定义。
+    pub owner_boundary_defined: bool,
+
+    /// 本轮是否尝试消费 renderer-admission work intent。
+    pub consume_invoked: bool,
+
+    /// 本轮是否消费到 renderer-admission work intent。
+    pub work_intent_consumed: bool,
+
+    /// 被消费的 renderer-admission pure-data work intent。
+    pub consumed_work_intent: Option<RuntimeSurfaceCommitRendererAdmissionWorkIntent>,
+
+    /// 真实 renderer owner 是否可用；Phase 54J 固定为 false。
+    pub renderer_owner_available: bool,
+
+    /// buffer importer 是否可用；Phase 54J 固定为 false。
+    pub buffer_importer_available: bool,
+
+    /// texture 创建支持是否可用；Phase 54J 固定为 false。
+    pub texture_support_available: bool,
+
+    /// 是否 import buffer；Phase 54J 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 54J 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否调用 renderer；Phase 54J 固定为 false。
+    pub renderer_called: bool,
+
+    /// 是否提交 damage；Phase 54J 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 54J 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 54J 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 54J 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitRendererOwnerBoundaryOperation>,
+
+    /// 阻止进入真实 render 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitRendererOwnerBoundaryBlocker>,
+}
+
+/// Runtime-owned renderer-admission work intent consumer。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
+
+impl RuntimeSurfaceCommitRendererAdmissionOwner {
+    /// 创建不持有 renderer/input/core 状态的 renderer-admission owner boundary。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 消费 renderer-admission work intent，并返回 blocked readiness report。
+    pub fn consume_renderer_admission_work_intent(
+        &mut self,
+        report: &RuntimeSurfaceCommitRendererAdmissionReport,
+    ) -> RuntimeSurfaceCommitRendererOwnerBoundaryReport {
+        let consumed_work_intent = report.work_intent.clone();
+        let work_intent_consumed = consumed_work_intent.is_some();
+        let mut operations = vec![
+            RuntimeSurfaceCommitRendererOwnerBoundaryOperation::ConsumeWorkIntent,
+            RuntimeSurfaceCommitRendererOwnerBoundaryOperation::CheckRendererOwnerBoundary,
+        ];
+        operations.push(RuntimeSurfaceCommitRendererOwnerBoundaryOperation::BuildBlockedReport);
+
+        let mut blockers = Vec::new();
+        if !work_intent_consumed {
+            blockers
+                .push(RuntimeSurfaceCommitRendererOwnerBoundaryBlocker::MissingRendererWorkIntent);
+        }
+        blockers.extend([
+            RuntimeSurfaceCommitRendererOwnerBoundaryBlocker::MissingRendererOwner,
+            RuntimeSurfaceCommitRendererOwnerBoundaryBlocker::MissingBufferImporter,
+            RuntimeSurfaceCommitRendererOwnerBoundaryBlocker::MissingTextureSupport,
+        ]);
+
+        RuntimeSurfaceCommitRendererOwnerBoundaryReport {
+            owner_boundary_defined: true,
+            consume_invoked: true,
+            work_intent_consumed,
+            consumed_work_intent,
+            renderer_owner_available: false,
+            buffer_importer_available: false,
+            texture_support_available: false,
+            buffer_imported: false,
+            texture_created: false,
+            renderer_called: false,
+            damage_submitted: false,
+            frame_callback_done_sent: false,
+            input_support: false,
+            core_mutation_invoked: false,
+            operations,
+            blockers,
+        }
+    }
+}
+
 /// 从 runtime queue drain report 派生 renderer-admission report；不触发真实 render。
 pub fn renderer_admission_report_from_render_dirty_intent_drain(
     report: &RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
@@ -804,6 +935,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// renderer-admission pure-data work intent report。
     pub renderer_admission_report: RuntimeSurfaceCommitRendererAdmissionReport,
+
+    /// renderer owner boundary blocked readiness report。
+    pub renderer_owner_boundary_report: RuntimeSurfaceCommitRendererOwnerBoundaryReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -816,6 +950,7 @@ pub struct NestedRuntimeCoordinator {
     flow: NestedRealAcceptFlow,
     admission_queue_owner: RuntimeToplevelAdmissionQueueOwner,
     render_dirty_intent_queue_owner: RuntimeSurfaceCommitRenderDirtyIntentQueueOwner,
+    renderer_admission_owner: RuntimeSurfaceCommitRendererAdmissionOwner,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -842,6 +977,7 @@ impl NestedRuntimeCoordinator {
             flow: NestedRealAcceptFlow::with_socket_name(name)?,
             admission_queue_owner: RuntimeToplevelAdmissionQueueOwner::new(next_core_surface_id),
             render_dirty_intent_queue_owner: RuntimeSurfaceCommitRenderDirtyIntentQueueOwner::new(),
+            renderer_admission_owner: RuntimeSurfaceCommitRendererAdmissionOwner::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -1017,6 +1153,9 @@ impl NestedRuntimeCoordinator {
         let renderer_admission_report = renderer_admission_report_from_render_dirty_intent_drain(
             &render_dirty_intent_drain_report,
         );
+        let renderer_owner_boundary_report = self
+            .renderer_admission_owner
+            .consume_renderer_admission_work_intent(&renderer_admission_report);
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -1026,6 +1165,7 @@ impl NestedRuntimeCoordinator {
             surface_commit_drain_report,
             render_dirty_intent_drain_report,
             renderer_admission_report,
+            renderer_owner_boundary_report,
         }
     }
 
