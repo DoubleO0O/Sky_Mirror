@@ -29,6 +29,8 @@ use crate::{
         RuntimeSurfaceCommitRendererOwnerBoundaryReport,
         RuntimeSurfaceCommitRendererOwnerShellBlocker,
         RuntimeSurfaceCommitRendererOwnerShellReadinessReport,
+        RuntimeSurfaceCommitTextureSupportShellBlocker,
+        RuntimeSurfaceCommitTextureSupportShellReadinessReport,
         render_dirty_readiness_intent_from_commit_drain_report,
     },
 };
@@ -659,6 +661,46 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// buffer importer shell readiness 是否触发 core mutation；Phase 54L 固定保持 false。
     pub buffer_importer_shell_core_mutation_invoked: bool,
 
+    /// texture support shell readiness seam 被调用的次数。
+    pub texture_support_shell_readiness_invocations: usize,
+
+    /// texture support shell readiness 观察到的 work intent 数量。
+    pub texture_support_shell_work_intents_observed: usize,
+
+    /// 按 FIFO 顺序保存的 texture support shell observed work intents。
+    pub texture_support_shell_observed_work_intents:
+        Vec<RuntimeSurfaceCommitRendererAdmissionWorkIntent>,
+
+    /// runtime-owned texture support shell 是否可用。
+    pub texture_support_shell_available: bool,
+
+    /// texture support shell readiness 是否仍缺少 buffer importer shell。
+    pub texture_support_shell_missing_buffer_importer_shell: bool,
+
+    /// texture support shell readiness 是否仍缺少 texture support。
+    pub texture_support_shell_missing_texture_support: bool,
+
+    /// texture support shell readiness 是否 import buffer；Phase 54M 固定保持 false。
+    pub texture_support_shell_buffer_imported: bool,
+
+    /// texture support shell readiness 是否创建 texture；Phase 54M 固定保持 false。
+    pub texture_support_shell_texture_created: bool,
+
+    /// texture support shell readiness 是否调用 renderer；Phase 54M 固定保持 false。
+    pub texture_support_shell_renderer_called: bool,
+
+    /// texture support shell readiness 是否提交 damage；Phase 54M 固定保持 false。
+    pub texture_support_shell_damage_submitted: bool,
+
+    /// texture support shell readiness 是否发送 frame callback done；Phase 54M 固定保持 false。
+    pub texture_support_shell_frame_callback_done_sent: bool,
+
+    /// texture support shell readiness 是否接入 input；Phase 54M 固定保持 false。
+    pub texture_support_shell_input_support: bool,
+
+    /// texture support shell readiness 是否触发 core mutation；Phase 54M 固定保持 false。
+    pub texture_support_shell_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -759,6 +801,19 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             buffer_importer_shell_frame_callback_done_sent: false,
             buffer_importer_shell_input_support: false,
             buffer_importer_shell_core_mutation_invoked: false,
+            texture_support_shell_readiness_invocations: 0,
+            texture_support_shell_work_intents_observed: 0,
+            texture_support_shell_observed_work_intents: Vec::new(),
+            texture_support_shell_available: false,
+            texture_support_shell_missing_buffer_importer_shell: false,
+            texture_support_shell_missing_texture_support: false,
+            texture_support_shell_buffer_imported: false,
+            texture_support_shell_texture_created: false,
+            texture_support_shell_renderer_called: false,
+            texture_support_shell_damage_submitted: false,
+            texture_support_shell_frame_callback_done_sent: false,
+            texture_support_shell_input_support: false,
+            texture_support_shell_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -903,6 +958,38 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_texture_support_shell_readiness(
+        report: &RuntimeSurfaceCommitTextureSupportShellReadinessReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            texture_support_shell_readiness_invocations: usize::from(report.readiness_invoked),
+            texture_support_shell_work_intents_observed: usize::from(
+                report.observed_work_intent.is_some(),
+            ),
+            texture_support_shell_observed_work_intents: report
+                .observed_work_intent
+                .clone()
+                .into_iter()
+                .collect(),
+            texture_support_shell_available: report.texture_support_shell_available,
+            texture_support_shell_missing_buffer_importer_shell: has_blocker(
+                RuntimeSurfaceCommitTextureSupportShellBlocker::MissingBufferImporterShell,
+            ),
+            texture_support_shell_missing_texture_support: has_blocker(
+                RuntimeSurfaceCommitTextureSupportShellBlocker::MissingTextureSupport,
+            ),
+            texture_support_shell_buffer_imported: report.buffer_imported,
+            texture_support_shell_texture_created: report.texture_created,
+            texture_support_shell_renderer_called: report.renderer_called,
+            texture_support_shell_damage_submitted: report.damage_submitted,
+            texture_support_shell_frame_callback_done_sent: report.frame_callback_done_sent,
+            texture_support_shell_input_support: report.input_support,
+            texture_support_shell_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -912,6 +999,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.renderer_owner_work_intents_consumed > 0
             || self.renderer_owner_shell_work_intents_observed > 0
             || self.buffer_importer_shell_work_intents_observed > 0
+            || self.texture_support_shell_work_intents_observed > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -1056,6 +1144,28 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.buffer_importer_shell_input_support |= delta.buffer_importer_shell_input_support;
         self.buffer_importer_shell_core_mutation_invoked |=
             delta.buffer_importer_shell_core_mutation_invoked;
+        self.texture_support_shell_readiness_invocations = self
+            .texture_support_shell_readiness_invocations
+            .saturating_add(delta.texture_support_shell_readiness_invocations);
+        self.texture_support_shell_work_intents_observed = self
+            .texture_support_shell_work_intents_observed
+            .saturating_add(delta.texture_support_shell_work_intents_observed);
+        self.texture_support_shell_observed_work_intents
+            .extend(delta.texture_support_shell_observed_work_intents);
+        self.texture_support_shell_available |= delta.texture_support_shell_available;
+        self.texture_support_shell_missing_buffer_importer_shell |=
+            delta.texture_support_shell_missing_buffer_importer_shell;
+        self.texture_support_shell_missing_texture_support |=
+            delta.texture_support_shell_missing_texture_support;
+        self.texture_support_shell_buffer_imported |= delta.texture_support_shell_buffer_imported;
+        self.texture_support_shell_texture_created |= delta.texture_support_shell_texture_created;
+        self.texture_support_shell_renderer_called |= delta.texture_support_shell_renderer_called;
+        self.texture_support_shell_damage_submitted |= delta.texture_support_shell_damage_submitted;
+        self.texture_support_shell_frame_callback_done_sent |=
+            delta.texture_support_shell_frame_callback_done_sent;
+        self.texture_support_shell_input_support |= delta.texture_support_shell_input_support;
+        self.texture_support_shell_core_mutation_invoked |=
+            delta.texture_support_shell_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -1223,6 +1333,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_buffer_importer_shell_readiness(
                 &report.buffer_importer_shell_readiness_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_texture_support_shell_readiness(
+                &report.texture_support_shell_readiness_report,
             ),
         );
 
@@ -2754,6 +2869,68 @@ mod tests {
             !report
                 .surface_commit
                 .buffer_importer_shell_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .texture_support_shell_readiness_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .texture_support_shell_work_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .texture_support_shell_observed_work_intents
+                .len(),
+            2
+        );
+        assert!(report.surface_commit.texture_support_shell_available);
+        assert!(
+            !report
+                .surface_commit
+                .texture_support_shell_missing_buffer_importer_shell
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_support_shell_missing_texture_support
+        );
+        let first_texture = &report
+            .surface_commit
+            .texture_support_shell_observed_work_intents[0];
+        let second_texture = &report
+            .surface_commit
+            .texture_support_shell_observed_work_intents[1];
+        assert_eq!(first_texture.commit_sequence, first_commit.commit_sequence);
+        assert_eq!(
+            second_texture.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_texture.buffer_attach_observed);
+        assert!(first_texture.damage_observed);
+        assert_eq!(first_texture.frame_callback_count, 1);
+        assert!(!second_texture.buffer_attach_observed);
+        assert!(!second_texture.damage_observed);
+        assert_eq!(second_texture.frame_callback_count, 0);
+        assert!(!report.surface_commit.texture_support_shell_buffer_imported);
+        assert!(!report.surface_commit.texture_support_shell_texture_created);
+        assert!(!report.surface_commit.texture_support_shell_renderer_called);
+        assert!(!report.surface_commit.texture_support_shell_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .texture_support_shell_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.texture_support_shell_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .texture_support_shell_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
