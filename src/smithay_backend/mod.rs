@@ -4296,6 +4296,106 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54P 必须消费 render operation intent 并生成 render execution owner boundary report。
+    #[test]
+    fn wl_surface_render_execution_owner_boundary_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54P coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54P loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54P orchestrator source 必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRenderExecutionOwnerBoundary",
+            "render_execution_owner_boundary: RuntimeSurfaceCommitRenderExecutionOwnerBoundary",
+            "pub struct RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport",
+            "pub enum RuntimeSurfaceCommitRenderExecutionOwnerBoundaryOperation",
+            "pub enum RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker",
+            "pub fn consume_render_operation_intent",
+            "pub consumed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub render_operation_intent_consumed: bool",
+            "pub render_execution_owner_available: bool",
+            "pub buffer_imported: bool",
+            "pub texture_created: bool",
+            "pub renderer_called: bool",
+            "pub damage_submitted: bool",
+            "pub frame_callback_done_sent: bool",
+            "pub input_support: bool",
+            "pub core_mutation_invoked: bool",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54P coordinator render execution owner boundary 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport",
+            "pub render_execution_owner_boundary_invocations: usize",
+            "pub render_execution_owner_intents_consumed: usize",
+            "pub render_execution_owner_consumed_intents: Vec<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub render_execution_owner_renderer_called: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_render_execution_owner_boundary",
+            "report.render_execution_owner_boundary_report",
+            "render_execution_owner_intents_consumed",
+            "first_render_execution.commit_sequence",
+            "second_render_execution.commit_sequence",
+            "render_execution_owner_renderer_called",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54P loop render execution owner boundary report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "render_execution_owner_intents_consumed",
+            "first_render_execution.commit_sequence",
+            "second_render_execution.commit_sequence",
+            "render_execution_owner_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54P orchestrator render execution owner boundary report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54P render execution owner boundary seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

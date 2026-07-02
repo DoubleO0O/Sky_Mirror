@@ -22,7 +22,10 @@ use crate::{
         RuntimeSurfaceCommitBufferImporterShellBlocker,
         RuntimeSurfaceCommitBufferImporterShellReadinessReport, RuntimeSurfaceCommitDrainReport,
         RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
-        RuntimeSurfaceCommitRenderDirtyReadinessIntent, RuntimeSurfaceCommitRenderOperationIntent,
+        RuntimeSurfaceCommitRenderDirtyReadinessIntent,
+        RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker,
+        RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport,
+        RuntimeSurfaceCommitRenderOperationIntent,
         RuntimeSurfaceCommitRenderOperationIntentDrainReport,
         RuntimeSurfaceCommitRenderOperationReadinessReport,
         RuntimeSurfaceCommitRendererAdmissionReport,
@@ -766,6 +769,54 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// render operation queue drain 是否触发 core mutation；Phase 54O 固定保持 false。
     pub render_operation_queue_core_mutation_invoked: bool,
 
+    /// render execution owner boundary seam 被调用的次数。
+    pub render_execution_owner_boundary_invocations: usize,
+
+    /// render execution owner boundary 成功消费的 render operation intent 数量。
+    pub render_execution_owner_intents_consumed: usize,
+
+    /// 按 FIFO 顺序保存的 render execution owner boundary consumed intents。
+    pub render_execution_owner_consumed_intents: Vec<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// render execution owner boundary 是否缺少真实 execution owner。
+    pub render_execution_owner_missing_owner: bool,
+
+    /// render execution owner boundary 是否缺少 buffer import。
+    pub render_execution_owner_missing_buffer_import: bool,
+
+    /// render execution owner boundary 是否缺少 texture creation。
+    pub render_execution_owner_missing_texture_creation: bool,
+
+    /// render execution owner boundary 是否缺少 renderer call。
+    pub render_execution_owner_missing_renderer_call: bool,
+
+    /// render execution owner boundary 是否缺少 damage submit。
+    pub render_execution_owner_missing_damage_submit: bool,
+
+    /// render execution owner boundary 是否缺少 frame callback done。
+    pub render_execution_owner_missing_frame_callback_done: bool,
+
+    /// render execution owner boundary 是否 import buffer；Phase 54P 固定保持 false。
+    pub render_execution_owner_buffer_imported: bool,
+
+    /// render execution owner boundary 是否创建 texture；Phase 54P 固定保持 false。
+    pub render_execution_owner_texture_created: bool,
+
+    /// render execution owner boundary 是否调用 renderer；Phase 54P 固定保持 false。
+    pub render_execution_owner_renderer_called: bool,
+
+    /// render execution owner boundary 是否提交 damage；Phase 54P 固定保持 false。
+    pub render_execution_owner_damage_submitted: bool,
+
+    /// render execution owner boundary 是否发送 frame callback done；Phase 54P 固定保持 false。
+    pub render_execution_owner_frame_callback_done_sent: bool,
+
+    /// render execution owner boundary 是否接入 input；Phase 54P 固定保持 false。
+    pub render_execution_owner_input_support: bool,
+
+    /// render execution owner boundary 是否触发 core mutation；Phase 54P 固定保持 false。
+    pub render_execution_owner_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -900,6 +951,22 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             render_operation_queue_frame_callback_done_sent: false,
             render_operation_queue_input_support: false,
             render_operation_queue_core_mutation_invoked: false,
+            render_execution_owner_boundary_invocations: 0,
+            render_execution_owner_intents_consumed: 0,
+            render_execution_owner_consumed_intents: Vec::new(),
+            render_execution_owner_missing_owner: false,
+            render_execution_owner_missing_buffer_import: false,
+            render_execution_owner_missing_texture_creation: false,
+            render_execution_owner_missing_renderer_call: false,
+            render_execution_owner_missing_damage_submit: false,
+            render_execution_owner_missing_frame_callback_done: false,
+            render_execution_owner_buffer_imported: false,
+            render_execution_owner_texture_created: false,
+            render_execution_owner_renderer_called: false,
+            render_execution_owner_damage_submitted: false,
+            render_execution_owner_frame_callback_done_sent: false,
+            render_execution_owner_input_support: false,
+            render_execution_owner_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -1117,6 +1184,49 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_render_execution_owner_boundary(
+        report: &RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            render_execution_owner_boundary_invocations: usize::from(report.consume_invoked),
+            render_execution_owner_intents_consumed: usize::from(
+                report.render_operation_intent_consumed,
+            ),
+            render_execution_owner_consumed_intents: report
+                .consumed_intent
+                .clone()
+                .into_iter()
+                .collect(),
+            render_execution_owner_missing_owner: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingRenderExecutionOwner,
+            ),
+            render_execution_owner_missing_buffer_import: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingBufferImport,
+            ),
+            render_execution_owner_missing_texture_creation: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingTextureCreation,
+            ),
+            render_execution_owner_missing_renderer_call: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingRendererCall,
+            ),
+            render_execution_owner_missing_damage_submit: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingDamageSubmit,
+            ),
+            render_execution_owner_missing_frame_callback_done: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker::MissingFrameCallbackDone,
+            ),
+            render_execution_owner_buffer_imported: report.buffer_imported,
+            render_execution_owner_texture_created: report.texture_created,
+            render_execution_owner_renderer_called: report.renderer_called,
+            render_execution_owner_damage_submitted: report.damage_submitted,
+            render_execution_owner_frame_callback_done_sent: report.frame_callback_done_sent,
+            render_execution_owner_input_support: report.input_support,
+            render_execution_owner_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -1129,6 +1239,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.texture_support_shell_work_intents_observed > 0
             || self.render_operation_intents_created > 0
             || self.render_operation_intents_drained > 0
+            || self.render_execution_owner_intents_consumed > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -1332,6 +1443,35 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.render_operation_queue_input_support |= delta.render_operation_queue_input_support;
         self.render_operation_queue_core_mutation_invoked |=
             delta.render_operation_queue_core_mutation_invoked;
+        self.render_execution_owner_boundary_invocations = self
+            .render_execution_owner_boundary_invocations
+            .saturating_add(delta.render_execution_owner_boundary_invocations);
+        self.render_execution_owner_intents_consumed = self
+            .render_execution_owner_intents_consumed
+            .saturating_add(delta.render_execution_owner_intents_consumed);
+        self.render_execution_owner_consumed_intents
+            .extend(delta.render_execution_owner_consumed_intents);
+        self.render_execution_owner_missing_owner |= delta.render_execution_owner_missing_owner;
+        self.render_execution_owner_missing_buffer_import |=
+            delta.render_execution_owner_missing_buffer_import;
+        self.render_execution_owner_missing_texture_creation |=
+            delta.render_execution_owner_missing_texture_creation;
+        self.render_execution_owner_missing_renderer_call |=
+            delta.render_execution_owner_missing_renderer_call;
+        self.render_execution_owner_missing_damage_submit |=
+            delta.render_execution_owner_missing_damage_submit;
+        self.render_execution_owner_missing_frame_callback_done |=
+            delta.render_execution_owner_missing_frame_callback_done;
+        self.render_execution_owner_buffer_imported |= delta.render_execution_owner_buffer_imported;
+        self.render_execution_owner_texture_created |= delta.render_execution_owner_texture_created;
+        self.render_execution_owner_renderer_called |= delta.render_execution_owner_renderer_called;
+        self.render_execution_owner_damage_submitted |=
+            delta.render_execution_owner_damage_submitted;
+        self.render_execution_owner_frame_callback_done_sent |=
+            delta.render_execution_owner_frame_callback_done_sent;
+        self.render_execution_owner_input_support |= delta.render_execution_owner_input_support;
+        self.render_execution_owner_core_mutation_invoked |=
+            delta.render_execution_owner_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -1514,6 +1654,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_render_operation_intent_drain(
                 &report.render_operation_intent_drain_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_render_execution_owner_boundary(
+                &report.render_execution_owner_boundary_report,
             ),
         );
 
@@ -3220,6 +3365,101 @@ mod tests {
             !report
                 .surface_commit
                 .render_operation_queue_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_execution_owner_boundary_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_execution_owner_intents_consumed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_execution_owner_consumed_intents
+                .len(),
+            2
+        );
+        let first_render_execution = &report
+            .surface_commit
+            .render_execution_owner_consumed_intents[0];
+        let second_render_execution = &report
+            .surface_commit
+            .render_execution_owner_consumed_intents[1];
+        assert_eq!(
+            first_render_execution.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_render_execution.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_render_execution.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_render_execution.buffer_attach_observed);
+        assert!(first_render_execution.damage_observed);
+        assert_eq!(
+            first_render_execution.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_render_execution.frame_callback_count, 1);
+        assert!(!second_render_execution.buffer_attach_observed);
+        assert!(!second_render_execution.damage_observed);
+        assert_eq!(second_render_execution.damage_rect_count, 0);
+        assert_eq!(second_render_execution.frame_callback_count, 0);
+        assert!(report.surface_commit.render_execution_owner_missing_owner);
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_missing_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_missing_frame_callback_done
+        );
+        assert!(!report.surface_commit.render_execution_owner_buffer_imported);
+        assert!(!report.surface_commit.render_execution_owner_texture_created);
+        assert!(!report.surface_commit.render_execution_owner_renderer_called);
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.render_execution_owner_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
