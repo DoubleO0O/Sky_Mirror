@@ -23,6 +23,7 @@ use crate::{
         RuntimeSurfaceCommitBufferImporterShellReadinessReport, RuntimeSurfaceCommitDrainReport,
         RuntimeSurfaceCommitRenderDirtyIntentDrainReport,
         RuntimeSurfaceCommitRenderDirtyReadinessIntent, RuntimeSurfaceCommitRenderOperationIntent,
+        RuntimeSurfaceCommitRenderOperationIntentDrainReport,
         RuntimeSurfaceCommitRenderOperationReadinessReport,
         RuntimeSurfaceCommitRendererAdmissionReport,
         RuntimeSurfaceCommitRendererAdmissionWorkIntent,
@@ -732,6 +733,39 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// render operation readiness 是否触发 core mutation；Phase 54N 固定保持 false。
     pub render_operation_core_mutation_invoked: bool,
 
+    /// render operation intent runtime queue drain seam 被调用的次数。
+    pub render_operation_queue_drain_invocations: usize,
+
+    /// 成功入队到 runtime-owned render operation queue 的 intent 数量。
+    pub render_operation_intents_enqueued: usize,
+
+    /// 成功从 runtime-owned render operation queue drain 的 intent 数量。
+    pub render_operation_intents_drained: usize,
+
+    /// 按 FIFO drain 顺序保存的 runtime queue render operation intent。
+    pub render_operation_queue_drained_intents: Vec<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// render operation queue drain 是否 import buffer；Phase 54O 固定保持 false。
+    pub render_operation_queue_buffer_imported: bool,
+
+    /// render operation queue drain 是否创建 texture；Phase 54O 固定保持 false。
+    pub render_operation_queue_texture_created: bool,
+
+    /// render operation queue drain 是否调用 renderer；Phase 54O 固定保持 false。
+    pub render_operation_queue_renderer_called: bool,
+
+    /// render operation queue drain 是否提交 damage；Phase 54O 固定保持 false。
+    pub render_operation_queue_damage_submitted: bool,
+
+    /// render operation queue drain 是否发送 frame callback done；Phase 54O 固定保持 false。
+    pub render_operation_queue_frame_callback_done_sent: bool,
+
+    /// render operation queue drain 是否接入 input；Phase 54O 固定保持 false。
+    pub render_operation_queue_input_support: bool,
+
+    /// render operation queue drain 是否触发 core mutation；Phase 54O 固定保持 false。
+    pub render_operation_queue_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -855,6 +889,17 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             render_operation_frame_callback_done_sent: false,
             render_operation_input_support: false,
             render_operation_core_mutation_invoked: false,
+            render_operation_queue_drain_invocations: 0,
+            render_operation_intents_enqueued: 0,
+            render_operation_intents_drained: 0,
+            render_operation_queue_drained_intents: Vec::new(),
+            render_operation_queue_buffer_imported: false,
+            render_operation_queue_texture_created: false,
+            render_operation_queue_renderer_called: false,
+            render_operation_queue_damage_submitted: false,
+            render_operation_queue_frame_callback_done_sent: false,
+            render_operation_queue_input_support: false,
+            render_operation_queue_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -1049,6 +1094,29 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_render_operation_intent_drain(
+        report: &RuntimeSurfaceCommitRenderOperationIntentDrainReport,
+    ) -> Self {
+        Self {
+            render_operation_queue_drain_invocations: usize::from(report.drain_invoked),
+            render_operation_intents_enqueued: usize::from(report.intent_enqueued),
+            render_operation_intents_drained: usize::from(report.intent_drained),
+            render_operation_queue_drained_intents: report
+                .drained_intent
+                .clone()
+                .into_iter()
+                .collect(),
+            render_operation_queue_buffer_imported: report.buffer_imported,
+            render_operation_queue_texture_created: report.texture_created,
+            render_operation_queue_renderer_called: report.renderer_called,
+            render_operation_queue_damage_submitted: report.damage_submitted,
+            render_operation_queue_frame_callback_done_sent: report.frame_callback_done_sent,
+            render_operation_queue_input_support: report.input_support,
+            render_operation_queue_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -1060,6 +1128,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.buffer_importer_shell_work_intents_observed > 0
             || self.texture_support_shell_work_intents_observed > 0
             || self.render_operation_intents_created > 0
+            || self.render_operation_intents_drained > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -1242,6 +1311,27 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.render_operation_frame_callback_done_sent;
         self.render_operation_input_support |= delta.render_operation_input_support;
         self.render_operation_core_mutation_invoked |= delta.render_operation_core_mutation_invoked;
+        self.render_operation_queue_drain_invocations = self
+            .render_operation_queue_drain_invocations
+            .saturating_add(delta.render_operation_queue_drain_invocations);
+        self.render_operation_intents_enqueued = self
+            .render_operation_intents_enqueued
+            .saturating_add(delta.render_operation_intents_enqueued);
+        self.render_operation_intents_drained = self
+            .render_operation_intents_drained
+            .saturating_add(delta.render_operation_intents_drained);
+        self.render_operation_queue_drained_intents
+            .extend(delta.render_operation_queue_drained_intents);
+        self.render_operation_queue_buffer_imported |= delta.render_operation_queue_buffer_imported;
+        self.render_operation_queue_texture_created |= delta.render_operation_queue_texture_created;
+        self.render_operation_queue_renderer_called |= delta.render_operation_queue_renderer_called;
+        self.render_operation_queue_damage_submitted |=
+            delta.render_operation_queue_damage_submitted;
+        self.render_operation_queue_frame_callback_done_sent |=
+            delta.render_operation_queue_frame_callback_done_sent;
+        self.render_operation_queue_input_support |= delta.render_operation_queue_input_support;
+        self.render_operation_queue_core_mutation_invoked |=
+            delta.render_operation_queue_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -1419,6 +1509,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_render_operation_readiness(
                 &report.render_operation_readiness_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_render_operation_intent_drain(
+                &report.render_operation_intent_drain_report,
             ),
         );
 
@@ -3057,6 +3152,75 @@ mod tests {
         );
         assert!(!report.surface_commit.render_operation_input_support);
         assert!(!report.surface_commit.render_operation_core_mutation_invoked);
+        assert_eq!(
+            report
+                .surface_commit
+                .render_operation_queue_drain_invocations,
+            3
+        );
+        assert_eq!(report.surface_commit.render_operation_intents_enqueued, 2);
+        assert_eq!(report.surface_commit.render_operation_intents_drained, 2);
+        assert_eq!(
+            report
+                .surface_commit
+                .render_operation_queue_drained_intents
+                .len(),
+            2
+        );
+        assert_eq!(
+            runtime_loop
+                .coordinator
+                .render_operation_intent_pending_count(),
+            0
+        );
+        let first_render_operation_drained =
+            &report.surface_commit.render_operation_queue_drained_intents[0];
+        let second_render_operation_drained =
+            &report.surface_commit.render_operation_queue_drained_intents[1];
+        assert_eq!(
+            first_render_operation_drained.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_render_operation_drained.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_render_operation_drained.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_render_operation_drained.buffer_attach_observed);
+        assert!(first_render_operation_drained.damage_observed);
+        assert_eq!(
+            first_render_operation_drained.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_render_operation_drained.frame_callback_count, 1);
+        assert!(!second_render_operation_drained.buffer_attach_observed);
+        assert!(!second_render_operation_drained.damage_observed);
+        assert_eq!(second_render_operation_drained.damage_rect_count, 0);
+        assert_eq!(second_render_operation_drained.frame_callback_count, 0);
+        assert!(!report.surface_commit.render_operation_queue_buffer_imported);
+        assert!(!report.surface_commit.render_operation_queue_texture_created);
+        assert!(!report.surface_commit.render_operation_queue_renderer_called);
+        assert!(
+            !report
+                .surface_commit
+                .render_operation_queue_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_operation_queue_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.render_operation_queue_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .render_operation_queue_core_mutation_invoked
+        );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);

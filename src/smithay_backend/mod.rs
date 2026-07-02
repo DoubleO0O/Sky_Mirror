@@ -4199,6 +4199,103 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54O 必须把 render operation intent 接入 runtime-owned FIFO queue。
+    #[test]
+    fn wl_surface_render_operation_intent_runtime_queue_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54O coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54O loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54O orchestrator source 必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitRenderOperationIntentQueueOwner",
+            "render_operation_intent_queue_owner: RuntimeSurfaceCommitRenderOperationIntentQueueOwner",
+            "pub struct RuntimeSurfaceCommitRenderOperationIntentDrainReport",
+            "pub enum RuntimeSurfaceCommitRenderOperationIntentQueueOperation",
+            "pub enum RuntimeSurfaceCommitRenderOperationIntentQueueBlocker",
+            "pub fn enqueue_from_render_operation_readiness_and_drain_once",
+            "pub drained_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub runtime_queue_owned: bool",
+            "pub intent_enqueued: bool",
+            "pub intent_drained: bool",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 54O coordinator render operation runtime queue 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitRenderOperationIntentDrainReport",
+            "pub render_operation_queue_drain_invocations: usize",
+            "pub render_operation_intents_enqueued: usize",
+            "pub render_operation_intents_drained: usize",
+            "pub render_operation_queue_drained_intents: Vec<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub render_operation_queue_renderer_called: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_render_operation_intent_drain",
+            "report.render_operation_intent_drain_report",
+            "render_operation_intents_enqueued",
+            "render_operation_intents_drained",
+            "first_render_operation_drained.commit_sequence",
+            "second_render_operation_drained.commit_sequence",
+            "render_operation_queue_renderer_called",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 54O loop render operation runtime queue report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "render_operation_intents_enqueued",
+            "render_operation_intents_drained",
+            "first_render_operation_drained.commit_sequence",
+            "second_render_operation_drained.commit_sequence",
+            "render_operation_queue_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 54O orchestrator render operation runtime queue report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54O render operation runtime queue seam 包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
