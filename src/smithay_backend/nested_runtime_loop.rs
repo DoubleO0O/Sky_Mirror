@@ -25,6 +25,8 @@ use crate::{
         RuntimeSurfaceCommitRenderDirtyReadinessIntent,
         RuntimeSurfaceCommitRenderExecutionOwnerBoundaryBlocker,
         RuntimeSurfaceCommitRenderExecutionOwnerBoundaryReport,
+        RuntimeSurfaceCommitRenderExecutionOwnerShellBlocker,
+        RuntimeSurfaceCommitRenderExecutionOwnerShellReadinessReport,
         RuntimeSurfaceCommitRenderOperationIntent,
         RuntimeSurfaceCommitRenderOperationIntentDrainReport,
         RuntimeSurfaceCommitRenderOperationReadinessReport,
@@ -817,6 +819,55 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// render execution owner boundary 是否触发 core mutation；Phase 54P 固定保持 false。
     pub render_execution_owner_core_mutation_invoked: bool,
 
+    /// render execution owner shell readiness seam 被调用的次数。
+    pub render_execution_owner_shell_readiness_invocations: usize,
+
+    /// render execution owner shell readiness 观察到的 intent 数量。
+    pub render_execution_owner_shell_intents_observed: usize,
+
+    /// 按 FIFO 顺序保存的 render execution owner shell observed intents。
+    pub render_execution_owner_shell_observed_intents:
+        Vec<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// runtime-owned render execution owner shell 是否可用。
+    pub render_execution_owner_shell_available: bool,
+
+    /// render execution owner shell readiness 是否仍缺少 buffer import。
+    pub render_execution_owner_shell_missing_buffer_import: bool,
+
+    /// render execution owner shell readiness 是否仍缺少 texture creation。
+    pub render_execution_owner_shell_missing_texture_creation: bool,
+
+    /// render execution owner shell readiness 是否仍缺少 renderer call。
+    pub render_execution_owner_shell_missing_renderer_call: bool,
+
+    /// render execution owner shell readiness 是否仍缺少 damage submit。
+    pub render_execution_owner_shell_missing_damage_submit: bool,
+
+    /// render execution owner shell readiness 是否仍缺少 frame callback done。
+    pub render_execution_owner_shell_missing_frame_callback_done: bool,
+
+    /// render execution owner shell readiness 是否 import buffer；Phase 54Q 固定保持 false。
+    pub render_execution_owner_shell_buffer_imported: bool,
+
+    /// render execution owner shell readiness 是否创建 texture；Phase 54Q 固定保持 false。
+    pub render_execution_owner_shell_texture_created: bool,
+
+    /// render execution owner shell readiness 是否调用 renderer；Phase 54Q 固定保持 false。
+    pub render_execution_owner_shell_renderer_called: bool,
+
+    /// render execution owner shell readiness 是否提交 damage；Phase 54Q 固定保持 false。
+    pub render_execution_owner_shell_damage_submitted: bool,
+
+    /// render execution owner shell readiness 是否发送 frame callback done；Phase 54Q 固定保持 false。
+    pub render_execution_owner_shell_frame_callback_done_sent: bool,
+
+    /// render execution owner shell readiness 是否接入 input；Phase 54Q 固定保持 false。
+    pub render_execution_owner_shell_input_support: bool,
+
+    /// render execution owner shell readiness 是否触发 core mutation；Phase 54Q 固定保持 false。
+    pub render_execution_owner_shell_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -967,6 +1018,22 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             render_execution_owner_frame_callback_done_sent: false,
             render_execution_owner_input_support: false,
             render_execution_owner_core_mutation_invoked: false,
+            render_execution_owner_shell_readiness_invocations: 0,
+            render_execution_owner_shell_intents_observed: 0,
+            render_execution_owner_shell_observed_intents: Vec::new(),
+            render_execution_owner_shell_available: false,
+            render_execution_owner_shell_missing_buffer_import: false,
+            render_execution_owner_shell_missing_texture_creation: false,
+            render_execution_owner_shell_missing_renderer_call: false,
+            render_execution_owner_shell_missing_damage_submit: false,
+            render_execution_owner_shell_missing_frame_callback_done: false,
+            render_execution_owner_shell_buffer_imported: false,
+            render_execution_owner_shell_texture_created: false,
+            render_execution_owner_shell_renderer_called: false,
+            render_execution_owner_shell_damage_submitted: false,
+            render_execution_owner_shell_frame_callback_done_sent: false,
+            render_execution_owner_shell_input_support: false,
+            render_execution_owner_shell_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -1227,6 +1294,49 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_render_execution_owner_shell_readiness(
+        report: &RuntimeSurfaceCommitRenderExecutionOwnerShellReadinessReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            render_execution_owner_shell_readiness_invocations: usize::from(
+                report.readiness_invoked,
+            ),
+            render_execution_owner_shell_intents_observed: usize::from(
+                report.observed_intent.is_some(),
+            ),
+            render_execution_owner_shell_observed_intents: report
+                .observed_intent
+                .clone()
+                .into_iter()
+                .collect(),
+            render_execution_owner_shell_available: report.render_execution_owner_shell_available,
+            render_execution_owner_shell_missing_buffer_import: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerShellBlocker::MissingBufferImport,
+            ),
+            render_execution_owner_shell_missing_texture_creation: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerShellBlocker::MissingTextureCreation,
+            ),
+            render_execution_owner_shell_missing_renderer_call: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerShellBlocker::MissingRendererCall,
+            ),
+            render_execution_owner_shell_missing_damage_submit: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerShellBlocker::MissingDamageSubmit,
+            ),
+            render_execution_owner_shell_missing_frame_callback_done: has_blocker(
+                RuntimeSurfaceCommitRenderExecutionOwnerShellBlocker::MissingFrameCallbackDone,
+            ),
+            render_execution_owner_shell_buffer_imported: report.buffer_imported,
+            render_execution_owner_shell_texture_created: report.texture_created,
+            render_execution_owner_shell_renderer_called: report.renderer_called,
+            render_execution_owner_shell_damage_submitted: report.damage_submitted,
+            render_execution_owner_shell_frame_callback_done_sent: report.frame_callback_done_sent,
+            render_execution_owner_shell_input_support: report.input_support,
+            render_execution_owner_shell_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -1240,6 +1350,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.render_operation_intents_created > 0
             || self.render_operation_intents_drained > 0
             || self.render_execution_owner_intents_consumed > 0
+            || self.render_execution_owner_shell_intents_observed > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -1472,6 +1583,39 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.render_execution_owner_input_support |= delta.render_execution_owner_input_support;
         self.render_execution_owner_core_mutation_invoked |=
             delta.render_execution_owner_core_mutation_invoked;
+        self.render_execution_owner_shell_readiness_invocations = self
+            .render_execution_owner_shell_readiness_invocations
+            .saturating_add(delta.render_execution_owner_shell_readiness_invocations);
+        self.render_execution_owner_shell_intents_observed = self
+            .render_execution_owner_shell_intents_observed
+            .saturating_add(delta.render_execution_owner_shell_intents_observed);
+        self.render_execution_owner_shell_observed_intents
+            .extend(delta.render_execution_owner_shell_observed_intents);
+        self.render_execution_owner_shell_available |= delta.render_execution_owner_shell_available;
+        self.render_execution_owner_shell_missing_buffer_import |=
+            delta.render_execution_owner_shell_missing_buffer_import;
+        self.render_execution_owner_shell_missing_texture_creation |=
+            delta.render_execution_owner_shell_missing_texture_creation;
+        self.render_execution_owner_shell_missing_renderer_call |=
+            delta.render_execution_owner_shell_missing_renderer_call;
+        self.render_execution_owner_shell_missing_damage_submit |=
+            delta.render_execution_owner_shell_missing_damage_submit;
+        self.render_execution_owner_shell_missing_frame_callback_done |=
+            delta.render_execution_owner_shell_missing_frame_callback_done;
+        self.render_execution_owner_shell_buffer_imported |=
+            delta.render_execution_owner_shell_buffer_imported;
+        self.render_execution_owner_shell_texture_created |=
+            delta.render_execution_owner_shell_texture_created;
+        self.render_execution_owner_shell_renderer_called |=
+            delta.render_execution_owner_shell_renderer_called;
+        self.render_execution_owner_shell_damage_submitted |=
+            delta.render_execution_owner_shell_damage_submitted;
+        self.render_execution_owner_shell_frame_callback_done_sent |=
+            delta.render_execution_owner_shell_frame_callback_done_sent;
+        self.render_execution_owner_shell_input_support |=
+            delta.render_execution_owner_shell_input_support;
+        self.render_execution_owner_shell_core_mutation_invoked |=
+            delta.render_execution_owner_shell_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -1659,6 +1803,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_render_execution_owner_boundary(
                 &report.render_execution_owner_boundary_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_render_execution_owner_shell_readiness(
+                &report.render_execution_owner_shell_readiness_report,
             ),
         );
 
@@ -3460,6 +3609,117 @@ mod tests {
             !report
                 .surface_commit
                 .render_execution_owner_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_execution_owner_shell_readiness_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_execution_owner_shell_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .render_execution_owner_shell_observed_intents
+                .len(),
+            2
+        );
+        assert!(report.surface_commit.render_execution_owner_shell_available);
+        let first_render_execution_shell = &report
+            .surface_commit
+            .render_execution_owner_shell_observed_intents[0];
+        let second_render_execution_shell = &report
+            .surface_commit
+            .render_execution_owner_shell_observed_intents[1];
+        assert_eq!(
+            first_render_execution_shell.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_render_execution_shell.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_render_execution_shell.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_render_execution_shell.buffer_attach_observed);
+        assert!(first_render_execution_shell.damage_observed);
+        assert_eq!(
+            first_render_execution_shell.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_render_execution_shell.frame_callback_count, 1);
+        assert!(!second_render_execution_shell.buffer_attach_observed);
+        assert!(!second_render_execution_shell.damage_observed);
+        assert_eq!(second_render_execution_shell.damage_rect_count, 0);
+        assert_eq!(second_render_execution_shell.frame_callback_count, 0);
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_shell_missing_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_shell_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_shell_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_shell_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .render_execution_owner_shell_missing_frame_callback_done
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_shell_buffer_imported
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_shell_texture_created
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_shell_renderer_called
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_shell_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_shell_frame_callback_done_sent
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_shell_input_support
+        );
+        assert!(
+            !report
+                .surface_commit
+                .render_execution_owner_shell_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
