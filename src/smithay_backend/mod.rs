@@ -4498,6 +4498,84 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 54R 必须把 Phase 54G-54Q render 前置链路整理成 Phase 55A 前的审计文档。
+    #[test]
+    fn render_pipeline_readiness_audit_doc_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let audit = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_54R_RENDER_PIPELINE_READINESS_AUDIT.md"),
+        )
+        .expect("Phase 54R render pipeline readiness audit doc 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 54R coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 54R loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 54R orchestrator source 必须存在");
+
+        for required in [
+            "Phase 54R - Render Pipeline Readiness Audit",
+            "Phase 54G",
+            "Phase 54H",
+            "Phase 54I",
+            "Phase 54J",
+            "Phase 54K",
+            "Phase 54L",
+            "Phase 54M",
+            "Phase 54N",
+            "Phase 54O",
+            "Phase 54P",
+            "Phase 54Q",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+            "real renderer owner",
+            "buffer importer implementation",
+            "texture creation path",
+            "damage submit path",
+            "frame callback done path",
+            "Phase 55A minimal safe entry point",
+            "Do not import buffer in Phase 54R",
+            "Do not create texture in Phase 54R",
+            "Do not call renderer in Phase 54R",
+        ] {
+            assert!(
+                audit.contains(required),
+                "Phase 54R audit doc 缺少必需内容: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 54R readiness audit 发现 render 前置链路包含禁止 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
