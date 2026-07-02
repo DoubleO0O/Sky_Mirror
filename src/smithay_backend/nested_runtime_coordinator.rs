@@ -2079,6 +2079,167 @@ pub fn render_backend_capability_report_from_pipeline_skeleton(
     }
 }
 
+/// Renderer backend registration descriptor seam 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendRegistrationOperation {
+    /// 读取上游 render backend capability report。
+    ObserveRenderBackendCapabilityReport,
+    /// 绑定 runtime-owned renderer backend registration owner。
+    BindRendererBackendRegistrationOwner,
+    /// 注册 renderer backend descriptor。
+    RegisterRendererBackendDescriptor,
+    /// 生成 renderer backend registration report。
+    BuildRegistrationReport,
+}
+
+/// Renderer backend registration descriptor seam 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendRegistrationBlocker {
+    /// 本轮没有 render operation intent 可观察。
+    MissingRenderOperationIntent,
+    /// 上游 render backend capability owner 尚未可用。
+    MissingRenderBackendCapabilityOwner,
+    /// buffer import 尚未接入。
+    MissingBufferImport,
+    /// texture creation 尚未接入。
+    MissingTextureCreation,
+    /// renderer call 尚未接入。
+    MissingRendererCall,
+    /// damage submit 尚未接入。
+    MissingDamageSubmit,
+    /// frame callback done 尚未接入。
+    MissingFrameCallbackDone,
+}
+
+/// Runtime-owned renderer backend registration descriptor 纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererBackendRegistrationReport {
+    /// 本轮是否执行 renderer backend registration descriptor seam。
+    pub registration_invoked: bool,
+
+    /// 是否观察到上游 render backend capability report。
+    pub source_render_backend_capability_report_observed: bool,
+
+    /// 上游 render backend capability owner 是否可用。
+    pub source_render_backend_capability_owner_available: bool,
+
+    /// 上游 capability report 是否已注册 renderer backend。
+    pub source_renderer_backend_registered: bool,
+
+    /// 从上游 capability report 观察到的 render operation intent。
+    pub observed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// runtime-owned renderer backend registration owner 是否可用。
+    pub renderer_backend_registration_owner_available: bool,
+
+    /// 是否注册 renderer backend descriptor；不代表真实 renderer 已可调用。
+    pub renderer_backend_descriptor_available: bool,
+
+    /// 是否注册 renderer backend descriptor；Phase 55C 可为 true，但仍不是真实 renderer call。
+    pub renderer_backend_registered: bool,
+
+    /// 已注册 renderer backend descriptor 的种类。
+    pub registered_renderer_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// 是否 import buffer；Phase 55C 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 55C 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否调用 renderer；Phase 55C 固定为 false。
+    pub renderer_called: bool,
+
+    /// 是否提交 damage；Phase 55C 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 55C 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 55C 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 55C 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitRendererBackendRegistrationOperation>,
+
+    /// 阻止进入真实 renderer backend resource path 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitRendererBackendRegistrationBlocker>,
+}
+
+/// Runtime-owned renderer backend registration owner；只注册 descriptor，不持有 renderer。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitRendererBackendRegistrationOwner;
+
+impl RuntimeSurfaceCommitRendererBackendRegistrationOwner {
+    /// 创建 runtime-owned renderer backend registration owner。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 从 render backend capability report 派生 registration descriptor report；不执行 render。
+    pub fn renderer_backend_registration_report_from_backend_capability(
+        &mut self,
+        report: &RuntimeSurfaceCommitRenderBackendCapabilityReport,
+    ) -> RuntimeSurfaceCommitRendererBackendRegistrationReport {
+        renderer_backend_registration_report_from_backend_capability(report)
+    }
+}
+
+/// 从 render backend capability report 派生 registration descriptor report；不执行 render。
+pub fn renderer_backend_registration_report_from_backend_capability(
+    report: &RuntimeSurfaceCommitRenderBackendCapabilityReport,
+) -> RuntimeSurfaceCommitRendererBackendRegistrationReport {
+    let observed_intent = report.observed_intent.clone();
+    let mut blockers = Vec::new();
+    if observed_intent.is_none() {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendRegistrationBlocker::MissingRenderOperationIntent,
+        );
+    }
+    if !report.render_backend_capability_owner_available {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendRegistrationBlocker::MissingRenderBackendCapabilityOwner,
+        );
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitRendererBackendRegistrationBlocker::MissingBufferImport,
+        RuntimeSurfaceCommitRendererBackendRegistrationBlocker::MissingTextureCreation,
+        RuntimeSurfaceCommitRendererBackendRegistrationBlocker::MissingRendererCall,
+        RuntimeSurfaceCommitRendererBackendRegistrationBlocker::MissingDamageSubmit,
+        RuntimeSurfaceCommitRendererBackendRegistrationBlocker::MissingFrameCallbackDone,
+    ]);
+
+    RuntimeSurfaceCommitRendererBackendRegistrationReport {
+        registration_invoked: true,
+        source_render_backend_capability_report_observed: report.report_invoked,
+        source_render_backend_capability_owner_available: report
+            .render_backend_capability_owner_available,
+        source_renderer_backend_registered: report.renderer_backend_registered,
+        observed_intent,
+        renderer_backend_registration_owner_available: true,
+        renderer_backend_descriptor_available: true,
+        renderer_backend_registered: true,
+        registered_renderer_backend_kind: Some(RuntimeSurfaceCommitRenderBackendKind::SmithayLinux),
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitRendererBackendRegistrationOperation::ObserveRenderBackendCapabilityReport,
+            RuntimeSurfaceCommitRendererBackendRegistrationOperation::BindRendererBackendRegistrationOwner,
+            RuntimeSurfaceCommitRendererBackendRegistrationOperation::RegisterRendererBackendDescriptor,
+            RuntimeSurfaceCommitRendererBackendRegistrationOperation::BuildRegistrationReport,
+        ],
+        blockers,
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -2343,6 +2504,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// render backend capability report。
     pub render_backend_capability_report: RuntimeSurfaceCommitRenderBackendCapabilityReport,
+
+    /// renderer backend registration descriptor report。
+    pub renderer_backend_registration_report: RuntimeSurfaceCommitRendererBackendRegistrationReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -2364,6 +2528,7 @@ pub struct NestedRuntimeCoordinator {
     render_execution_owner_shell: RuntimeSurfaceCommitRenderExecutionOwnerShell,
     render_pipeline_skeleton_owner: RuntimeSurfaceCommitRenderPipelineSkeletonOwner,
     render_backend_capability_owner: RuntimeSurfaceCommitRenderBackendCapabilityOwner,
+    renderer_backend_registration_owner: RuntimeSurfaceCommitRendererBackendRegistrationOwner,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -2402,6 +2567,8 @@ impl NestedRuntimeCoordinator {
             render_pipeline_skeleton_owner: RuntimeSurfaceCommitRenderPipelineSkeletonOwner::new(),
             render_backend_capability_owner: RuntimeSurfaceCommitRenderBackendCapabilityOwner::new(
             ),
+            renderer_backend_registration_owner:
+                RuntimeSurfaceCommitRendererBackendRegistrationOwner::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -2625,6 +2792,11 @@ impl NestedRuntimeCoordinator {
             .render_backend_capability_report_from_pipeline_skeleton(
                 &render_pipeline_skeleton_readiness_report,
             );
+        let renderer_backend_registration_report = self
+            .renderer_backend_registration_owner
+            .renderer_backend_registration_report_from_backend_capability(
+                &render_backend_capability_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -2644,6 +2816,7 @@ impl NestedRuntimeCoordinator {
             render_execution_owner_shell_readiness_report,
             render_pipeline_skeleton_readiness_report,
             render_backend_capability_report,
+            renderer_backend_registration_report,
         }
     }
 
