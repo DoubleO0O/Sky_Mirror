@@ -23,6 +23,8 @@ use crate::{
         RuntimeSurfaceCommitRenderDirtyReadinessIntent,
         RuntimeSurfaceCommitRendererAdmissionReport,
         RuntimeSurfaceCommitRendererAdmissionWorkIntent,
+        RuntimeSurfaceCommitRendererOwnerBoundaryBlocker,
+        RuntimeSurfaceCommitRendererOwnerBoundaryReport,
         render_dirty_readiness_intent_from_commit_drain_report,
     },
 };
@@ -528,6 +530,45 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// renderer-admission seam 是否触发 core mutation；Phase 54I 固定保持 false。
     pub renderer_admission_core_mutation_invoked: bool,
 
+    /// renderer owner boundary seam 被调用的次数。
+    pub renderer_owner_boundary_invocations: usize,
+
+    /// renderer owner boundary 成功消费的 work intent 数量。
+    pub renderer_owner_work_intents_consumed: usize,
+
+    /// 按 FIFO 顺序保存的 renderer owner boundary consumed work intents。
+    pub renderer_owner_consumed_work_intents: Vec<RuntimeSurfaceCommitRendererAdmissionWorkIntent>,
+
+    /// renderer owner boundary 是否缺少真实 renderer owner。
+    pub renderer_owner_missing_renderer_owner: bool,
+
+    /// renderer owner boundary 是否缺少 buffer importer。
+    pub renderer_owner_missing_buffer_importer: bool,
+
+    /// renderer owner boundary 是否缺少 texture support。
+    pub renderer_owner_missing_texture_support: bool,
+
+    /// renderer owner boundary 是否 import buffer；Phase 54J 固定保持 false。
+    pub renderer_owner_buffer_imported: bool,
+
+    /// renderer owner boundary 是否创建 texture；Phase 54J 固定保持 false。
+    pub renderer_owner_texture_created: bool,
+
+    /// renderer owner boundary 是否调用 renderer；Phase 54J 固定保持 false。
+    pub renderer_owner_renderer_called: bool,
+
+    /// renderer owner boundary 是否提交 damage；Phase 54J 固定保持 false。
+    pub renderer_owner_damage_submitted: bool,
+
+    /// renderer owner boundary 是否发送 frame callback done；Phase 54J 固定保持 false。
+    pub renderer_owner_frame_callback_done_sent: bool,
+
+    /// renderer owner boundary 是否接入 input；Phase 54J 固定保持 false。
+    pub renderer_owner_input_support: bool,
+
+    /// renderer owner boundary 是否触发 core mutation；Phase 54J 固定保持 false。
+    pub renderer_owner_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -587,6 +628,19 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             renderer_admission_frame_callback_done_sent: false,
             renderer_admission_input_support: false,
             renderer_admission_core_mutation_invoked: false,
+            renderer_owner_boundary_invocations: 0,
+            renderer_owner_work_intents_consumed: 0,
+            renderer_owner_consumed_work_intents: Vec::new(),
+            renderer_owner_missing_renderer_owner: false,
+            renderer_owner_missing_buffer_importer: false,
+            renderer_owner_missing_texture_support: false,
+            renderer_owner_buffer_imported: false,
+            renderer_owner_texture_created: false,
+            renderer_owner_renderer_called: false,
+            renderer_owner_damage_submitted: false,
+            renderer_owner_frame_callback_done_sent: false,
+            renderer_owner_input_support: false,
+            renderer_owner_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -629,12 +683,45 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_renderer_owner_boundary(
+        report: &RuntimeSurfaceCommitRendererOwnerBoundaryReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            renderer_owner_boundary_invocations: usize::from(report.consume_invoked),
+            renderer_owner_work_intents_consumed: usize::from(report.work_intent_consumed),
+            renderer_owner_consumed_work_intents: report
+                .consumed_work_intent
+                .clone()
+                .into_iter()
+                .collect(),
+            renderer_owner_missing_renderer_owner: has_blocker(
+                RuntimeSurfaceCommitRendererOwnerBoundaryBlocker::MissingRendererOwner,
+            ),
+            renderer_owner_missing_buffer_importer: has_blocker(
+                RuntimeSurfaceCommitRendererOwnerBoundaryBlocker::MissingBufferImporter,
+            ),
+            renderer_owner_missing_texture_support: has_blocker(
+                RuntimeSurfaceCommitRendererOwnerBoundaryBlocker::MissingTextureSupport,
+            ),
+            renderer_owner_buffer_imported: report.buffer_imported,
+            renderer_owner_texture_created: report.texture_created,
+            renderer_owner_renderer_called: report.renderer_called,
+            renderer_owner_damage_submitted: report.damage_submitted,
+            renderer_owner_frame_callback_done_sent: report.frame_callback_done_sent,
+            renderer_owner_input_support: report.input_support,
+            renderer_owner_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
             || self.render_dirty_intents_enqueued > 0
             || self.render_dirty_intents_drained > 0
             || self.renderer_work_intents_created > 0
+            || self.renderer_owner_work_intents_consumed > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -712,6 +799,25 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.renderer_admission_input_support |= delta.renderer_admission_input_support;
         self.renderer_admission_core_mutation_invoked |=
             delta.renderer_admission_core_mutation_invoked;
+        self.renderer_owner_boundary_invocations = self
+            .renderer_owner_boundary_invocations
+            .saturating_add(delta.renderer_owner_boundary_invocations);
+        self.renderer_owner_work_intents_consumed = self
+            .renderer_owner_work_intents_consumed
+            .saturating_add(delta.renderer_owner_work_intents_consumed);
+        self.renderer_owner_consumed_work_intents
+            .extend(delta.renderer_owner_consumed_work_intents);
+        self.renderer_owner_missing_renderer_owner |= delta.renderer_owner_missing_renderer_owner;
+        self.renderer_owner_missing_buffer_importer |= delta.renderer_owner_missing_buffer_importer;
+        self.renderer_owner_missing_texture_support |= delta.renderer_owner_missing_texture_support;
+        self.renderer_owner_buffer_imported |= delta.renderer_owner_buffer_imported;
+        self.renderer_owner_texture_created |= delta.renderer_owner_texture_created;
+        self.renderer_owner_renderer_called |= delta.renderer_owner_renderer_called;
+        self.renderer_owner_damage_submitted |= delta.renderer_owner_damage_submitted;
+        self.renderer_owner_frame_callback_done_sent |=
+            delta.renderer_owner_frame_callback_done_sent;
+        self.renderer_owner_input_support |= delta.renderer_owner_input_support;
+        self.renderer_owner_core_mutation_invoked |= delta.renderer_owner_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -864,6 +970,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_renderer_admission(
                 &report.renderer_admission_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_renderer_owner_boundary(
+                &report.renderer_owner_boundary_report,
             ),
         );
 
@@ -2182,6 +2293,100 @@ mod tests {
                 .surface_commit
                 .renderer_admission_core_mutation_invoked
         );
+        assert!(!report.surface_commit.buffer_attached);
+        assert!(!report.surface_commit.damage_submitted);
+        assert!(!report.surface_commit.frame_callback_requested);
+        assert!(!report.surface_commit.render_invoked);
+        assert!(!report.surface_commit.input_invoked);
+        assert!(!report.surface_commit.core_mutation_invoked);
+        assert_eq!(state.surfaces.records().len(), surface_records_before);
+        assert_eq!(state.registry.records().len(), registry_records_before);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Linux-only proof：renderer owner boundary consumes work intents FIFO as blocked readiness.
+    #[test]
+    fn nested_runtime_loop_consumes_renderer_owner_work_intents_fifo_as_blocked_boundary() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("nested-loop-renderer-owner-boundary");
+        let mut runtime_loop = NestedRuntimeLoop::with_socket_name(&socket_name)
+            .expect("bounded loop 必须绑定测试 socket");
+        let (first_commit, second_commit) = {
+            let display = runtime_loop
+                .coordinator
+                .display_mut_for_controlled_toplevel_registration();
+            display
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            let first_commit =
+                controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
+                    .expect("首个 render-dirty readiness commit proof 必须完成");
+            let second_commit = controlled_wl_surface_commit_observation_report(display)
+                .expect("第二个 plain commit proof 必须完成");
+
+            (first_commit, second_commit)
+        };
+        let mut state = State::new();
+        let surface_records_before = state.surfaces.records().len();
+        let registry_records_before = state.registry.records().len();
+
+        let report = runtime_loop.run_for_iterations(
+            &mut state,
+            NestedRuntimeLoopConfig {
+                max_iterations: 3,
+                pump_timeout: Duration::ZERO,
+                stop_when_idle: true,
+                continue_after_error: false,
+            },
+        );
+
+        assert!(report.is_successful());
+        assert_eq!(
+            report.surface_commit.drained_commit_sequences,
+            vec![first_commit.commit_sequence, second_commit.commit_sequence]
+        );
+        assert_eq!(report.surface_commit.renderer_work_intents_created, 2);
+        let consumed_count = report.surface_commit.renderer_owner_work_intents_consumed;
+        assert_eq!(consumed_count, 2);
+        assert_eq!(
+            report
+                .surface_commit
+                .renderer_owner_consumed_work_intents
+                .len(),
+            2
+        );
+        let first_consumed = &report.surface_commit.renderer_owner_consumed_work_intents[0];
+        let second_consumed = &report.surface_commit.renderer_owner_consumed_work_intents[1];
+        assert_eq!(
+            first_consumed.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(first_consumed.commit_sequence, first_commit.commit_sequence);
+        let second_sequence = second_consumed.commit_sequence;
+        assert_eq!(second_sequence, second_commit.commit_sequence);
+        assert!(first_consumed.buffer_attach_observed);
+        assert!(first_consumed.buffer_removed);
+        assert!(first_consumed.damage_observed);
+        assert_eq!(first_consumed.buffer_damage_rects, 1);
+        assert!(first_consumed.frame_callback_observed);
+        assert_eq!(first_consumed.frame_callback_count, 1);
+        assert!(!second_consumed.buffer_attach_observed);
+        assert!(!second_consumed.damage_observed);
+        assert_eq!(second_consumed.frame_callback_count, 0);
+        assert!(report.surface_commit.renderer_owner_missing_renderer_owner);
+        assert!(report.surface_commit.renderer_owner_missing_buffer_importer);
+        assert!(report.surface_commit.renderer_owner_missing_texture_support);
+        assert!(!report.surface_commit.renderer_owner_buffer_imported);
+        assert!(!report.surface_commit.renderer_owner_texture_created);
+        assert!(!report.surface_commit.renderer_owner_renderer_called);
+        assert!(!report.surface_commit.renderer_owner_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .renderer_owner_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.renderer_owner_input_support);
+        assert!(!report.surface_commit.renderer_owner_core_mutation_invoked);
         assert!(!report.surface_commit.buffer_attached);
         assert!(!report.surface_commit.damage_submitted);
         assert!(!report.surface_commit.frame_callback_requested);
