@@ -5048,6 +5048,136 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55E 必须建立 buffer importer resource owner boundary / handoff seam。
+    #[test]
+    fn buffer_import_resource_owner_boundary_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55E coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55E loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55E orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55E_BUFFER_IMPORT_RESOURCE_OWNER_BOUNDARY.md"),
+        )
+        .expect("Phase 55E 文档必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitBufferImportResourceOwnerBoundary",
+            "buffer_import_resource_owner_boundary: RuntimeSurfaceCommitBufferImportResourceOwnerBoundary",
+            "pub struct RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport",
+            "pub enum RuntimeSurfaceCommitBufferImportResourceOwnerOperation",
+            "pub enum RuntimeSurfaceCommitBufferImportResourceOwnerBlocker",
+            "pub fn buffer_import_resource_owner_readiness_from_renderer_backend_owner_shell",
+            "pub source_renderer_backend_owner_shell_readiness_observed: bool",
+            "pub source_renderer_backend_owner_shell_available: bool",
+            "pub source_renderer_backend_owner_shell_bound: bool",
+            "pub observed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub buffer_importer_owner_available: bool",
+            "pub buffer_importer_owner_bound: bool",
+            "pub renderer_backend_descriptor_evidence_available: bool",
+            "pub registered_renderer_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>",
+            "buffer_importer_owner_available: true",
+            "buffer_importer_owner_bound: true",
+            "renderer_backend_descriptor_evidence_available: report",
+            ".source_renderer_backend_descriptor_available",
+            "registered_renderer_backend_kind: report.registered_renderer_backend_kind",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55E coordinator buffer import owner boundary 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport",
+            "pub buffer_import_resource_owner_readiness_invocations: usize",
+            "pub buffer_import_resource_owner_intents_observed: usize",
+            "pub buffer_import_resource_owner_observed_intents:",
+            "pub buffer_importer_owner_available: bool",
+            "pub buffer_importer_owner_bound: bool",
+            "pub buffer_import_resource_owner_descriptor_evidence_available: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_resource_owner_readiness",
+            "report.buffer_import_resource_owner_readiness_report",
+            "first_buffer_import_resource_owner.commit_sequence",
+            "second_buffer_import_resource_owner.commit_sequence",
+            "buffer_import_resource_owner_buffer_imported",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55E loop buffer import owner report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_resource_owner_intents_observed",
+            "buffer_importer_owner_available",
+            "buffer_importer_owner_bound",
+            "buffer_import_resource_owner_descriptor_evidence_available",
+            "first_buffer_import_resource_owner.commit_sequence",
+            "second_buffer_import_resource_owner.commit_sequence",
+            "buffer_import_resource_owner_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55E orchestrator buffer import owner report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55E buffer import resource owner boundary 包含禁止 token: {forbidden}"
+            );
+        }
+
+        for required in [
+            "buffer_importer_owner_available = true",
+            "buffer_importer_owner_bound = true",
+            "renderer_backend_descriptor_evidence_available = true",
+            "registered_renderer_backend_kind = Some(SmithayLinux)",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55E doc 缺少 capability truth: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

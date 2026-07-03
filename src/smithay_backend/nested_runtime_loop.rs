@@ -19,6 +19,8 @@ use crate::{
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
+        RuntimeSurfaceCommitBufferImportResourceOwnerBlocker,
+        RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport,
         RuntimeSurfaceCommitBufferImporterShellBlocker,
         RuntimeSurfaceCommitBufferImporterShellReadinessReport, RuntimeSurfaceCommitDrainReport,
         RuntimeSurfaceCommitRenderBackendCapabilityBlocker,
@@ -1111,6 +1113,71 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// renderer backend owner shell 是否触发 core mutation；Phase 55D 固定保持 false。
     pub renderer_backend_owner_shell_core_mutation_invoked: bool,
 
+    /// buffer import resource owner boundary seam 被调用的次数。
+    pub buffer_import_resource_owner_readiness_invocations: usize,
+
+    /// buffer import resource owner boundary 观察到的 intent 数量。
+    pub buffer_import_resource_owner_intents_observed: usize,
+
+    /// 按 FIFO 顺序保存的 buffer import resource owner observed intents。
+    pub buffer_import_resource_owner_observed_intents:
+        Vec<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// runtime-owned buffer importer owner boundary 是否可用。
+    pub buffer_importer_owner_available: bool,
+
+    /// buffer importer owner boundary 是否绑定 renderer backend owner shell。
+    pub buffer_importer_owner_bound: bool,
+
+    /// buffer importer owner 是否观察到 renderer backend descriptor evidence。
+    pub buffer_import_resource_owner_descriptor_evidence_available: bool,
+
+    /// 已注册 renderer backend descriptor 的种类。
+    pub buffer_import_resource_owner_registered_backend_kind:
+        Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// buffer importer owner 是否仍缺少 renderer backend owner shell。
+    pub buffer_import_resource_owner_missing_renderer_backend_owner_shell: bool,
+
+    /// buffer importer owner 是否仍缺少 renderer backend descriptor evidence。
+    pub buffer_import_resource_owner_missing_descriptor_evidence: bool,
+
+    /// buffer importer owner 是否仍缺少真实 buffer import implementation。
+    pub buffer_import_resource_owner_missing_actual_buffer_import: bool,
+
+    /// buffer importer owner 是否仍缺少 texture creation。
+    pub buffer_import_resource_owner_missing_texture_creation: bool,
+
+    /// buffer importer owner 是否仍缺少 renderer call。
+    pub buffer_import_resource_owner_missing_renderer_call: bool,
+
+    /// buffer importer owner 是否仍缺少 damage submit。
+    pub buffer_import_resource_owner_missing_damage_submit: bool,
+
+    /// buffer importer owner 是否仍缺少 frame callback done。
+    pub buffer_import_resource_owner_missing_frame_callback_done: bool,
+
+    /// buffer importer owner 是否 import buffer；Phase 55E 固定保持 false。
+    pub buffer_import_resource_owner_buffer_imported: bool,
+
+    /// buffer importer owner 是否创建 texture；Phase 55E 固定保持 false。
+    pub buffer_import_resource_owner_texture_created: bool,
+
+    /// buffer importer owner 是否调用 renderer；Phase 55E 固定保持 false。
+    pub buffer_import_resource_owner_renderer_called: bool,
+
+    /// buffer importer owner 是否提交 damage；Phase 55E 固定保持 false。
+    pub buffer_import_resource_owner_damage_submitted: bool,
+
+    /// buffer importer owner 是否发送 frame callback done；Phase 55E 固定保持 false。
+    pub buffer_import_resource_owner_frame_callback_done_sent: bool,
+
+    /// buffer importer owner 是否接入 input；Phase 55E 固定保持 false。
+    pub buffer_import_resource_owner_input_support: bool,
+
+    /// buffer importer owner 是否触发 core mutation；Phase 55E 固定保持 false。
+    pub buffer_import_resource_owner_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -1354,6 +1421,27 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             renderer_backend_owner_shell_frame_callback_done_sent: false,
             renderer_backend_owner_shell_input_support: false,
             renderer_backend_owner_shell_core_mutation_invoked: false,
+            buffer_import_resource_owner_readiness_invocations: 0,
+            buffer_import_resource_owner_intents_observed: 0,
+            buffer_import_resource_owner_observed_intents: Vec::new(),
+            buffer_importer_owner_available: false,
+            buffer_importer_owner_bound: false,
+            buffer_import_resource_owner_descriptor_evidence_available: false,
+            buffer_import_resource_owner_registered_backend_kind: None,
+            buffer_import_resource_owner_missing_renderer_backend_owner_shell: false,
+            buffer_import_resource_owner_missing_descriptor_evidence: false,
+            buffer_import_resource_owner_missing_actual_buffer_import: false,
+            buffer_import_resource_owner_missing_texture_creation: false,
+            buffer_import_resource_owner_missing_renderer_call: false,
+            buffer_import_resource_owner_missing_damage_submit: false,
+            buffer_import_resource_owner_missing_frame_callback_done: false,
+            buffer_import_resource_owner_buffer_imported: false,
+            buffer_import_resource_owner_texture_created: false,
+            buffer_import_resource_owner_renderer_called: false,
+            buffer_import_resource_owner_damage_submitted: false,
+            buffer_import_resource_owner_frame_callback_done_sent: false,
+            buffer_import_resource_owner_input_support: false,
+            buffer_import_resource_owner_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -1854,6 +1942,60 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_buffer_import_resource_owner_readiness(
+        report: &RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            buffer_import_resource_owner_readiness_invocations: usize::from(
+                report.readiness_invoked,
+            ),
+            buffer_import_resource_owner_intents_observed: usize::from(
+                report.observed_intent.is_some(),
+            ),
+            buffer_import_resource_owner_observed_intents: report
+                .observed_intent
+                .clone()
+                .into_iter()
+                .collect(),
+            buffer_importer_owner_available: report.buffer_importer_owner_available,
+            buffer_importer_owner_bound: report.buffer_importer_owner_bound,
+            buffer_import_resource_owner_descriptor_evidence_available: report
+                .renderer_backend_descriptor_evidence_available,
+            buffer_import_resource_owner_registered_backend_kind: report
+                .registered_renderer_backend_kind,
+            buffer_import_resource_owner_missing_renderer_backend_owner_shell: has_blocker(
+                RuntimeSurfaceCommitBufferImportResourceOwnerBlocker::MissingRendererBackendOwnerShell,
+            ),
+            buffer_import_resource_owner_missing_descriptor_evidence: has_blocker(
+                RuntimeSurfaceCommitBufferImportResourceOwnerBlocker::MissingRendererBackendDescriptorEvidence,
+            ),
+            buffer_import_resource_owner_missing_actual_buffer_import: has_blocker(
+                RuntimeSurfaceCommitBufferImportResourceOwnerBlocker::MissingActualBufferImport,
+            ),
+            buffer_import_resource_owner_missing_texture_creation: has_blocker(
+                RuntimeSurfaceCommitBufferImportResourceOwnerBlocker::MissingTextureCreation,
+            ),
+            buffer_import_resource_owner_missing_renderer_call: has_blocker(
+                RuntimeSurfaceCommitBufferImportResourceOwnerBlocker::MissingRendererCall,
+            ),
+            buffer_import_resource_owner_missing_damage_submit: has_blocker(
+                RuntimeSurfaceCommitBufferImportResourceOwnerBlocker::MissingDamageSubmit,
+            ),
+            buffer_import_resource_owner_missing_frame_callback_done: has_blocker(
+                RuntimeSurfaceCommitBufferImportResourceOwnerBlocker::MissingFrameCallbackDone,
+            ),
+            buffer_import_resource_owner_buffer_imported: report.buffer_imported,
+            buffer_import_resource_owner_texture_created: report.texture_created,
+            buffer_import_resource_owner_renderer_called: report.renderer_called,
+            buffer_import_resource_owner_damage_submitted: report.damage_submitted,
+            buffer_import_resource_owner_frame_callback_done_sent: report.frame_callback_done_sent,
+            buffer_import_resource_owner_input_support: report.input_support,
+            buffer_import_resource_owner_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -1872,6 +2014,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.render_backend_capability_intents_observed > 0
             || self.renderer_backend_registration_intents_observed > 0
             || self.renderer_backend_owner_shell_intents_observed > 0
+            || self.buffer_import_resource_owner_intents_observed > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -2299,6 +2442,49 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.renderer_backend_owner_shell_input_support;
         self.renderer_backend_owner_shell_core_mutation_invoked |=
             delta.renderer_backend_owner_shell_core_mutation_invoked;
+        self.buffer_import_resource_owner_readiness_invocations = self
+            .buffer_import_resource_owner_readiness_invocations
+            .saturating_add(delta.buffer_import_resource_owner_readiness_invocations);
+        self.buffer_import_resource_owner_intents_observed = self
+            .buffer_import_resource_owner_intents_observed
+            .saturating_add(delta.buffer_import_resource_owner_intents_observed);
+        self.buffer_import_resource_owner_observed_intents
+            .extend(delta.buffer_import_resource_owner_observed_intents);
+        self.buffer_importer_owner_available |= delta.buffer_importer_owner_available;
+        self.buffer_importer_owner_bound |= delta.buffer_importer_owner_bound;
+        self.buffer_import_resource_owner_descriptor_evidence_available |=
+            delta.buffer_import_resource_owner_descriptor_evidence_available;
+        self.buffer_import_resource_owner_registered_backend_kind = self
+            .buffer_import_resource_owner_registered_backend_kind
+            .or(delta.buffer_import_resource_owner_registered_backend_kind);
+        self.buffer_import_resource_owner_missing_renderer_backend_owner_shell |=
+            delta.buffer_import_resource_owner_missing_renderer_backend_owner_shell;
+        self.buffer_import_resource_owner_missing_descriptor_evidence |=
+            delta.buffer_import_resource_owner_missing_descriptor_evidence;
+        self.buffer_import_resource_owner_missing_actual_buffer_import |=
+            delta.buffer_import_resource_owner_missing_actual_buffer_import;
+        self.buffer_import_resource_owner_missing_texture_creation |=
+            delta.buffer_import_resource_owner_missing_texture_creation;
+        self.buffer_import_resource_owner_missing_renderer_call |=
+            delta.buffer_import_resource_owner_missing_renderer_call;
+        self.buffer_import_resource_owner_missing_damage_submit |=
+            delta.buffer_import_resource_owner_missing_damage_submit;
+        self.buffer_import_resource_owner_missing_frame_callback_done |=
+            delta.buffer_import_resource_owner_missing_frame_callback_done;
+        self.buffer_import_resource_owner_buffer_imported |=
+            delta.buffer_import_resource_owner_buffer_imported;
+        self.buffer_import_resource_owner_texture_created |=
+            delta.buffer_import_resource_owner_texture_created;
+        self.buffer_import_resource_owner_renderer_called |=
+            delta.buffer_import_resource_owner_renderer_called;
+        self.buffer_import_resource_owner_damage_submitted |=
+            delta.buffer_import_resource_owner_damage_submitted;
+        self.buffer_import_resource_owner_frame_callback_done_sent |=
+            delta.buffer_import_resource_owner_frame_callback_done_sent;
+        self.buffer_import_resource_owner_input_support |=
+            delta.buffer_import_resource_owner_input_support;
+        self.buffer_import_resource_owner_core_mutation_invoked |=
+            delta.buffer_import_resource_owner_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -2511,6 +2697,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_renderer_backend_owner_shell_readiness(
                 &report.renderer_backend_owner_shell_readiness_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_resource_owner_readiness(
+                &report.buffer_import_resource_owner_readiness_report,
             ),
         );
 
@@ -4939,6 +5130,139 @@ mod tests {
             !report
                 .surface_commit
                 .renderer_backend_owner_shell_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_readiness_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_observed_intents
+                .len(),
+            2
+        );
+        assert!(report.surface_commit.buffer_importer_owner_available);
+        assert!(report.surface_commit.buffer_importer_owner_bound);
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_descriptor_evidence_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_registered_backend_kind
+                .is_some()
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_missing_renderer_backend_owner_shell
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_missing_descriptor_evidence
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_missing_actual_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_resource_owner_missing_frame_callback_done
+        );
+        let first_buffer_import_resource_owner = &report
+            .surface_commit
+            .buffer_import_resource_owner_observed_intents[0];
+        let second_buffer_import_resource_owner = &report
+            .surface_commit
+            .buffer_import_resource_owner_observed_intents[1];
+        assert_eq!(
+            first_buffer_import_resource_owner.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_buffer_import_resource_owner.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_buffer_import_resource_owner.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_buffer_import_resource_owner.buffer_attach_observed);
+        assert!(first_buffer_import_resource_owner.damage_observed);
+        assert_eq!(
+            first_buffer_import_resource_owner.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_buffer_import_resource_owner.frame_callback_count, 1);
+        assert!(!second_buffer_import_resource_owner.buffer_attach_observed);
+        assert!(!second_buffer_import_resource_owner.damage_observed);
+        assert_eq!(second_buffer_import_resource_owner.damage_rect_count, 0);
+        assert_eq!(second_buffer_import_resource_owner.frame_callback_count, 0);
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_buffer_imported
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_texture_created
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_renderer_called
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_frame_callback_done_sent
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_input_support
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_resource_owner_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
