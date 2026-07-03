@@ -19,6 +19,8 @@ use crate::{
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
+        RuntimeSurfaceCommitBufferImportPlanningBlocker,
+        RuntimeSurfaceCommitBufferImportPlanningReport,
         RuntimeSurfaceCommitBufferImportResourceOwnerBlocker,
         RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport,
         RuntimeSurfaceCommitBufferImporterShellBlocker,
@@ -1178,6 +1180,79 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// buffer importer owner 是否触发 core mutation；Phase 55E 固定保持 false。
     pub buffer_import_resource_owner_core_mutation_invoked: bool,
 
+    /// buffer import planning seam 被调用的次数。
+    pub buffer_import_planning_invocations: usize,
+
+    /// buffer import planning 观察到的 intent 数量。
+    pub buffer_import_planning_intents_observed: usize,
+
+    /// 按 FIFO 顺序保存的 buffer import planning observed intents。
+    pub buffer_import_planning_observed_intents: Vec<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// buffer import planning seam 是否可用。
+    pub buffer_import_plan_available: bool,
+
+    /// buffer import planning 是否为 observed intent 建立 pure-data plan。
+    pub buffer_import_plan_built: bool,
+
+    /// 观察到 buffer import candidate evidence 的数量。
+    pub buffer_import_candidates_observed: usize,
+
+    /// 规划为未来需要 buffer import 的数量。
+    pub buffer_import_required_count: usize,
+
+    /// buffer import planning 是否观察到 renderer backend descriptor evidence。
+    pub buffer_import_planning_descriptor_evidence_available: bool,
+
+    /// 已注册 renderer backend descriptor 的种类。
+    pub buffer_import_planning_registered_backend_kind:
+        Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// buffer import planning 是否仍缺少 buffer importer owner。
+    pub buffer_import_planning_missing_buffer_importer_owner: bool,
+
+    /// buffer import planning 是否仍缺少 renderer backend descriptor evidence。
+    pub buffer_import_planning_missing_descriptor_evidence: bool,
+
+    /// buffer import planning 是否仍缺少 buffer import candidate evidence。
+    pub buffer_import_planning_missing_candidate: bool,
+
+    /// buffer import planning 是否仍缺少真实 buffer import implementation。
+    pub buffer_import_planning_missing_actual_buffer_import: bool,
+
+    /// buffer import planning 是否仍缺少 texture creation。
+    pub buffer_import_planning_missing_texture_creation: bool,
+
+    /// buffer import planning 是否仍缺少 renderer call。
+    pub buffer_import_planning_missing_renderer_call: bool,
+
+    /// buffer import planning 是否仍缺少 damage submit。
+    pub buffer_import_planning_missing_damage_submit: bool,
+
+    /// buffer import planning 是否仍缺少 frame callback done。
+    pub buffer_import_planning_missing_frame_callback_done: bool,
+
+    /// buffer import planning 是否 import buffer；Phase 55F 固定保持 false。
+    pub buffer_import_planning_buffer_imported: bool,
+
+    /// buffer import planning 是否创建 texture；Phase 55F 固定保持 false。
+    pub buffer_import_planning_texture_created: bool,
+
+    /// buffer import planning 是否调用 renderer；Phase 55F 固定保持 false。
+    pub buffer_import_planning_renderer_called: bool,
+
+    /// buffer import planning 是否提交 damage；Phase 55F 固定保持 false。
+    pub buffer_import_planning_damage_submitted: bool,
+
+    /// buffer import planning 是否发送 frame callback done；Phase 55F 固定保持 false。
+    pub buffer_import_planning_frame_callback_done_sent: bool,
+
+    /// buffer import planning 是否接入 input；Phase 55F 固定保持 false。
+    pub buffer_import_planning_input_support: bool,
+
+    /// buffer import planning 是否触发 core mutation；Phase 55F 固定保持 false。
+    pub buffer_import_planning_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -1442,6 +1517,30 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             buffer_import_resource_owner_frame_callback_done_sent: false,
             buffer_import_resource_owner_input_support: false,
             buffer_import_resource_owner_core_mutation_invoked: false,
+            buffer_import_planning_invocations: 0,
+            buffer_import_planning_intents_observed: 0,
+            buffer_import_planning_observed_intents: Vec::new(),
+            buffer_import_plan_available: false,
+            buffer_import_plan_built: false,
+            buffer_import_candidates_observed: 0,
+            buffer_import_required_count: 0,
+            buffer_import_planning_descriptor_evidence_available: false,
+            buffer_import_planning_registered_backend_kind: None,
+            buffer_import_planning_missing_buffer_importer_owner: false,
+            buffer_import_planning_missing_descriptor_evidence: false,
+            buffer_import_planning_missing_candidate: false,
+            buffer_import_planning_missing_actual_buffer_import: false,
+            buffer_import_planning_missing_texture_creation: false,
+            buffer_import_planning_missing_renderer_call: false,
+            buffer_import_planning_missing_damage_submit: false,
+            buffer_import_planning_missing_frame_callback_done: false,
+            buffer_import_planning_buffer_imported: false,
+            buffer_import_planning_texture_created: false,
+            buffer_import_planning_renderer_called: false,
+            buffer_import_planning_damage_submitted: false,
+            buffer_import_planning_frame_callback_done_sent: false,
+            buffer_import_planning_input_support: false,
+            buffer_import_planning_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -1996,6 +2095,65 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_buffer_import_planning_report(
+        report: &RuntimeSurfaceCommitBufferImportPlanningReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            buffer_import_planning_invocations: usize::from(report.planning_invoked),
+            buffer_import_planning_intents_observed: usize::from(
+                report.observed_intent.is_some(),
+            ),
+            buffer_import_planning_observed_intents: report
+                .observed_intent
+                .clone()
+                .into_iter()
+                .collect(),
+            buffer_import_plan_available: report.buffer_import_plan_available,
+            buffer_import_plan_built: report.buffer_import_plan_built,
+            buffer_import_candidates_observed: usize::from(
+                report.buffer_import_candidate_observed,
+            ),
+            buffer_import_required_count: usize::from(report.buffer_import_required),
+            buffer_import_planning_descriptor_evidence_available: report
+                .renderer_backend_descriptor_evidence_available,
+            buffer_import_planning_registered_backend_kind: report
+                .registered_renderer_backend_kind,
+            buffer_import_planning_missing_buffer_importer_owner: has_blocker(
+                RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingBufferImporterOwner,
+            ),
+            buffer_import_planning_missing_descriptor_evidence: has_blocker(
+                RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingRendererBackendDescriptorEvidence,
+            ),
+            buffer_import_planning_missing_candidate: has_blocker(
+                RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingBufferImportCandidate,
+            ),
+            buffer_import_planning_missing_actual_buffer_import: has_blocker(
+                RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingActualBufferImport,
+            ),
+            buffer_import_planning_missing_texture_creation: has_blocker(
+                RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingTextureCreation,
+            ),
+            buffer_import_planning_missing_renderer_call: has_blocker(
+                RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingRendererCall,
+            ),
+            buffer_import_planning_missing_damage_submit: has_blocker(
+                RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingDamageSubmit,
+            ),
+            buffer_import_planning_missing_frame_callback_done: has_blocker(
+                RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingFrameCallbackDone,
+            ),
+            buffer_import_planning_buffer_imported: report.buffer_imported,
+            buffer_import_planning_texture_created: report.texture_created,
+            buffer_import_planning_renderer_called: report.renderer_called,
+            buffer_import_planning_damage_submitted: report.damage_submitted,
+            buffer_import_planning_frame_callback_done_sent: report.frame_callback_done_sent,
+            buffer_import_planning_input_support: report.input_support,
+            buffer_import_planning_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -2015,6 +2173,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.renderer_backend_registration_intents_observed > 0
             || self.renderer_backend_owner_shell_intents_observed > 0
             || self.buffer_import_resource_owner_intents_observed > 0
+            || self.buffer_import_planning_intents_observed > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -2485,6 +2644,53 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.buffer_import_resource_owner_input_support;
         self.buffer_import_resource_owner_core_mutation_invoked |=
             delta.buffer_import_resource_owner_core_mutation_invoked;
+        self.buffer_import_planning_invocations = self
+            .buffer_import_planning_invocations
+            .saturating_add(delta.buffer_import_planning_invocations);
+        self.buffer_import_planning_intents_observed = self
+            .buffer_import_planning_intents_observed
+            .saturating_add(delta.buffer_import_planning_intents_observed);
+        self.buffer_import_planning_observed_intents
+            .extend(delta.buffer_import_planning_observed_intents);
+        self.buffer_import_plan_available |= delta.buffer_import_plan_available;
+        self.buffer_import_plan_built |= delta.buffer_import_plan_built;
+        self.buffer_import_candidates_observed = self
+            .buffer_import_candidates_observed
+            .saturating_add(delta.buffer_import_candidates_observed);
+        self.buffer_import_required_count = self
+            .buffer_import_required_count
+            .saturating_add(delta.buffer_import_required_count);
+        self.buffer_import_planning_descriptor_evidence_available |=
+            delta.buffer_import_planning_descriptor_evidence_available;
+        self.buffer_import_planning_registered_backend_kind = self
+            .buffer_import_planning_registered_backend_kind
+            .or(delta.buffer_import_planning_registered_backend_kind);
+        self.buffer_import_planning_missing_buffer_importer_owner |=
+            delta.buffer_import_planning_missing_buffer_importer_owner;
+        self.buffer_import_planning_missing_descriptor_evidence |=
+            delta.buffer_import_planning_missing_descriptor_evidence;
+        self.buffer_import_planning_missing_candidate |=
+            delta.buffer_import_planning_missing_candidate;
+        self.buffer_import_planning_missing_actual_buffer_import |=
+            delta.buffer_import_planning_missing_actual_buffer_import;
+        self.buffer_import_planning_missing_texture_creation |=
+            delta.buffer_import_planning_missing_texture_creation;
+        self.buffer_import_planning_missing_renderer_call |=
+            delta.buffer_import_planning_missing_renderer_call;
+        self.buffer_import_planning_missing_damage_submit |=
+            delta.buffer_import_planning_missing_damage_submit;
+        self.buffer_import_planning_missing_frame_callback_done |=
+            delta.buffer_import_planning_missing_frame_callback_done;
+        self.buffer_import_planning_buffer_imported |= delta.buffer_import_planning_buffer_imported;
+        self.buffer_import_planning_texture_created |= delta.buffer_import_planning_texture_created;
+        self.buffer_import_planning_renderer_called |= delta.buffer_import_planning_renderer_called;
+        self.buffer_import_planning_damage_submitted |=
+            delta.buffer_import_planning_damage_submitted;
+        self.buffer_import_planning_frame_callback_done_sent |=
+            delta.buffer_import_planning_frame_callback_done_sent;
+        self.buffer_import_planning_input_support |= delta.buffer_import_planning_input_support;
+        self.buffer_import_planning_core_mutation_invoked |=
+            delta.buffer_import_planning_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -2702,6 +2908,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_resource_owner_readiness(
                 &report.buffer_import_resource_owner_readiness_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_planning_report(
+                &report.buffer_import_planning_report,
             ),
         );
 
@@ -5263,6 +5474,128 @@ mod tests {
             !report
                 .surface_commit
                 .buffer_import_resource_owner_core_mutation_invoked
+        );
+        assert_eq!(report.surface_commit.buffer_import_planning_invocations, 3);
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_planning_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_planning_observed_intents
+                .len(),
+            2
+        );
+        assert!(report.surface_commit.buffer_import_plan_available);
+        assert!(report.surface_commit.buffer_import_plan_built);
+        assert_eq!(report.surface_commit.buffer_import_candidates_observed, 1);
+        assert_eq!(report.surface_commit.buffer_import_required_count, 0);
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_descriptor_evidence_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_registered_backend_kind
+                .is_some()
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_missing_buffer_importer_owner
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_missing_descriptor_evidence
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_candidate
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_actual_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_frame_callback_done
+        );
+        let first_buffer_import_plan = &report
+            .surface_commit
+            .buffer_import_planning_observed_intents[0];
+        let second_buffer_import_plan = &report
+            .surface_commit
+            .buffer_import_planning_observed_intents[1];
+        assert_eq!(
+            first_buffer_import_plan.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_buffer_import_plan.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_buffer_import_plan.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_buffer_import_plan.buffer_attach_observed);
+        assert!(!first_buffer_import_plan.buffer_present);
+        assert!(first_buffer_import_plan.buffer_removed);
+        assert!(first_buffer_import_plan.damage_observed);
+        assert_eq!(
+            first_buffer_import_plan.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_buffer_import_plan.frame_callback_count, 1);
+        assert!(!second_buffer_import_plan.buffer_attach_observed);
+        assert!(!second_buffer_import_plan.buffer_present);
+        assert!(!second_buffer_import_plan.damage_observed);
+        assert_eq!(second_buffer_import_plan.damage_rect_count, 0);
+        assert_eq!(second_buffer_import_plan.frame_callback_count, 0);
+        assert!(!report.surface_commit.buffer_import_planning_buffer_imported);
+        assert!(!report.surface_commit.buffer_import_planning_texture_created);
+        assert!(!report.surface_commit.buffer_import_planning_renderer_called);
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.buffer_import_planning_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);

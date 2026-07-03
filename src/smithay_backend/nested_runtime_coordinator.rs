@@ -2566,6 +2566,192 @@ pub fn buffer_import_resource_owner_readiness_from_renderer_backend_owner_shell(
     }
 }
 
+/// Buffer import planning seam 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitBufferImportPlanningOperation {
+    /// 读取上游 buffer import resource owner readiness report。
+    ObserveBufferImportResourceOwnerReadiness,
+    /// 建立 runtime-owned buffer import plan。
+    BuildBufferImportPlan,
+    /// 观察 commit 中是否有 buffer import candidate evidence。
+    ObserveBufferImportCandidateEvidence,
+    /// 生成 buffer import planning report。
+    BuildBufferImportPlanningReport,
+}
+
+/// Buffer import planning seam 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitBufferImportPlanningBlocker {
+    /// 本轮没有 render operation intent 可观察。
+    MissingRenderOperationIntent,
+    /// 上游 buffer importer owner boundary 尚未可用或绑定。
+    MissingBufferImporterOwner,
+    /// renderer backend descriptor evidence 尚未可用。
+    MissingRendererBackendDescriptorEvidence,
+    /// 本轮 commit 没有 buffer import candidate evidence。
+    MissingBufferImportCandidate,
+    /// 真实 buffer import implementation 尚未接入。
+    MissingActualBufferImport,
+    /// texture creation 尚未接入。
+    MissingTextureCreation,
+    /// renderer call 尚未接入。
+    MissingRendererCall,
+    /// damage submit 尚未接入。
+    MissingDamageSubmit,
+    /// frame callback done 尚未接入。
+    MissingFrameCallbackDone,
+}
+
+/// Runtime-owned buffer import planning 纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitBufferImportPlanningReport {
+    /// 本轮是否执行 buffer import planning seam。
+    pub planning_invoked: bool,
+
+    /// 是否观察到上游 buffer import resource owner readiness report。
+    pub source_buffer_import_resource_owner_readiness_observed: bool,
+
+    /// 上游 buffer importer owner boundary 是否可用。
+    pub source_buffer_importer_owner_available: bool,
+
+    /// 上游 buffer importer owner boundary 是否已绑定。
+    pub source_buffer_importer_owner_bound: bool,
+
+    /// 从上游 owner boundary report 观察到的 render operation intent。
+    pub observed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>,
+
+    /// buffer import plan seam 是否可用；不代表真实 import 已执行。
+    pub buffer_import_plan_available: bool,
+
+    /// 是否已为本轮 observed intent 建立 pure-data plan。
+    pub buffer_import_plan_built: bool,
+
+    /// 是否观察到 buffer attach/presence candidate evidence。
+    pub buffer_import_candidate_observed: bool,
+
+    /// 是否计划未来真实 buffer import；当前仍不会执行 import。
+    pub buffer_import_required: bool,
+
+    /// renderer backend descriptor evidence 是否可用。
+    pub renderer_backend_descriptor_evidence_available: bool,
+
+    /// 已注册 renderer backend descriptor 的种类。
+    pub registered_renderer_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// 是否 import buffer；Phase 55F 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 是否创建 texture；Phase 55F 固定为 false。
+    pub texture_created: bool,
+
+    /// 是否调用 renderer；Phase 55F 固定为 false。
+    pub renderer_called: bool,
+
+    /// 是否提交 damage；Phase 55F 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 是否发送 frame callback done；Phase 55F 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 是否接入 input；Phase 55F 固定为 false。
+    pub input_support: bool,
+
+    /// 是否触发 core mutation；Phase 55F 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitBufferImportPlanningOperation>,
+
+    /// 阻止进入真实 buffer import / render resource path 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitBufferImportPlanningBlocker>,
+}
+
+/// Runtime-owned buffer import planner；只生成 planning report，不 import buffer。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitBufferImportPlanner;
+
+impl RuntimeSurfaceCommitBufferImportPlanner {
+    /// 创建 runtime-owned buffer import planner。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 从 buffer importer owner boundary 派生 planning report；不 import buffer。
+    pub fn buffer_import_planning_report_from_resource_owner_boundary(
+        &mut self,
+        report: &RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport,
+    ) -> RuntimeSurfaceCommitBufferImportPlanningReport {
+        buffer_import_planning_report_from_resource_owner_boundary(report)
+    }
+}
+
+/// 从 buffer importer owner boundary 派生 planning report；不 import buffer。
+pub fn buffer_import_planning_report_from_resource_owner_boundary(
+    report: &RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport,
+) -> RuntimeSurfaceCommitBufferImportPlanningReport {
+    let observed_intent = report.observed_intent.clone();
+    let buffer_import_candidate_observed = observed_intent
+        .as_ref()
+        .is_some_and(|intent| intent.buffer_attach_observed || intent.buffer_present);
+    let buffer_import_required = observed_intent.as_ref().is_some_and(|intent| {
+        (intent.buffer_attach_observed || intent.buffer_present) && !intent.buffer_removed
+    });
+    let buffer_import_plan_built = observed_intent.is_some();
+    let mut blockers = Vec::new();
+    if observed_intent.is_none() {
+        blockers
+            .push(RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingRenderOperationIntent);
+    }
+    if !report.buffer_importer_owner_available || !report.buffer_importer_owner_bound {
+        blockers.push(RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingBufferImporterOwner);
+    }
+    if !report.renderer_backend_descriptor_evidence_available {
+        blockers.push(
+            RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingRendererBackendDescriptorEvidence,
+        );
+    }
+    if !buffer_import_candidate_observed {
+        blockers
+            .push(RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingBufferImportCandidate);
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingActualBufferImport,
+        RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingTextureCreation,
+        RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingRendererCall,
+        RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingDamageSubmit,
+        RuntimeSurfaceCommitBufferImportPlanningBlocker::MissingFrameCallbackDone,
+    ]);
+
+    RuntimeSurfaceCommitBufferImportPlanningReport {
+        planning_invoked: true,
+        source_buffer_import_resource_owner_readiness_observed: report.readiness_invoked,
+        source_buffer_importer_owner_available: report.buffer_importer_owner_available,
+        source_buffer_importer_owner_bound: report.buffer_importer_owner_bound,
+        observed_intent,
+        buffer_import_plan_available: true,
+        buffer_import_plan_built,
+        buffer_import_candidate_observed,
+        buffer_import_required,
+        renderer_backend_descriptor_evidence_available: report
+            .renderer_backend_descriptor_evidence_available,
+        registered_renderer_backend_kind: report.registered_renderer_backend_kind,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitBufferImportPlanningOperation::ObserveBufferImportResourceOwnerReadiness,
+            RuntimeSurfaceCommitBufferImportPlanningOperation::BuildBufferImportPlan,
+            RuntimeSurfaceCommitBufferImportPlanningOperation::ObserveBufferImportCandidateEvidence,
+            RuntimeSurfaceCommitBufferImportPlanningOperation::BuildBufferImportPlanningReport,
+        ],
+        blockers,
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -2841,6 +3027,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// buffer importer resource owner boundary readiness report。
     pub buffer_import_resource_owner_readiness_report:
         RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport,
+
+    /// buffer import planning report。
+    pub buffer_import_planning_report: RuntimeSurfaceCommitBufferImportPlanningReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -2865,6 +3054,7 @@ pub struct NestedRuntimeCoordinator {
     renderer_backend_registration_owner: RuntimeSurfaceCommitRendererBackendRegistrationOwner,
     renderer_backend_owner_shell: RuntimeSurfaceCommitRendererBackendOwnerShell,
     buffer_import_resource_owner_boundary: RuntimeSurfaceCommitBufferImportResourceOwnerBoundary,
+    buffer_import_planner: RuntimeSurfaceCommitBufferImportPlanner,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -2908,6 +3098,7 @@ impl NestedRuntimeCoordinator {
             renderer_backend_owner_shell: RuntimeSurfaceCommitRendererBackendOwnerShell::new(),
             buffer_import_resource_owner_boundary:
                 RuntimeSurfaceCommitBufferImportResourceOwnerBoundary::new(),
+            buffer_import_planner: RuntimeSurfaceCommitBufferImportPlanner::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -3146,6 +3337,11 @@ impl NestedRuntimeCoordinator {
             .buffer_import_resource_owner_readiness_from_renderer_backend_owner_shell(
                 &renderer_backend_owner_shell_readiness_report,
             );
+        let buffer_import_planning_report = self
+            .buffer_import_planner
+            .buffer_import_planning_report_from_resource_owner_boundary(
+                &buffer_import_resource_owner_readiness_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -3168,6 +3364,7 @@ impl NestedRuntimeCoordinator {
             renderer_backend_registration_report,
             renderer_backend_owner_shell_readiness_report,
             buffer_import_resource_owner_readiness_report,
+            buffer_import_planning_report,
         }
     }
 

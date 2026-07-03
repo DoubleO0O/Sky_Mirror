@@ -2486,6 +2486,128 @@ mod tests {
                 .surface_commit
                 .buffer_import_resource_owner_core_mutation_invoked
         );
+        assert_eq!(report.surface_commit.buffer_import_planning_invocations, 3);
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_planning_intents_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_planning_observed_intents
+                .len(),
+            2
+        );
+        assert!(report.surface_commit.buffer_import_plan_available);
+        assert!(report.surface_commit.buffer_import_plan_built);
+        assert_eq!(report.surface_commit.buffer_import_candidates_observed, 1);
+        assert_eq!(report.surface_commit.buffer_import_required_count, 0);
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_descriptor_evidence_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_registered_backend_kind
+                .is_some()
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_missing_buffer_importer_owner
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_missing_descriptor_evidence
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_candidate
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_actual_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_planning_missing_frame_callback_done
+        );
+        let first_buffer_import_plan = &report
+            .surface_commit
+            .buffer_import_planning_observed_intents[0];
+        let second_buffer_import_plan = &report
+            .surface_commit
+            .buffer_import_planning_observed_intents[1];
+        assert_eq!(
+            first_buffer_import_plan.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_buffer_import_plan.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_buffer_import_plan.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_buffer_import_plan.buffer_attach_observed);
+        assert!(!first_buffer_import_plan.buffer_present);
+        assert!(first_buffer_import_plan.buffer_removed);
+        assert!(first_buffer_import_plan.damage_observed);
+        assert_eq!(
+            first_buffer_import_plan.damage_rect_count,
+            first_commit
+                .surface_damage_rects
+                .saturating_add(first_commit.buffer_damage_rects)
+        );
+        assert_eq!(first_buffer_import_plan.frame_callback_count, 1);
+        assert!(!second_buffer_import_plan.buffer_attach_observed);
+        assert!(!second_buffer_import_plan.buffer_present);
+        assert!(!second_buffer_import_plan.damage_observed);
+        assert_eq!(second_buffer_import_plan.damage_rect_count, 0);
+        assert_eq!(second_buffer_import_plan.frame_callback_count, 0);
+        assert!(!report.surface_commit.buffer_import_planning_buffer_imported);
+        assert!(!report.surface_commit.buffer_import_planning_texture_created);
+        assert!(!report.surface_commit.buffer_import_planning_renderer_called);
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.buffer_import_planning_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_planning_core_mutation_invoked
+        );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);
