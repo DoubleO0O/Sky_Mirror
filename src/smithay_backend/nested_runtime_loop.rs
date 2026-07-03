@@ -27,6 +27,8 @@ use crate::{
         RuntimeSurfaceCommitBufferImportImplementationDescriptor,
         RuntimeSurfaceCommitBufferImportPlanningBlocker,
         RuntimeSurfaceCommitBufferImportPlanningReport,
+        RuntimeSurfaceCommitBufferImportPreconditionGateBlocker,
+        RuntimeSurfaceCommitBufferImportPreconditionGateReport,
         RuntimeSurfaceCommitBufferImportResourceOwnerBlocker,
         RuntimeSurfaceCommitBufferImportResourceOwnerReadinessReport,
         RuntimeSurfaceCommitBufferImporterShellBlocker,
@@ -1427,6 +1429,98 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// adapter proof boundary 是否触发 core mutation；Phase 55H 固定保持 false。
     pub buffer_import_adapter_core_mutation_invoked: bool,
 
+    /// buffer import precondition gate seam 被调用的次数。
+    pub buffer_import_precondition_gate_invocations: usize,
+
+    /// precondition gate 观察到 adapter proof 的数量。
+    pub buffer_import_precondition_adapter_proofs_observed: usize,
+
+    /// 按 FIFO 顺序保存的 precondition gate observed adapter proofs。
+    pub buffer_import_precondition_observed_adapter_proofs:
+        Vec<RuntimeSurfaceCommitBufferImportAdapterProof>,
+
+    /// buffer import precondition gate 是否可用。
+    pub buffer_import_precondition_gate_available: bool,
+
+    /// 已满足未来真实 import 最小前置条件的数量。
+    pub buffer_import_preconditions_met_count: usize,
+
+    /// 已满足未来 import 调度前置条件的数量。
+    pub buffer_import_future_preconditions_met_count: usize,
+
+    /// precondition gate 观察到 candidate evidence 的数量。
+    pub buffer_import_precondition_candidates_observed: usize,
+
+    /// precondition gate 观察到 actual import required 的数量。
+    pub buffer_import_precondition_actual_required_count: usize,
+
+    /// precondition gate 是否观察到 importer owner evidence。
+    pub buffer_import_precondition_importer_owner_evidence_available: bool,
+
+    /// precondition gate 是否观察到 renderer backend descriptor evidence。
+    pub buffer_import_precondition_renderer_descriptor_evidence_available: bool,
+
+    /// precondition gate 观察到的 renderer backend kind。
+    pub buffer_import_precondition_registered_backend_kind:
+        Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// precondition gate 是否缺少 adapter proof。
+    pub buffer_import_precondition_missing_adapter_proof: bool,
+
+    /// precondition gate 是否缺少 registered adapter proof。
+    pub buffer_import_precondition_missing_registered_adapter_proof: bool,
+
+    /// precondition gate 是否缺少 importer owner evidence。
+    pub buffer_import_precondition_missing_importer_owner_evidence: bool,
+
+    /// precondition gate 是否缺少 renderer backend descriptor evidence。
+    pub buffer_import_precondition_missing_renderer_descriptor_evidence: bool,
+
+    /// precondition gate 是否缺少 candidate evidence。
+    pub buffer_import_precondition_missing_candidate: bool,
+
+    /// precondition gate 是否缺少 actual import requirement。
+    pub buffer_import_precondition_missing_actual_import_requirement: bool,
+
+    /// precondition gate 是否仍缺少真实 buffer import。
+    pub buffer_import_precondition_missing_actual_buffer_import: bool,
+
+    /// precondition gate 是否仍缺少 texture creation。
+    pub buffer_import_precondition_missing_texture_creation: bool,
+
+    /// precondition gate 是否仍缺少 renderer call。
+    pub buffer_import_precondition_missing_renderer_call: bool,
+
+    /// precondition gate 是否仍缺少 damage submit。
+    pub buffer_import_precondition_missing_damage_submit: bool,
+
+    /// precondition gate 是否仍缺少 frame callback done。
+    pub buffer_import_precondition_missing_frame_callback_done: bool,
+
+    /// precondition gate 是否尝试 import buffer；Phase 55I 固定保持 false。
+    pub buffer_import_precondition_buffer_import_attempted: bool,
+
+    /// precondition gate 是否 import buffer；Phase 55I 固定保持 false。
+    pub buffer_import_precondition_buffer_imported: bool,
+
+    /// precondition gate 是否创建 texture；Phase 55I 固定保持 false。
+    pub buffer_import_precondition_texture_created: bool,
+
+    /// precondition gate 是否调用 renderer；Phase 55I 固定保持 false。
+    pub buffer_import_precondition_renderer_called: bool,
+
+    /// precondition gate 是否提交 damage；Phase 55I 固定保持 false。
+    pub buffer_import_precondition_damage_submitted: bool,
+
+    /// precondition gate 是否发送 frame callback done；Phase 55I 固定保持 false。
+    pub buffer_import_precondition_frame_callback_done_sent: bool,
+
+    /// precondition gate 是否接入 input；Phase 55I 固定保持 false。
+    pub buffer_import_precondition_input_support: bool,
+
+    /// precondition gate 是否触发 core mutation；Phase 55I 固定保持 false。
+    pub buffer_import_precondition_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -1770,6 +1864,36 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             buffer_import_adapter_frame_callback_done_sent: false,
             buffer_import_adapter_input_support: false,
             buffer_import_adapter_core_mutation_invoked: false,
+            buffer_import_precondition_gate_invocations: 0,
+            buffer_import_precondition_adapter_proofs_observed: 0,
+            buffer_import_precondition_observed_adapter_proofs: Vec::new(),
+            buffer_import_precondition_gate_available: false,
+            buffer_import_preconditions_met_count: 0,
+            buffer_import_future_preconditions_met_count: 0,
+            buffer_import_precondition_candidates_observed: 0,
+            buffer_import_precondition_actual_required_count: 0,
+            buffer_import_precondition_importer_owner_evidence_available: false,
+            buffer_import_precondition_renderer_descriptor_evidence_available: false,
+            buffer_import_precondition_registered_backend_kind: None,
+            buffer_import_precondition_missing_adapter_proof: false,
+            buffer_import_precondition_missing_registered_adapter_proof: false,
+            buffer_import_precondition_missing_importer_owner_evidence: false,
+            buffer_import_precondition_missing_renderer_descriptor_evidence: false,
+            buffer_import_precondition_missing_candidate: false,
+            buffer_import_precondition_missing_actual_import_requirement: false,
+            buffer_import_precondition_missing_actual_buffer_import: false,
+            buffer_import_precondition_missing_texture_creation: false,
+            buffer_import_precondition_missing_renderer_call: false,
+            buffer_import_precondition_missing_damage_submit: false,
+            buffer_import_precondition_missing_frame_callback_done: false,
+            buffer_import_precondition_buffer_import_attempted: false,
+            buffer_import_precondition_buffer_imported: false,
+            buffer_import_precondition_texture_created: false,
+            buffer_import_precondition_renderer_called: false,
+            buffer_import_precondition_damage_submitted: false,
+            buffer_import_precondition_frame_callback_done_sent: false,
+            buffer_import_precondition_input_support: false,
+            buffer_import_precondition_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -2520,6 +2644,82 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_buffer_import_precondition_gate_report(
+        report: &RuntimeSurfaceCommitBufferImportPreconditionGateReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            buffer_import_precondition_gate_invocations: usize::from(report.gate_invoked),
+            buffer_import_precondition_adapter_proofs_observed: usize::from(
+                report.observed_adapter_proof.is_some(),
+            ),
+            buffer_import_precondition_observed_adapter_proofs: report
+                .observed_adapter_proof
+                .clone()
+                .into_iter()
+                .collect(),
+            buffer_import_precondition_gate_available: report.import_precondition_gate_available,
+            buffer_import_preconditions_met_count: usize::from(report.import_preconditions_met),
+            buffer_import_future_preconditions_met_count: usize::from(
+                report.future_import_preconditions_met,
+            ),
+            buffer_import_precondition_candidates_observed: usize::from(
+                report.candidate_evidence_observed,
+            ),
+            buffer_import_precondition_actual_required_count: usize::from(
+                report.actual_import_required,
+            ),
+            buffer_import_precondition_importer_owner_evidence_available: report
+                .importer_owner_evidence_available,
+            buffer_import_precondition_renderer_descriptor_evidence_available: report
+                .renderer_backend_descriptor_evidence_available,
+            buffer_import_precondition_registered_backend_kind: report
+                .registered_renderer_backend_kind,
+            buffer_import_precondition_missing_adapter_proof: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingAdapterProof,
+            ),
+            buffer_import_precondition_missing_registered_adapter_proof: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingRegisteredAdapterProof,
+            ),
+            buffer_import_precondition_missing_importer_owner_evidence: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingImporterOwnerEvidence,
+            ),
+            buffer_import_precondition_missing_renderer_descriptor_evidence: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingRendererBackendDescriptorEvidence,
+            ),
+            buffer_import_precondition_missing_candidate: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingBufferImportCandidate,
+            ),
+            buffer_import_precondition_missing_actual_import_requirement: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingActualImportRequirement,
+            ),
+            buffer_import_precondition_missing_actual_buffer_import: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingActualBufferImport,
+            ),
+            buffer_import_precondition_missing_texture_creation: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingTextureCreation,
+            ),
+            buffer_import_precondition_missing_renderer_call: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingRendererCall,
+            ),
+            buffer_import_precondition_missing_damage_submit: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingDamageSubmit,
+            ),
+            buffer_import_precondition_missing_frame_callback_done: has_blocker(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingFrameCallbackDone,
+            ),
+            buffer_import_precondition_buffer_import_attempted: report.buffer_import_attempted,
+            buffer_import_precondition_buffer_imported: report.buffer_imported,
+            buffer_import_precondition_texture_created: report.texture_created,
+            buffer_import_precondition_renderer_called: report.renderer_called,
+            buffer_import_precondition_damage_submitted: report.damage_submitted,
+            buffer_import_precondition_frame_callback_done_sent: report.frame_callback_done_sent,
+            buffer_import_precondition_input_support: report.input_support,
+            buffer_import_precondition_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -2542,6 +2742,8 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.buffer_import_planning_intents_observed > 0
             || self.buffer_import_implementation_descriptors_observed > 0
             || self.buffer_import_adapter_proofs_observed > 0
+            || self.buffer_import_precondition_adapter_proofs_observed > 0
+            || self.buffer_import_preconditions_met_count > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -3173,6 +3375,73 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.buffer_import_adapter_input_support |= delta.buffer_import_adapter_input_support;
         self.buffer_import_adapter_core_mutation_invoked |=
             delta.buffer_import_adapter_core_mutation_invoked;
+        self.buffer_import_precondition_gate_invocations = self
+            .buffer_import_precondition_gate_invocations
+            .saturating_add(delta.buffer_import_precondition_gate_invocations);
+        self.buffer_import_precondition_adapter_proofs_observed = self
+            .buffer_import_precondition_adapter_proofs_observed
+            .saturating_add(delta.buffer_import_precondition_adapter_proofs_observed);
+        self.buffer_import_precondition_observed_adapter_proofs
+            .extend(delta.buffer_import_precondition_observed_adapter_proofs);
+        self.buffer_import_precondition_gate_available |=
+            delta.buffer_import_precondition_gate_available;
+        self.buffer_import_preconditions_met_count = self
+            .buffer_import_preconditions_met_count
+            .saturating_add(delta.buffer_import_preconditions_met_count);
+        self.buffer_import_future_preconditions_met_count = self
+            .buffer_import_future_preconditions_met_count
+            .saturating_add(delta.buffer_import_future_preconditions_met_count);
+        self.buffer_import_precondition_candidates_observed = self
+            .buffer_import_precondition_candidates_observed
+            .saturating_add(delta.buffer_import_precondition_candidates_observed);
+        self.buffer_import_precondition_actual_required_count = self
+            .buffer_import_precondition_actual_required_count
+            .saturating_add(delta.buffer_import_precondition_actual_required_count);
+        self.buffer_import_precondition_importer_owner_evidence_available |=
+            delta.buffer_import_precondition_importer_owner_evidence_available;
+        self.buffer_import_precondition_renderer_descriptor_evidence_available |=
+            delta.buffer_import_precondition_renderer_descriptor_evidence_available;
+        self.buffer_import_precondition_registered_backend_kind = self
+            .buffer_import_precondition_registered_backend_kind
+            .or(delta.buffer_import_precondition_registered_backend_kind);
+        self.buffer_import_precondition_missing_adapter_proof |=
+            delta.buffer_import_precondition_missing_adapter_proof;
+        self.buffer_import_precondition_missing_registered_adapter_proof |=
+            delta.buffer_import_precondition_missing_registered_adapter_proof;
+        self.buffer_import_precondition_missing_importer_owner_evidence |=
+            delta.buffer_import_precondition_missing_importer_owner_evidence;
+        self.buffer_import_precondition_missing_renderer_descriptor_evidence |=
+            delta.buffer_import_precondition_missing_renderer_descriptor_evidence;
+        self.buffer_import_precondition_missing_candidate |=
+            delta.buffer_import_precondition_missing_candidate;
+        self.buffer_import_precondition_missing_actual_import_requirement |=
+            delta.buffer_import_precondition_missing_actual_import_requirement;
+        self.buffer_import_precondition_missing_actual_buffer_import |=
+            delta.buffer_import_precondition_missing_actual_buffer_import;
+        self.buffer_import_precondition_missing_texture_creation |=
+            delta.buffer_import_precondition_missing_texture_creation;
+        self.buffer_import_precondition_missing_renderer_call |=
+            delta.buffer_import_precondition_missing_renderer_call;
+        self.buffer_import_precondition_missing_damage_submit |=
+            delta.buffer_import_precondition_missing_damage_submit;
+        self.buffer_import_precondition_missing_frame_callback_done |=
+            delta.buffer_import_precondition_missing_frame_callback_done;
+        self.buffer_import_precondition_buffer_import_attempted |=
+            delta.buffer_import_precondition_buffer_import_attempted;
+        self.buffer_import_precondition_buffer_imported |=
+            delta.buffer_import_precondition_buffer_imported;
+        self.buffer_import_precondition_texture_created |=
+            delta.buffer_import_precondition_texture_created;
+        self.buffer_import_precondition_renderer_called |=
+            delta.buffer_import_precondition_renderer_called;
+        self.buffer_import_precondition_damage_submitted |=
+            delta.buffer_import_precondition_damage_submitted;
+        self.buffer_import_precondition_frame_callback_done_sent |=
+            delta.buffer_import_precondition_frame_callback_done_sent;
+        self.buffer_import_precondition_input_support |=
+            delta.buffer_import_precondition_input_support;
+        self.buffer_import_precondition_core_mutation_invoked |=
+            delta.buffer_import_precondition_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -3405,6 +3674,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_adapter_proof_boundary_report(
                 &report.buffer_import_adapter_proof_boundary_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_precondition_gate_report(
+                &report.buffer_import_precondition_gate_report,
             ),
         );
 
@@ -6410,6 +6684,165 @@ mod tests {
             !report
                 .surface_commit
                 .buffer_import_adapter_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_precondition_gate_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_precondition_adapter_proofs_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_precondition_observed_adapter_proofs
+                .len(),
+            2
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_gate_available
+        );
+        assert_eq!(
+            report.surface_commit.buffer_import_preconditions_met_count,
+            0
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_future_preconditions_met_count,
+            0
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_precondition_candidates_observed,
+            1
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_precondition_actual_required_count,
+            0
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_importer_owner_evidence_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_renderer_descriptor_evidence_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_registered_backend_kind
+                .is_some()
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_adapter_proof
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_registered_adapter_proof
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_candidate
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_actual_import_requirement
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_actual_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_precondition_missing_frame_callback_done
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_precondition_observed_adapter_proofs[0],
+            *first_buffer_import_adapter_proof
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_precondition_observed_adapter_proofs[1],
+            *second_buffer_import_adapter_proof
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_precondition_buffer_import_attempted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_precondition_buffer_imported
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_precondition_texture_created
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_precondition_renderer_called
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_precondition_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_precondition_frame_callback_done_sent
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_precondition_input_support
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_precondition_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);

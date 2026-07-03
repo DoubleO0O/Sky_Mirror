@@ -3315,6 +3315,248 @@ pub fn buffer_import_adapter_proof_boundary_report_from_implementation_report(
     }
 }
 
+/// Buffer import precondition gate 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitBufferImportPreconditionGateOperation {
+    /// 读取上游 buffer import adapter proof report。
+    ObserveAdapterProofBoundaryReport,
+    /// 检查 adapter proof 是否包含 present/non-removed buffer evidence。
+    CheckPresentBufferEvidence,
+    /// 检查 importer owner evidence。
+    CheckImporterOwnerEvidence,
+    /// 检查 renderer backend descriptor evidence。
+    CheckRendererBackendDescriptorEvidence,
+    /// 检查 future actual import requirement。
+    CheckActualImportRequirement,
+    /// 生成 precondition gate report。
+    BuildPreconditionGateReport,
+}
+
+/// Buffer import precondition gate 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitBufferImportPreconditionGateBlocker {
+    /// 上游 adapter proof report 没有 proof。
+    MissingAdapterProof,
+    /// 上游 adapter proof 未注册。
+    MissingRegisteredAdapterProof,
+    /// 上游 proof 缺少 importer owner evidence。
+    MissingImporterOwnerEvidence,
+    /// 上游 proof 缺少 renderer backend descriptor evidence。
+    MissingRendererBackendDescriptorEvidence,
+    /// 本轮 commit 没有 buffer import candidate evidence。
+    MissingBufferImportCandidate,
+    /// 本轮 commit 不需要未来真实 buffer import。
+    MissingActualImportRequirement,
+    /// 真实 buffer import 尚未执行。
+    MissingActualBufferImport,
+    /// texture creation 尚未接入。
+    MissingTextureCreation,
+    /// renderer call 尚未接入。
+    MissingRendererCall,
+    /// damage submit 尚未接入。
+    MissingDamageSubmit,
+    /// frame callback done 尚未接入。
+    MissingFrameCallbackDone,
+}
+
+/// Runtime-owned buffer import precondition gate 纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitBufferImportPreconditionGateReport {
+    /// 本轮是否执行 precondition gate seam。
+    pub gate_invoked: bool,
+
+    /// 是否观察到 Phase 55H adapter proof boundary report。
+    pub source_buffer_import_adapter_proof_report_observed: bool,
+
+    /// 上游 adapter proof 是否已注册。
+    pub adapter_proof_registered: bool,
+
+    /// 上游 adapter proof；只保存 pure data。
+    pub observed_adapter_proof: Option<RuntimeSurfaceCommitBufferImportAdapterProof>,
+
+    /// precondition gate 是否可用；不代表真实 import 已执行。
+    pub import_precondition_gate_available: bool,
+
+    /// 当前 proof 是否满足未来真实 importer 的最小前置条件。
+    pub import_preconditions_met: bool,
+
+    /// 与 `import_preconditions_met` 同义，用于报告“未来 import 可被调度”的意图。
+    pub future_import_preconditions_met: bool,
+
+    /// commit 是否携带 buffer attach/remove evidence。
+    pub buffer_attach_observed: bool,
+
+    /// commit 是否携带 present buffer evidence。
+    pub buffer_present: bool,
+
+    /// commit 是否携带 null attach / removal evidence。
+    pub buffer_removed: bool,
+
+    /// 是否观察到 candidate evidence；candidate evidence 不等于 actual import execution。
+    pub candidate_evidence_observed: bool,
+
+    /// 是否计划未来真实 import；本阶段仍不执行 import。
+    pub actual_import_required: bool,
+
+    /// importer owner evidence 是否可用。
+    pub importer_owner_evidence_available: bool,
+
+    /// renderer backend descriptor evidence 是否可用。
+    pub renderer_backend_descriptor_evidence_available: bool,
+
+    /// 已注册 renderer backend descriptor 的种类。
+    pub registered_renderer_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// 本阶段是否尝试 import buffer；Phase 55I 固定为 false。
+    pub buffer_import_attempted: bool,
+
+    /// 本阶段是否完成 buffer import；Phase 55I 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 本阶段是否创建 texture；Phase 55I 固定为 false。
+    pub texture_created: bool,
+
+    /// 本阶段是否调用 renderer；Phase 55I 固定为 false。
+    pub renderer_called: bool,
+
+    /// 本阶段是否提交 damage；Phase 55I 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 本阶段是否发送 frame callback done；Phase 55I 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 本阶段是否接入 input；Phase 55I 固定为 false。
+    pub input_support: bool,
+
+    /// 本阶段是否触发 core mutation；Phase 55I 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitBufferImportPreconditionGateOperation>,
+
+    /// 阻止进入真实 buffer import / render resource path 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitBufferImportPreconditionGateBlocker>,
+}
+
+/// Runtime-owned buffer import precondition gate；只判断未来 import 前置条件。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitBufferImportPreconditionGate;
+
+impl RuntimeSurfaceCommitBufferImportPreconditionGate {
+    /// 创建 runtime-owned buffer import precondition gate。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 从 Phase 55H adapter proof report 派生 precondition gate report；不 import buffer。
+    pub fn buffer_import_precondition_gate_report_from_adapter_proof(
+        &mut self,
+        report: &RuntimeSurfaceCommitBufferImportAdapterProofBoundaryReport,
+    ) -> RuntimeSurfaceCommitBufferImportPreconditionGateReport {
+        buffer_import_precondition_gate_report_from_adapter_proof(report)
+    }
+}
+
+/// 从 Phase 55H adapter proof report 派生 precondition gate report；不 import buffer。
+pub fn buffer_import_precondition_gate_report_from_adapter_proof(
+    report: &RuntimeSurfaceCommitBufferImportAdapterProofBoundaryReport,
+) -> RuntimeSurfaceCommitBufferImportPreconditionGateReport {
+    let observed_adapter_proof = report.adapter_proof.clone();
+    let proof = observed_adapter_proof.as_ref();
+    let buffer_attach_observed = proof.is_some_and(|proof| proof.buffer_attach_observed);
+    let buffer_present = proof.is_some_and(|proof| proof.buffer_present);
+    let buffer_removed = proof.is_some_and(|proof| proof.buffer_removed);
+    let candidate_evidence_observed = proof.is_some_and(|proof| proof.candidate_evidence_observed);
+    let actual_import_required = proof.is_some_and(|proof| proof.actual_import_required);
+    let importer_owner_evidence_available =
+        proof.is_some_and(|proof| proof.importer_owner_evidence_available);
+    let renderer_backend_descriptor_evidence_available =
+        proof.is_some_and(|proof| proof.renderer_backend_descriptor_evidence_available);
+    let registered_renderer_backend_kind =
+        proof.and_then(|proof| proof.registered_renderer_backend_kind);
+    let import_preconditions_met = report.adapter_proof_registered
+        && candidate_evidence_observed
+        && actual_import_required
+        && buffer_present
+        && !buffer_removed
+        && importer_owner_evidence_available
+        && renderer_backend_descriptor_evidence_available;
+    let future_import_preconditions_met = import_preconditions_met;
+    let mut blockers = Vec::new();
+    if observed_adapter_proof.is_none() {
+        blockers.push(RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingAdapterProof);
+    }
+    if !report.adapter_proof_registered {
+        blockers.push(
+            RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingRegisteredAdapterProof,
+        );
+    }
+    if proof.is_some() {
+        if !importer_owner_evidence_available {
+            blockers.push(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingImporterOwnerEvidence,
+            );
+        }
+        if !renderer_backend_descriptor_evidence_available {
+            blockers.push(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingRendererBackendDescriptorEvidence,
+            );
+        }
+        if !candidate_evidence_observed {
+            blockers.push(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingBufferImportCandidate,
+            );
+        }
+        if !actual_import_required || !buffer_present || buffer_removed {
+            blockers.push(
+                RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingActualImportRequirement,
+            );
+        }
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingActualBufferImport,
+        RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingTextureCreation,
+        RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingRendererCall,
+        RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingDamageSubmit,
+        RuntimeSurfaceCommitBufferImportPreconditionGateBlocker::MissingFrameCallbackDone,
+    ]);
+
+    RuntimeSurfaceCommitBufferImportPreconditionGateReport {
+        gate_invoked: true,
+        source_buffer_import_adapter_proof_report_observed: report.boundary_invoked,
+        adapter_proof_registered: report.adapter_proof_registered,
+        observed_adapter_proof,
+        import_precondition_gate_available: true,
+        import_preconditions_met,
+        future_import_preconditions_met,
+        buffer_attach_observed,
+        buffer_present,
+        buffer_removed,
+        candidate_evidence_observed,
+        actual_import_required,
+        importer_owner_evidence_available,
+        renderer_backend_descriptor_evidence_available,
+        registered_renderer_backend_kind,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitBufferImportPreconditionGateOperation::ObserveAdapterProofBoundaryReport,
+            RuntimeSurfaceCommitBufferImportPreconditionGateOperation::CheckPresentBufferEvidence,
+            RuntimeSurfaceCommitBufferImportPreconditionGateOperation::CheckImporterOwnerEvidence,
+            RuntimeSurfaceCommitBufferImportPreconditionGateOperation::CheckRendererBackendDescriptorEvidence,
+            RuntimeSurfaceCommitBufferImportPreconditionGateOperation::CheckActualImportRequirement,
+            RuntimeSurfaceCommitBufferImportPreconditionGateOperation::BuildPreconditionGateReport,
+        ],
+        blockers,
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -3601,6 +3843,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// buffer import adapter proof boundary report。
     pub buffer_import_adapter_proof_boundary_report:
         RuntimeSurfaceCommitBufferImportAdapterProofBoundaryReport,
+
+    /// buffer import precondition gate report。
+    pub buffer_import_precondition_gate_report:
+        RuntimeSurfaceCommitBufferImportPreconditionGateReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -3628,6 +3874,7 @@ pub struct NestedRuntimeCoordinator {
     buffer_import_planner: RuntimeSurfaceCommitBufferImportPlanner,
     buffer_import_implementation_boundary: RuntimeSurfaceCommitBufferImportImplementationBoundary,
     buffer_import_adapter_proof_boundary: RuntimeSurfaceCommitBufferImportAdapterProofBoundary,
+    buffer_import_precondition_gate: RuntimeSurfaceCommitBufferImportPreconditionGate,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -3676,6 +3923,8 @@ impl NestedRuntimeCoordinator {
                 RuntimeSurfaceCommitBufferImportImplementationBoundary::new(),
             buffer_import_adapter_proof_boundary:
                 RuntimeSurfaceCommitBufferImportAdapterProofBoundary::new(),
+            buffer_import_precondition_gate: RuntimeSurfaceCommitBufferImportPreconditionGate::new(
+            ),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -3929,6 +4178,11 @@ impl NestedRuntimeCoordinator {
             .buffer_import_adapter_proof_boundary_report_from_implementation_report(
                 &buffer_import_implementation_boundary_report,
             );
+        let buffer_import_precondition_gate_report = self
+            .buffer_import_precondition_gate
+            .buffer_import_precondition_gate_report_from_adapter_proof(
+                &buffer_import_adapter_proof_boundary_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -3954,6 +4208,7 @@ impl NestedRuntimeCoordinator {
             buffer_import_planning_report,
             buffer_import_implementation_boundary_report,
             buffer_import_adapter_proof_boundary_report,
+            buffer_import_precondition_gate_report,
         }
     }
 
