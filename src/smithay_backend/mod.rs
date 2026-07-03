@@ -5178,6 +5178,138 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55F 必须建立 buffer import planning/report seam。
+    #[test]
+    fn buffer_import_planning_report_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55F coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55F loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55F orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55F_BUFFER_IMPORT_PLANNING_REPORT.md"),
+        )
+        .expect("Phase 55F 文档必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitBufferImportPlanner",
+            "buffer_import_planner: RuntimeSurfaceCommitBufferImportPlanner",
+            "pub struct RuntimeSurfaceCommitBufferImportPlanningReport",
+            "pub enum RuntimeSurfaceCommitBufferImportPlanningOperation",
+            "pub enum RuntimeSurfaceCommitBufferImportPlanningBlocker",
+            "pub fn buffer_import_planning_report_from_resource_owner_boundary",
+            "pub source_buffer_import_resource_owner_readiness_observed: bool",
+            "pub source_buffer_importer_owner_available: bool",
+            "pub observed_intent: Option<RuntimeSurfaceCommitRenderOperationIntent>",
+            "pub buffer_import_plan_available: bool",
+            "pub buffer_import_plan_built: bool",
+            "pub buffer_import_candidate_observed: bool",
+            "pub buffer_import_required: bool",
+            "pub renderer_backend_descriptor_evidence_available: bool",
+            "buffer_import_plan_available: true",
+            "let buffer_import_plan_built = observed_intent.is_some();",
+            "buffer_import_plan_built,",
+            "buffer_import_candidate_observed",
+            "buffer_import_required",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55F coordinator buffer import planning 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitBufferImportPlanningReport",
+            "pub buffer_import_planning_invocations: usize",
+            "pub buffer_import_planning_intents_observed: usize",
+            "pub buffer_import_planning_observed_intents:",
+            "pub buffer_import_plan_available: bool",
+            "pub buffer_import_plan_built: bool",
+            "pub buffer_import_candidates_observed: usize",
+            "pub buffer_import_required_count: usize",
+            "NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_planning_report",
+            "report.buffer_import_planning_report",
+            "first_buffer_import_plan.commit_sequence",
+            "second_buffer_import_plan.commit_sequence",
+            "buffer_import_planning_buffer_imported",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55F loop buffer import planning report 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_planning_intents_observed",
+            "buffer_import_plan_available",
+            "buffer_import_plan_built",
+            "buffer_import_candidates_observed",
+            "buffer_import_required_count",
+            "first_buffer_import_plan.commit_sequence",
+            "second_buffer_import_plan.commit_sequence",
+            "buffer_import_planning_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55F orchestrator buffer import planning report 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55F buffer import planning 包含禁止 token: {forbidden}"
+            );
+        }
+
+        for required in [
+            "buffer_import_plan_available = true",
+            "buffer_import_plan_built = true",
+            "buffer_import_candidate_observed = true",
+            "buffer_import_required = true",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55F doc 缺少 capability truth: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
