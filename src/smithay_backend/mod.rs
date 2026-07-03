@@ -5310,6 +5310,137 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55G 必须建立 buffer import implementation descriptor / adapter boundary seam。
+    #[test]
+    fn buffer_import_implementation_descriptor_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55G coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55G loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55G orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55G_BUFFER_IMPORT_IMPLEMENTATION_DESCRIPTOR.md"),
+        )
+        .expect("Phase 55G 文档必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitBufferImportImplementationDescriptor",
+            "pub struct RuntimeSurfaceCommitBufferImportImplementationBoundary",
+            "buffer_import_implementation_boundary: RuntimeSurfaceCommitBufferImportImplementationBoundary",
+            "pub struct RuntimeSurfaceCommitBufferImportImplementationBoundaryReport",
+            "pub enum RuntimeSurfaceCommitBufferImportImplementationOperation",
+            "pub enum RuntimeSurfaceCommitBufferImportImplementationBlocker",
+            "pub fn buffer_import_implementation_boundary_report_from_planning_report",
+            "pub source_buffer_import_planning_report_observed: bool",
+            "pub implementation_descriptor_available: bool",
+            "pub implementation_descriptor_registered: bool",
+            "pub candidate_evidence_observed: bool",
+            "pub actual_import_required: bool",
+            "pub importer_owner_evidence_available: bool",
+            "pub renderer_backend_descriptor_evidence_available: bool",
+            "pub descriptor: Option<RuntimeSurfaceCommitBufferImportImplementationDescriptor>",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55G coordinator buffer import implementation descriptor 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitBufferImportImplementationBoundaryReport",
+            "pub buffer_import_implementation_boundary_invocations: usize",
+            "pub buffer_import_implementation_descriptors_observed: usize",
+            "pub buffer_import_implementation_observed_descriptors:",
+            "pub buffer_import_implementation_descriptor_available: bool",
+            "pub buffer_import_implementation_descriptor_registered: bool",
+            "pub buffer_import_implementation_candidates_observed: usize",
+            "pub buffer_import_implementation_actual_required_count: usize",
+            "NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_implementation_boundary_report",
+            "report.buffer_import_implementation_boundary_report",
+            "first_buffer_import_descriptor.commit_sequence",
+            "second_buffer_import_descriptor.commit_sequence",
+            "buffer_import_implementation_buffer_imported",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55G loop buffer import implementation descriptor 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_implementation_boundary_invocations",
+            "buffer_import_implementation_descriptor_available",
+            "buffer_import_implementation_descriptor_registered",
+            "buffer_import_implementation_candidates_observed",
+            "buffer_import_implementation_actual_required_count",
+            "first_buffer_import_descriptor.commit_sequence",
+            "second_buffer_import_descriptor.commit_sequence",
+            "buffer_import_implementation_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55G orchestrator buffer import implementation descriptor 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55G buffer import implementation descriptor 包含禁止 token: {forbidden}"
+            );
+        }
+
+        for required in [
+            "implementation_descriptor_available = true",
+            "implementation_descriptor_registered = true",
+            "candidate_evidence_observed = true",
+            "actual_import_required = true",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55G doc 缺少 descriptor/capability truth: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

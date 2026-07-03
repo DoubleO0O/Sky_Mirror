@@ -2752,6 +2752,289 @@ pub fn buffer_import_planning_report_from_resource_owner_boundary(
     }
 }
 
+/// 未来真实 buffer import implementation 的最小纯数据描述。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitBufferImportImplementationDescriptor {
+    /// adapter-owned surface identity；不会手写 core `WindowId`。
+    pub adapter_surface_id: AdapterSurfaceId,
+
+    /// adapter-owned surface identity key。
+    pub surface_identity_key: SurfaceIdentityKey,
+
+    /// 对应的 wl_surface.commit FIFO sequence。
+    pub commit_sequence: u64,
+
+    /// commit 是否携带 buffer attach/remove evidence。
+    pub buffer_attach_observed: bool,
+
+    /// commit 是否携带 present buffer evidence。
+    pub buffer_present: bool,
+
+    /// commit 是否携带 null attach / remove evidence。
+    pub buffer_removed: bool,
+
+    /// 是否观察到未来 importer 可消费的 candidate evidence。
+    pub candidate_evidence_observed: bool,
+
+    /// 是否计划未来真实 buffer import；candidate evidence 不等于实际 import。
+    pub actual_import_required: bool,
+
+    /// renderer backend descriptor evidence 是否存在。
+    pub renderer_backend_descriptor_evidence_available: bool,
+
+    /// 已注册 renderer backend descriptor 的种类。
+    pub registered_renderer_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// importer owner boundary evidence 是否存在。
+    pub importer_owner_evidence_available: bool,
+
+    /// 本阶段是否尝试 import buffer；Phase 55G 固定为 false。
+    pub buffer_import_attempted: bool,
+
+    /// 本阶段是否完成 buffer import；Phase 55G 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 本阶段是否创建 texture；Phase 55G 固定为 false。
+    pub texture_created: bool,
+
+    /// 本阶段是否调用 renderer；Phase 55G 固定为 false。
+    pub renderer_called: bool,
+
+    /// 本阶段是否提交 damage；Phase 55G 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 本阶段是否发送 frame callback done；Phase 55G 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 本阶段是否接入 input；Phase 55G 固定为 false。
+    pub input_support: bool,
+
+    /// 本阶段是否触发 core mutation；Phase 55G 固定为 false。
+    pub core_mutation_invoked: bool,
+}
+
+/// Buffer import implementation descriptor boundary 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitBufferImportImplementationOperation {
+    /// 读取上游 buffer import planning report。
+    ObserveBufferImportPlanningReport,
+    /// 注册未来真实 importer 的最小 descriptor。
+    RegisterImplementationDescriptor,
+    /// 观察 candidate evidence 与 actual import required 口径。
+    ObserveCandidateAndRequirementEvidence,
+    /// 生成 implementation boundary report。
+    BuildImplementationBoundaryReport,
+}
+
+/// Buffer import implementation descriptor boundary 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitBufferImportImplementationBlocker {
+    /// 上游 planning report 未提供 observed intent。
+    MissingBufferImportPlanningIntent,
+    /// 上游 planning report 未建成 pure-data plan。
+    MissingBufferImportPlan,
+    /// 上游 planning report 缺少 importer owner evidence。
+    MissingImporterOwnerEvidence,
+    /// 上游 planning report 缺少 renderer backend descriptor evidence。
+    MissingRendererBackendDescriptorEvidence,
+    /// 本轮 commit 没有 buffer import candidate evidence。
+    MissingBufferImportCandidate,
+    /// 真实 buffer import implementation 尚未执行。
+    MissingActualBufferImport,
+    /// texture creation 尚未接入。
+    MissingTextureCreation,
+    /// renderer call 尚未接入。
+    MissingRendererCall,
+    /// damage submit 尚未接入。
+    MissingDamageSubmit,
+    /// frame callback done 尚未接入。
+    MissingFrameCallbackDone,
+}
+
+/// Runtime-owned buffer import implementation descriptor / adapter boundary 纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitBufferImportImplementationBoundaryReport {
+    /// 本轮是否执行 implementation descriptor boundary seam。
+    pub boundary_invoked: bool,
+
+    /// 是否观察到 Phase 55F buffer import planning report。
+    pub source_buffer_import_planning_report_observed: bool,
+
+    /// 上游 planning report 是否已建成 pure-data plan。
+    pub source_buffer_import_plan_built: bool,
+
+    /// 上游 importer owner evidence 是否可用。
+    pub importer_owner_evidence_available: bool,
+
+    /// renderer backend descriptor evidence 是否可用。
+    pub renderer_backend_descriptor_evidence_available: bool,
+
+    /// 已注册 renderer backend descriptor 的种类。
+    pub registered_renderer_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// descriptor boundary 是否可用；不代表真实 import 已执行。
+    pub implementation_descriptor_available: bool,
+
+    /// 是否为 observed planning intent 注册 descriptor。
+    pub implementation_descriptor_registered: bool,
+
+    /// 未来真实 importer 的最小 descriptor。
+    pub descriptor: Option<RuntimeSurfaceCommitBufferImportImplementationDescriptor>,
+
+    /// 是否观察到 candidate evidence；candidate evidence 不等于 actual import execution。
+    pub candidate_evidence_observed: bool,
+
+    /// 是否计划未来真实 import；本阶段仍不执行 import。
+    pub actual_import_required: bool,
+
+    /// 本阶段是否尝试 import buffer；Phase 55G 固定为 false。
+    pub buffer_import_attempted: bool,
+
+    /// 本阶段是否完成 buffer import；Phase 55G 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 本阶段是否创建 texture；Phase 55G 固定为 false。
+    pub texture_created: bool,
+
+    /// 本阶段是否调用 renderer；Phase 55G 固定为 false。
+    pub renderer_called: bool,
+
+    /// 本阶段是否提交 damage；Phase 55G 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 本阶段是否发送 frame callback done；Phase 55G 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 本阶段是否接入 input；Phase 55G 固定为 false。
+    pub input_support: bool,
+
+    /// 本阶段是否触发 core mutation；Phase 55G 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitBufferImportImplementationOperation>,
+
+    /// 阻止进入真实 buffer import / render resource path 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitBufferImportImplementationBlocker>,
+}
+
+/// Runtime-owned buffer import implementation boundary；只注册未来 importer descriptor。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitBufferImportImplementationBoundary;
+
+impl RuntimeSurfaceCommitBufferImportImplementationBoundary {
+    /// 创建 runtime-owned buffer import implementation descriptor boundary。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 从 Phase 55F planning report 派生 implementation descriptor report；不 import buffer。
+    pub fn buffer_import_implementation_boundary_report_from_planning_report(
+        &mut self,
+        report: &RuntimeSurfaceCommitBufferImportPlanningReport,
+    ) -> RuntimeSurfaceCommitBufferImportImplementationBoundaryReport {
+        buffer_import_implementation_boundary_report_from_planning_report(report)
+    }
+}
+
+/// 从 Phase 55F planning report 派生 implementation descriptor report；不 import buffer。
+pub fn buffer_import_implementation_boundary_report_from_planning_report(
+    report: &RuntimeSurfaceCommitBufferImportPlanningReport,
+) -> RuntimeSurfaceCommitBufferImportImplementationBoundaryReport {
+    let importer_owner_evidence_available =
+        report.source_buffer_importer_owner_available && report.source_buffer_importer_owner_bound;
+    let descriptor = report.observed_intent.as_ref().map(|intent| {
+        RuntimeSurfaceCommitBufferImportImplementationDescriptor {
+            adapter_surface_id: intent.adapter_surface_id,
+            surface_identity_key: intent.surface_identity_key,
+            commit_sequence: intent.commit_sequence,
+            buffer_attach_observed: intent.buffer_attach_observed,
+            buffer_present: intent.buffer_present,
+            buffer_removed: intent.buffer_removed,
+            candidate_evidence_observed: report.buffer_import_candidate_observed,
+            actual_import_required: report.buffer_import_required,
+            renderer_backend_descriptor_evidence_available: report
+                .renderer_backend_descriptor_evidence_available,
+            registered_renderer_backend_kind: report.registered_renderer_backend_kind,
+            importer_owner_evidence_available,
+            buffer_import_attempted: false,
+            buffer_imported: false,
+            texture_created: false,
+            renderer_called: false,
+            damage_submitted: false,
+            frame_callback_done_sent: false,
+            input_support: false,
+            core_mutation_invoked: false,
+        }
+    });
+    let implementation_descriptor_registered = descriptor.is_some();
+    let mut blockers = Vec::new();
+    if report.observed_intent.is_none() {
+        blockers.push(
+            RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingBufferImportPlanningIntent,
+        );
+    }
+    if report.observed_intent.is_some() {
+        if !report.buffer_import_plan_built {
+            blockers.push(
+                RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingBufferImportPlan,
+            );
+        }
+        if !importer_owner_evidence_available {
+            blockers.push(
+                RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingImporterOwnerEvidence,
+            );
+        }
+        if !report.renderer_backend_descriptor_evidence_available {
+            blockers.push(
+                RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingRendererBackendDescriptorEvidence,
+            );
+        }
+        if !report.buffer_import_candidate_observed {
+            blockers.push(
+                RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingBufferImportCandidate,
+            );
+        }
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingActualBufferImport,
+        RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingTextureCreation,
+        RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingRendererCall,
+        RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingDamageSubmit,
+        RuntimeSurfaceCommitBufferImportImplementationBlocker::MissingFrameCallbackDone,
+    ]);
+
+    RuntimeSurfaceCommitBufferImportImplementationBoundaryReport {
+        boundary_invoked: true,
+        source_buffer_import_planning_report_observed: report.planning_invoked,
+        source_buffer_import_plan_built: report.buffer_import_plan_built,
+        importer_owner_evidence_available,
+        renderer_backend_descriptor_evidence_available: report
+            .renderer_backend_descriptor_evidence_available,
+        registered_renderer_backend_kind: report.registered_renderer_backend_kind,
+        implementation_descriptor_available: true,
+        implementation_descriptor_registered,
+        descriptor,
+        candidate_evidence_observed: report.buffer_import_candidate_observed,
+        actual_import_required: report.buffer_import_required,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitBufferImportImplementationOperation::ObserveBufferImportPlanningReport,
+            RuntimeSurfaceCommitBufferImportImplementationOperation::RegisterImplementationDescriptor,
+            RuntimeSurfaceCommitBufferImportImplementationOperation::ObserveCandidateAndRequirementEvidence,
+            RuntimeSurfaceCommitBufferImportImplementationOperation::BuildImplementationBoundaryReport,
+        ],
+        blockers,
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -3030,6 +3313,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// buffer import planning report。
     pub buffer_import_planning_report: RuntimeSurfaceCommitBufferImportPlanningReport,
+
+    /// buffer import implementation descriptor / adapter boundary report。
+    pub buffer_import_implementation_boundary_report:
+        RuntimeSurfaceCommitBufferImportImplementationBoundaryReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -3055,6 +3342,7 @@ pub struct NestedRuntimeCoordinator {
     renderer_backend_owner_shell: RuntimeSurfaceCommitRendererBackendOwnerShell,
     buffer_import_resource_owner_boundary: RuntimeSurfaceCommitBufferImportResourceOwnerBoundary,
     buffer_import_planner: RuntimeSurfaceCommitBufferImportPlanner,
+    buffer_import_implementation_boundary: RuntimeSurfaceCommitBufferImportImplementationBoundary,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -3099,6 +3387,8 @@ impl NestedRuntimeCoordinator {
             buffer_import_resource_owner_boundary:
                 RuntimeSurfaceCommitBufferImportResourceOwnerBoundary::new(),
             buffer_import_planner: RuntimeSurfaceCommitBufferImportPlanner::new(),
+            buffer_import_implementation_boundary:
+                RuntimeSurfaceCommitBufferImportImplementationBoundary::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -3342,6 +3632,11 @@ impl NestedRuntimeCoordinator {
             .buffer_import_planning_report_from_resource_owner_boundary(
                 &buffer_import_resource_owner_readiness_report,
             );
+        let buffer_import_implementation_boundary_report = self
+            .buffer_import_implementation_boundary
+            .buffer_import_implementation_boundary_report_from_planning_report(
+                &buffer_import_planning_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -3365,6 +3660,7 @@ impl NestedRuntimeCoordinator {
             renderer_backend_owner_shell_readiness_report,
             buffer_import_resource_owner_readiness_report,
             buffer_import_planning_report,
+            buffer_import_implementation_boundary_report,
         }
     }
 
