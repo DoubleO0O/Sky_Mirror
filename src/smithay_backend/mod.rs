@@ -5441,6 +5441,133 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55H 必须建立 buffer import adapter proof boundary seam。
+    #[test]
+    fn buffer_import_adapter_proof_boundary_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55H coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55H loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55H orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55H_BUFFER_IMPORT_ADAPTER_PROOF_BOUNDARY.md"),
+        )
+        .expect("Phase 55H 文档必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitBufferImportAdapterProof",
+            "pub struct RuntimeSurfaceCommitBufferImportAdapterProofBoundary",
+            "buffer_import_adapter_proof_boundary: RuntimeSurfaceCommitBufferImportAdapterProofBoundary",
+            "pub struct RuntimeSurfaceCommitBufferImportAdapterProofBoundaryReport",
+            "pub enum RuntimeSurfaceCommitBufferImportAdapterProofOperation",
+            "pub enum RuntimeSurfaceCommitBufferImportAdapterProofBlocker",
+            "pub fn buffer_import_adapter_proof_boundary_report_from_implementation_report",
+            "pub source_buffer_import_implementation_report_observed: bool",
+            "pub implementation_descriptor_registered: bool",
+            "pub adapter_proof_boundary_available: bool",
+            "pub adapter_proof_registered: bool",
+            "pub adapter_proof: Option<RuntimeSurfaceCommitBufferImportAdapterProof>",
+            "pub actual_import_required: bool",
+            "pub buffer_import_attempted: bool",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55H coordinator buffer import adapter proof boundary 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitBufferImportAdapterProofBoundaryReport",
+            "pub buffer_import_adapter_proof_boundary_invocations: usize",
+            "pub buffer_import_adapter_proofs_observed: usize",
+            "pub buffer_import_adapter_observed_proofs:",
+            "pub buffer_import_adapter_proof_boundary_available: bool",
+            "pub buffer_import_adapter_proof_registered: bool",
+            "pub buffer_import_adapter_actual_required_count: usize",
+            "NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_adapter_proof_boundary_report",
+            "report.buffer_import_adapter_proof_boundary_report",
+            "first_buffer_import_adapter_proof.commit_sequence",
+            "second_buffer_import_adapter_proof.commit_sequence",
+            "buffer_import_adapter_buffer_imported",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55H loop buffer import adapter proof boundary 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_adapter_proof_boundary_invocations",
+            "buffer_import_adapter_proof_boundary_available",
+            "buffer_import_adapter_proof_registered",
+            "buffer_import_adapter_actual_required_count",
+            "first_buffer_import_adapter_proof.commit_sequence",
+            "second_buffer_import_adapter_proof.commit_sequence",
+            "buffer_import_adapter_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55H orchestrator buffer import adapter proof boundary 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55H buffer import adapter proof boundary 包含禁止 token: {forbidden}"
+            );
+        }
+
+        for required in [
+            "adapter_proof_boundary_available = true",
+            "adapter_proof_registered = true",
+            "actual_import_required = true",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55H doc 缺少 adapter proof/capability truth: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
