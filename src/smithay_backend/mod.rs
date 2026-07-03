@@ -5568,6 +5568,130 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55I 必须建立 buffer import precondition gate seam。
+    #[test]
+    fn buffer_import_precondition_gate_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55I coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55I loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55I orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55I_BUFFER_IMPORT_PRECONDITION_GATE.md"),
+        )
+        .expect("Phase 55I 文档必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitBufferImportPreconditionGate",
+            "buffer_import_precondition_gate: RuntimeSurfaceCommitBufferImportPreconditionGate",
+            "pub struct RuntimeSurfaceCommitBufferImportPreconditionGateReport",
+            "pub enum RuntimeSurfaceCommitBufferImportPreconditionGateOperation",
+            "pub enum RuntimeSurfaceCommitBufferImportPreconditionGateBlocker",
+            "pub fn buffer_import_precondition_gate_report_from_adapter_proof",
+            "pub source_buffer_import_adapter_proof_report_observed: bool",
+            "pub adapter_proof_registered: bool",
+            "pub import_precondition_gate_available: bool",
+            "pub import_preconditions_met: bool",
+            "pub future_import_preconditions_met: bool",
+            "pub actual_import_required: bool",
+            "pub buffer_import_attempted: bool",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55I coordinator buffer import precondition gate 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitBufferImportPreconditionGateReport",
+            "pub buffer_import_precondition_gate_invocations: usize",
+            "pub buffer_import_preconditions_met_count: usize",
+            "pub buffer_import_future_preconditions_met_count: usize",
+            "pub buffer_import_precondition_actual_required_count: usize",
+            "pub buffer_import_precondition_gate_available: bool",
+            "pub buffer_import_precondition_missing_actual_import_requirement: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_precondition_gate_report",
+            "report.buffer_import_precondition_gate_report",
+            "buffer_import_precondition_buffer_imported",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55I loop buffer import precondition gate 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_precondition_gate_invocations",
+            "buffer_import_preconditions_met_count",
+            "buffer_import_future_preconditions_met_count",
+            "buffer_import_precondition_actual_required_count",
+            "buffer_import_precondition_gate_available",
+            "buffer_import_precondition_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55I orchestrator buffer import precondition gate 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55I buffer import precondition gate 包含禁止 token: {forbidden}"
+            );
+        }
+
+        for required in [
+            "import_precondition_gate_available = true",
+            "import_preconditions_met = true",
+            "future_import_preconditions_met = true",
+            "actual_import_required = true",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55I doc 缺少 precondition/capability truth: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
