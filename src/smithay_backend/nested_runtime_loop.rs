@@ -19,6 +19,9 @@ use crate::{
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
+        RuntimeSurfaceCommitBufferImportAdapterProof,
+        RuntimeSurfaceCommitBufferImportAdapterProofBlocker,
+        RuntimeSurfaceCommitBufferImportAdapterProofBoundaryReport,
         RuntimeSurfaceCommitBufferImportImplementationBlocker,
         RuntimeSurfaceCommitBufferImportImplementationBoundaryReport,
         RuntimeSurfaceCommitBufferImportImplementationDescriptor,
@@ -1342,6 +1345,88 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// implementation descriptor boundary 是否触发 core mutation；Phase 55G 固定保持 false。
     pub buffer_import_implementation_core_mutation_invoked: bool,
 
+    /// buffer import adapter proof boundary seam 被调用的次数。
+    pub buffer_import_adapter_proof_boundary_invocations: usize,
+
+    /// buffer import adapter proof boundary 观察到 proof 的数量。
+    pub buffer_import_adapter_proofs_observed: usize,
+
+    /// 按 FIFO 顺序保存的 buffer import adapter proofs。
+    pub buffer_import_adapter_observed_proofs: Vec<RuntimeSurfaceCommitBufferImportAdapterProof>,
+
+    /// buffer import adapter proof boundary 是否可用。
+    pub buffer_import_adapter_proof_boundary_available: bool,
+
+    /// buffer import adapter proof 是否注册成功。
+    pub buffer_import_adapter_proof_registered: bool,
+
+    /// adapter proof boundary 观察到 candidate evidence 的数量。
+    pub buffer_import_adapter_candidates_observed: usize,
+
+    /// adapter proof boundary 观察到 actual import required 的数量。
+    pub buffer_import_adapter_actual_required_count: usize,
+
+    /// adapter proof boundary 是否观察到 importer owner evidence。
+    pub buffer_import_adapter_importer_owner_evidence_available: bool,
+
+    /// adapter proof boundary 是否观察到 renderer backend descriptor evidence。
+    pub buffer_import_adapter_renderer_descriptor_evidence_available: bool,
+
+    /// adapter proof boundary 观察到的 renderer backend kind。
+    pub buffer_import_adapter_registered_backend_kind:
+        Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// adapter proof boundary 是否仍缺少 implementation descriptor。
+    pub buffer_import_adapter_missing_implementation_descriptor: bool,
+
+    /// adapter proof boundary 是否仍缺少 importer owner evidence。
+    pub buffer_import_adapter_missing_importer_owner_evidence: bool,
+
+    /// adapter proof boundary 是否仍缺少 renderer backend descriptor evidence。
+    pub buffer_import_adapter_missing_renderer_descriptor_evidence: bool,
+
+    /// adapter proof boundary 是否仍缺少 candidate evidence。
+    pub buffer_import_adapter_missing_candidate: bool,
+
+    /// adapter proof boundary 是否仍缺少真实 buffer import。
+    pub buffer_import_adapter_missing_actual_buffer_import: bool,
+
+    /// adapter proof boundary 是否仍缺少 texture creation。
+    pub buffer_import_adapter_missing_texture_creation: bool,
+
+    /// adapter proof boundary 是否仍缺少 renderer call。
+    pub buffer_import_adapter_missing_renderer_call: bool,
+
+    /// adapter proof boundary 是否仍缺少 damage submit。
+    pub buffer_import_adapter_missing_damage_submit: bool,
+
+    /// adapter proof boundary 是否仍缺少 frame callback done。
+    pub buffer_import_adapter_missing_frame_callback_done: bool,
+
+    /// adapter proof boundary 是否尝试 import buffer；Phase 55H 固定保持 false。
+    pub buffer_import_adapter_buffer_import_attempted: bool,
+
+    /// adapter proof boundary 是否 import buffer；Phase 55H 固定保持 false。
+    pub buffer_import_adapter_buffer_imported: bool,
+
+    /// adapter proof boundary 是否创建 texture；Phase 55H 固定保持 false。
+    pub buffer_import_adapter_texture_created: bool,
+
+    /// adapter proof boundary 是否调用 renderer；Phase 55H 固定保持 false。
+    pub buffer_import_adapter_renderer_called: bool,
+
+    /// adapter proof boundary 是否提交 damage；Phase 55H 固定保持 false。
+    pub buffer_import_adapter_damage_submitted: bool,
+
+    /// adapter proof boundary 是否发送 frame callback done；Phase 55H 固定保持 false。
+    pub buffer_import_adapter_frame_callback_done_sent: bool,
+
+    /// adapter proof boundary 是否接入 input；Phase 55H 固定保持 false。
+    pub buffer_import_adapter_input_support: bool,
+
+    /// adapter proof boundary 是否触发 core mutation；Phase 55H 固定保持 false。
+    pub buffer_import_adapter_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -1658,6 +1743,33 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             buffer_import_implementation_frame_callback_done_sent: false,
             buffer_import_implementation_input_support: false,
             buffer_import_implementation_core_mutation_invoked: false,
+            buffer_import_adapter_proof_boundary_invocations: 0,
+            buffer_import_adapter_proofs_observed: 0,
+            buffer_import_adapter_observed_proofs: Vec::new(),
+            buffer_import_adapter_proof_boundary_available: false,
+            buffer_import_adapter_proof_registered: false,
+            buffer_import_adapter_candidates_observed: 0,
+            buffer_import_adapter_actual_required_count: 0,
+            buffer_import_adapter_importer_owner_evidence_available: false,
+            buffer_import_adapter_renderer_descriptor_evidence_available: false,
+            buffer_import_adapter_registered_backend_kind: None,
+            buffer_import_adapter_missing_implementation_descriptor: false,
+            buffer_import_adapter_missing_importer_owner_evidence: false,
+            buffer_import_adapter_missing_renderer_descriptor_evidence: false,
+            buffer_import_adapter_missing_candidate: false,
+            buffer_import_adapter_missing_actual_buffer_import: false,
+            buffer_import_adapter_missing_texture_creation: false,
+            buffer_import_adapter_missing_renderer_call: false,
+            buffer_import_adapter_missing_damage_submit: false,
+            buffer_import_adapter_missing_frame_callback_done: false,
+            buffer_import_adapter_buffer_import_attempted: false,
+            buffer_import_adapter_buffer_imported: false,
+            buffer_import_adapter_texture_created: false,
+            buffer_import_adapter_renderer_called: false,
+            buffer_import_adapter_damage_submitted: false,
+            buffer_import_adapter_frame_callback_done_sent: false,
+            buffer_import_adapter_input_support: false,
+            buffer_import_adapter_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -2343,6 +2455,71 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_buffer_import_adapter_proof_boundary_report(
+        report: &RuntimeSurfaceCommitBufferImportAdapterProofBoundaryReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            buffer_import_adapter_proof_boundary_invocations: usize::from(report.boundary_invoked),
+            buffer_import_adapter_proofs_observed: usize::from(report.adapter_proof.is_some()),
+            buffer_import_adapter_observed_proofs: report
+                .adapter_proof
+                .clone()
+                .into_iter()
+                .collect(),
+            buffer_import_adapter_proof_boundary_available: report
+                .adapter_proof_boundary_available,
+            buffer_import_adapter_proof_registered: report.adapter_proof_registered,
+            buffer_import_adapter_candidates_observed: usize::from(
+                report.candidate_evidence_observed,
+            ),
+            buffer_import_adapter_actual_required_count: usize::from(
+                report.actual_import_required,
+            ),
+            buffer_import_adapter_importer_owner_evidence_available: report
+                .importer_owner_evidence_available,
+            buffer_import_adapter_renderer_descriptor_evidence_available: report
+                .renderer_backend_descriptor_evidence_available,
+            buffer_import_adapter_registered_backend_kind: report.registered_renderer_backend_kind,
+            buffer_import_adapter_missing_implementation_descriptor: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingImplementationDescriptor,
+            ),
+            buffer_import_adapter_missing_importer_owner_evidence: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingImporterOwnerEvidence,
+            ),
+            buffer_import_adapter_missing_renderer_descriptor_evidence: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingRendererBackendDescriptorEvidence,
+            ),
+            buffer_import_adapter_missing_candidate: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingBufferImportCandidate,
+            ),
+            buffer_import_adapter_missing_actual_buffer_import: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingActualBufferImport,
+            ),
+            buffer_import_adapter_missing_texture_creation: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingTextureCreation,
+            ),
+            buffer_import_adapter_missing_renderer_call: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingRendererCall,
+            ),
+            buffer_import_adapter_missing_damage_submit: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingDamageSubmit,
+            ),
+            buffer_import_adapter_missing_frame_callback_done: has_blocker(
+                RuntimeSurfaceCommitBufferImportAdapterProofBlocker::MissingFrameCallbackDone,
+            ),
+            buffer_import_adapter_buffer_import_attempted: report.buffer_import_attempted,
+            buffer_import_adapter_buffer_imported: report.buffer_imported,
+            buffer_import_adapter_texture_created: report.texture_created,
+            buffer_import_adapter_renderer_called: report.renderer_called,
+            buffer_import_adapter_damage_submitted: report.damage_submitted,
+            buffer_import_adapter_frame_callback_done_sent: report.frame_callback_done_sent,
+            buffer_import_adapter_input_support: report.input_support,
+            buffer_import_adapter_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -2364,6 +2541,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             || self.buffer_import_resource_owner_intents_observed > 0
             || self.buffer_import_planning_intents_observed > 0
             || self.buffer_import_implementation_descriptors_observed > 0
+            || self.buffer_import_adapter_proofs_observed > 0
     }
 
     fn observe(&mut self, delta: Self) {
@@ -2942,6 +3120,59 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.buffer_import_implementation_input_support;
         self.buffer_import_implementation_core_mutation_invoked |=
             delta.buffer_import_implementation_core_mutation_invoked;
+        self.buffer_import_adapter_proof_boundary_invocations = self
+            .buffer_import_adapter_proof_boundary_invocations
+            .saturating_add(delta.buffer_import_adapter_proof_boundary_invocations);
+        self.buffer_import_adapter_proofs_observed = self
+            .buffer_import_adapter_proofs_observed
+            .saturating_add(delta.buffer_import_adapter_proofs_observed);
+        self.buffer_import_adapter_observed_proofs
+            .extend(delta.buffer_import_adapter_observed_proofs);
+        self.buffer_import_adapter_proof_boundary_available |=
+            delta.buffer_import_adapter_proof_boundary_available;
+        self.buffer_import_adapter_proof_registered |= delta.buffer_import_adapter_proof_registered;
+        self.buffer_import_adapter_candidates_observed = self
+            .buffer_import_adapter_candidates_observed
+            .saturating_add(delta.buffer_import_adapter_candidates_observed);
+        self.buffer_import_adapter_actual_required_count = self
+            .buffer_import_adapter_actual_required_count
+            .saturating_add(delta.buffer_import_adapter_actual_required_count);
+        self.buffer_import_adapter_importer_owner_evidence_available |=
+            delta.buffer_import_adapter_importer_owner_evidence_available;
+        self.buffer_import_adapter_renderer_descriptor_evidence_available |=
+            delta.buffer_import_adapter_renderer_descriptor_evidence_available;
+        self.buffer_import_adapter_registered_backend_kind = self
+            .buffer_import_adapter_registered_backend_kind
+            .or(delta.buffer_import_adapter_registered_backend_kind);
+        self.buffer_import_adapter_missing_implementation_descriptor |=
+            delta.buffer_import_adapter_missing_implementation_descriptor;
+        self.buffer_import_adapter_missing_importer_owner_evidence |=
+            delta.buffer_import_adapter_missing_importer_owner_evidence;
+        self.buffer_import_adapter_missing_renderer_descriptor_evidence |=
+            delta.buffer_import_adapter_missing_renderer_descriptor_evidence;
+        self.buffer_import_adapter_missing_candidate |=
+            delta.buffer_import_adapter_missing_candidate;
+        self.buffer_import_adapter_missing_actual_buffer_import |=
+            delta.buffer_import_adapter_missing_actual_buffer_import;
+        self.buffer_import_adapter_missing_texture_creation |=
+            delta.buffer_import_adapter_missing_texture_creation;
+        self.buffer_import_adapter_missing_renderer_call |=
+            delta.buffer_import_adapter_missing_renderer_call;
+        self.buffer_import_adapter_missing_damage_submit |=
+            delta.buffer_import_adapter_missing_damage_submit;
+        self.buffer_import_adapter_missing_frame_callback_done |=
+            delta.buffer_import_adapter_missing_frame_callback_done;
+        self.buffer_import_adapter_buffer_import_attempted |=
+            delta.buffer_import_adapter_buffer_import_attempted;
+        self.buffer_import_adapter_buffer_imported |= delta.buffer_import_adapter_buffer_imported;
+        self.buffer_import_adapter_texture_created |= delta.buffer_import_adapter_texture_created;
+        self.buffer_import_adapter_renderer_called |= delta.buffer_import_adapter_renderer_called;
+        self.buffer_import_adapter_damage_submitted |= delta.buffer_import_adapter_damage_submitted;
+        self.buffer_import_adapter_frame_callback_done_sent |=
+            delta.buffer_import_adapter_frame_callback_done_sent;
+        self.buffer_import_adapter_input_support |= delta.buffer_import_adapter_input_support;
+        self.buffer_import_adapter_core_mutation_invoked |=
+            delta.buffer_import_adapter_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -3169,6 +3400,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_implementation_boundary_report(
                 &report.buffer_import_implementation_boundary_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_adapter_proof_boundary_report(
+                &report.buffer_import_adapter_proof_boundary_report,
             ),
         );
 
@@ -6029,6 +6265,151 @@ mod tests {
             !report
                 .surface_commit
                 .buffer_import_implementation_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_adapter_proof_boundary_invocations,
+            3
+        );
+        assert_eq!(
+            report.surface_commit.buffer_import_adapter_proofs_observed,
+            2
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_adapter_observed_proofs
+                .len(),
+            2
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_proof_boundary_available
+        );
+        assert!(report.surface_commit.buffer_import_adapter_proof_registered);
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_adapter_candidates_observed,
+            1
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_adapter_actual_required_count,
+            0
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_importer_owner_evidence_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_renderer_descriptor_evidence_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_registered_backend_kind
+                .is_some()
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_missing_implementation_descriptor
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_adapter_missing_importer_owner_evidence
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_adapter_missing_renderer_descriptor_evidence
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_missing_candidate
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_missing_actual_buffer_import
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_adapter_missing_frame_callback_done
+        );
+        let first_buffer_import_adapter_proof =
+            &report.surface_commit.buffer_import_adapter_observed_proofs[0];
+        let second_buffer_import_adapter_proof =
+            &report.surface_commit.buffer_import_adapter_observed_proofs[1];
+        assert_eq!(
+            first_buffer_import_adapter_proof.adapter_surface_id,
+            first_commit.adapter_surface_id
+        );
+        assert_eq!(
+            first_buffer_import_adapter_proof.commit_sequence,
+            first_commit.commit_sequence
+        );
+        assert_eq!(
+            second_buffer_import_adapter_proof.commit_sequence,
+            second_commit.commit_sequence
+        );
+        assert!(first_buffer_import_adapter_proof.buffer_attach_observed);
+        assert!(!first_buffer_import_adapter_proof.buffer_present);
+        assert!(first_buffer_import_adapter_proof.buffer_removed);
+        assert!(first_buffer_import_adapter_proof.candidate_evidence_observed);
+        assert!(!first_buffer_import_adapter_proof.actual_import_required);
+        assert!(first_buffer_import_adapter_proof.renderer_backend_descriptor_evidence_available);
+        assert!(first_buffer_import_adapter_proof.importer_owner_evidence_available);
+        assert!(first_buffer_import_adapter_proof.implementation_descriptor_registered);
+        assert!(!second_buffer_import_adapter_proof.buffer_attach_observed);
+        assert!(!second_buffer_import_adapter_proof.buffer_present);
+        assert!(!second_buffer_import_adapter_proof.buffer_removed);
+        assert!(!second_buffer_import_adapter_proof.candidate_evidence_observed);
+        assert!(!second_buffer_import_adapter_proof.actual_import_required);
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_adapter_buffer_import_attempted
+        );
+        assert!(!report.surface_commit.buffer_import_adapter_buffer_imported);
+        assert!(!report.surface_commit.buffer_import_adapter_texture_created);
+        assert!(!report.surface_commit.buffer_import_adapter_renderer_called);
+        assert!(!report.surface_commit.buffer_import_adapter_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_adapter_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.buffer_import_adapter_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_adapter_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
