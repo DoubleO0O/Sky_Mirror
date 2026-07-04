@@ -6087,6 +6087,135 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55M 必须审计真实 buffer import 边界，并防止把 shell/record/dry-run 误报为真实 import。
+    #[test]
+    fn real_buffer_import_boundary_audit_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55M coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55M loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55M orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55M_REAL_BUFFER_IMPORT_BOUNDARY_AUDIT.md"),
+        )
+        .expect("Phase 55M 文档必须存在");
+
+        for required in [
+            "Phase 55M - Real Buffer Import Boundary Audit",
+            "Phase 55E",
+            "Phase 55F",
+            "Phase 55G",
+            "Phase 55H",
+            "Phase 55I",
+            "Phase 55J",
+            "Phase 55K",
+            "Phase 55L",
+            "pure-data",
+            "readiness",
+            "dry-run",
+            "record",
+            "No real buffer import has happened",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+            "Smithay and renderer resource types must remain in src/smithay_backend",
+            "Linux-only adapter layer",
+            "core remains abstract",
+            "WindowId",
+            "Geometry",
+            "State",
+            "Action",
+            "Command",
+            "wl_buffer::WlBuffer",
+            "BufferHandler",
+            "Renderer",
+            "Texture",
+            "Dmabuf",
+            "EGL",
+            "GLES",
+            "WGPU",
+            "MissingRealBufferImportImplementation",
+            "MissingAttemptAdmission",
+            "MissingTextureCreation",
+            "MissingRendererCall",
+            "MissingDamageSubmit",
+            "MissingFrameCallbackDone",
+            "Phase 55N",
+            "Phase 56A",
+            "Stop before choosing a real backend",
+            "shell / record / dry-run reports are not real import",
+            "Do not claim renderable window",
+            "Do not claim real compositor runtime ready",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55M audit doc 缺少真实 buffer import 边界证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required) || runtime_loop.contains(required),
+                "Phase 55M source 缺少 capability truth false 证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_actual_attempt_record_invocations",
+            "buffer_import_actual_attempt_record_available",
+            "buffer_import_actual_attempt_recorded_count",
+            "buffer_import_actual_attempt_admission_checked_count",
+            "buffer_import_actual_attempt_record_blocked_count",
+            "buffer_import_actual_attempt_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55M orchestrator 缺少 Phase 55L record 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55M source 包含禁止的真实执行声明: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
