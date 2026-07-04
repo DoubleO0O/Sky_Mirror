@@ -5692,6 +5692,135 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55J 必须建立 buffer import execution dry-run / no-op guard seam。
+    #[test]
+    fn buffer_import_execution_dry_run_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55J coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55J loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55J orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55J_BUFFER_IMPORT_EXECUTION_DRY_RUN.md"),
+        )
+        .expect("Phase 55J 文档必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitBufferImportExecutionDryRun",
+            "buffer_import_execution_dry_run: RuntimeSurfaceCommitBufferImportExecutionDryRun",
+            "pub struct RuntimeSurfaceCommitBufferImportExecutionDryRunReport",
+            "pub enum RuntimeSurfaceCommitBufferImportExecutionOperation",
+            "pub enum RuntimeSurfaceCommitBufferImportExecutionBlocker",
+            "pub fn buffer_import_execution_dry_run_report_from_precondition_gate",
+            "pub source_buffer_import_precondition_gate_report_observed: bool",
+            "pub observed_adapter_proof: Option<RuntimeSurfaceCommitBufferImportAdapterProof>",
+            "pub execution_guard_available: bool",
+            "pub execution_attempted: bool",
+            "pub execution_noop: bool",
+            "pub execution_blocked: bool",
+            "pub actual_import_required: bool",
+            "MissingRealBufferImportImplementation",
+            "NoActualImportRequired",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55J coordinator buffer import execution dry-run 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitBufferImportExecutionDryRunReport",
+            "pub buffer_import_execution_dry_run_invocations: usize",
+            "pub buffer_import_execution_dry_run_reports:",
+            "Vec<RuntimeSurfaceCommitBufferImportExecutionDryRunReport>",
+            "pub buffer_import_execution_guard_available: bool",
+            "pub buffer_import_execution_attempted_count: usize",
+            "pub buffer_import_execution_noop_count: usize",
+            "pub buffer_import_execution_blocked_count: usize",
+            "pub buffer_import_execution_missing_real_importer: bool",
+            "pub buffer_import_execution_no_actual_import_required: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_execution_dry_run_report",
+            "report.buffer_import_execution_dry_run_report",
+            "buffer_import_execution_buffer_imported",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55J loop buffer import execution dry-run 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_execution_dry_run_invocations",
+            "buffer_import_execution_guard_available",
+            "buffer_import_execution_attempted_count",
+            "buffer_import_execution_noop_count",
+            "buffer_import_execution_blocked_count",
+            "buffer_import_execution_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55J orchestrator buffer import execution dry-run 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55J buffer import execution dry-run 包含禁止 token: {forbidden}"
+            );
+        }
+
+        for required in [
+            "execution_guard_available = true",
+            "execution_attempted = false",
+            "execution_noop = true",
+            "execution_blocked = true",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55J doc 缺少 dry-run/capability truth: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
