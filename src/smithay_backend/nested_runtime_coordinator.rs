@@ -3975,6 +3975,221 @@ pub fn buffer_import_implementation_owner_shell_report_from_execution_dry_run(
     }
 }
 
+/// Actual buffer import attempt admission / record 中可定位的纯数据操作阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitBufferImportActualAttemptOperation {
+    /// 读取上游 implementation owner shell report。
+    ObserveImplementationOwnerShellReport,
+    /// 检查 actual import attempt admission。
+    CheckActualAttemptAdmission,
+    /// 检查真实 buffer importer implementation 是否可用。
+    CheckRealBufferImportImplementation,
+    /// 生成 actual attempt record。
+    BuildActualAttemptRecord,
+}
+
+/// Actual buffer import attempt record 的结构化 blocker。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitBufferImportActualAttemptBlocker {
+    /// 上游 implementation owner shell report 未被观察到。
+    MissingImplementationOwnerShellReport,
+    /// 上游 implementation owner shell 仍处于 blocked 状态。
+    ImplementationOwnerShellBlocked,
+    /// 本轮 commit 不需要真实 buffer import。
+    NoActualImportRequired,
+    /// 没有 admission 允许 actual import attempt。
+    MissingAttemptAdmission,
+    /// 尚无真实 buffer import implementation。
+    MissingRealBufferImportImplementation,
+    /// texture creation 尚未接入。
+    MissingTextureCreation,
+    /// renderer call 尚未接入。
+    MissingRendererCall,
+    /// damage submit 尚未接入。
+    MissingDamageSubmit,
+    /// frame callback done 尚未接入。
+    MissingFrameCallbackDone,
+}
+
+/// Runtime-owned actual buffer import attempt admission / record 纯数据报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitBufferImportActualAttemptRecord {
+    /// 本轮是否执行 actual attempt record seam。
+    pub actual_attempt_recorder_invoked: bool,
+
+    /// 是否观察到 Phase 55K implementation owner shell report。
+    pub source_buffer_import_implementation_owner_shell_report_observed: bool,
+
+    /// 上游 implementation owner shell report；只保存 pure data。
+    pub observed_implementation_owner_shell_report:
+        RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport,
+
+    /// actual attempt record 是否可用；不代表真实 import 已执行。
+    pub actual_attempt_record_available: bool,
+
+    /// 本阶段是否记录了 attempt admission decision。
+    pub actual_attempt_recorded: bool,
+
+    /// 本阶段是否检查 actual import attempt admission。
+    pub actual_attempt_admission_checked: bool,
+
+    /// 本阶段是否允许 actual import attempt；Phase 55L 固定为 false。
+    pub actual_attempt_admitted: bool,
+
+    /// 本阶段是否阻止 actual import attempt。
+    pub actual_attempt_blocked: bool,
+
+    /// 本轮是否需要未来真实 import。
+    pub actual_import_required: bool,
+
+    /// 上游 owner shell 是否可用。
+    pub implementation_owner_shell_available: bool,
+
+    /// 真实 importer implementation 是否可用；Phase 55L 固定为 false。
+    pub real_importer_implementation_available: bool,
+
+    /// commit 是否携带 buffer attach/remove evidence。
+    pub buffer_attach_observed: bool,
+
+    /// commit 是否携带 present buffer evidence。
+    pub buffer_present: bool,
+
+    /// commit 是否携带 null attach / removal evidence。
+    pub buffer_removed: bool,
+
+    /// 是否观察到 candidate evidence。
+    pub candidate_evidence_observed: bool,
+
+    /// importer owner evidence 是否可用。
+    pub importer_owner_evidence_available: bool,
+
+    /// renderer backend descriptor evidence 是否可用。
+    pub renderer_backend_descriptor_evidence_available: bool,
+
+    /// 已注册 renderer backend descriptor 的种类。
+    pub registered_renderer_backend_kind: Option<RuntimeSurfaceCommitRenderBackendKind>,
+
+    /// 本阶段是否尝试 import buffer；Phase 55L 固定为 false。
+    pub buffer_import_attempted: bool,
+
+    /// 本阶段是否完成 buffer import；Phase 55L 固定为 false。
+    pub buffer_imported: bool,
+
+    /// 本阶段是否创建 texture；Phase 55L 固定为 false。
+    pub texture_created: bool,
+
+    /// 本阶段是否调用 renderer；Phase 55L 固定为 false。
+    pub renderer_called: bool,
+
+    /// 本阶段是否提交 damage；Phase 55L 固定为 false。
+    pub damage_submitted: bool,
+
+    /// 本阶段是否发送 frame callback done；Phase 55L 固定为 false。
+    pub frame_callback_done_sent: bool,
+
+    /// 本阶段是否接入 input；Phase 55L 固定为 false。
+    pub input_support: bool,
+
+    /// 本阶段是否触发 core mutation；Phase 55L 固定为 false。
+    pub core_mutation_invoked: bool,
+
+    /// 执行过的操作。
+    pub operations: Vec<RuntimeSurfaceCommitBufferImportActualAttemptOperation>,
+
+    /// 阻止进入真实 buffer import attempt path 的原因。
+    pub blockers: Vec<RuntimeSurfaceCommitBufferImportActualAttemptBlocker>,
+}
+
+/// Runtime-owned actual buffer import attempt recorder；不执行真实 import。
+#[derive(Debug, Default)]
+pub struct RuntimeSurfaceCommitBufferImportActualAttemptRecorder;
+
+impl RuntimeSurfaceCommitBufferImportActualAttemptRecorder {
+    /// 创建 runtime-owned actual buffer import attempt recorder。
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 从 Phase 55K owner shell report 派生 actual attempt record；不 import buffer。
+    pub fn buffer_import_actual_attempt_record_from_owner_shell(
+        &mut self,
+        report: &RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport,
+    ) -> RuntimeSurfaceCommitBufferImportActualAttemptRecord {
+        buffer_import_actual_attempt_record_from_owner_shell(report)
+    }
+}
+
+/// 从 Phase 55K owner shell report 派生 actual attempt record；不 import buffer。
+pub fn buffer_import_actual_attempt_record_from_owner_shell(
+    report: &RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport,
+) -> RuntimeSurfaceCommitBufferImportActualAttemptRecord {
+    let mut blockers = Vec::new();
+    if !report.owner_shell_invoked {
+        blockers.push(
+            RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingImplementationOwnerShellReport,
+        );
+    }
+    if report.actual_import_attempt_blocked {
+        blockers.push(
+            RuntimeSurfaceCommitBufferImportActualAttemptBlocker::ImplementationOwnerShellBlocked,
+        );
+    }
+    if !report.actual_import_attempt_admitted {
+        blockers
+            .push(RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingAttemptAdmission);
+    }
+    if report.actual_import_required {
+        blockers.push(
+            RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingRealBufferImportImplementation,
+        );
+    } else {
+        blockers.push(RuntimeSurfaceCommitBufferImportActualAttemptBlocker::NoActualImportRequired);
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingTextureCreation,
+        RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingRendererCall,
+        RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingDamageSubmit,
+        RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingFrameCallbackDone,
+    ]);
+
+    RuntimeSurfaceCommitBufferImportActualAttemptRecord {
+        actual_attempt_recorder_invoked: true,
+        source_buffer_import_implementation_owner_shell_report_observed: report.owner_shell_invoked,
+        observed_implementation_owner_shell_report: report.clone(),
+        actual_attempt_record_available: true,
+        actual_attempt_recorded: true,
+        actual_attempt_admission_checked: true,
+        actual_attempt_admitted: false,
+        actual_attempt_blocked: true,
+        actual_import_required: report.actual_import_required,
+        implementation_owner_shell_available: report.implementation_owner_shell_available,
+        real_importer_implementation_available: report.real_importer_implementation_available,
+        buffer_attach_observed: report.buffer_attach_observed,
+        buffer_present: report.buffer_present,
+        buffer_removed: report.buffer_removed,
+        candidate_evidence_observed: report.candidate_evidence_observed,
+        importer_owner_evidence_available: report.importer_owner_evidence_available,
+        renderer_backend_descriptor_evidence_available: report
+            .renderer_backend_descriptor_evidence_available,
+        registered_renderer_backend_kind: report.registered_renderer_backend_kind,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitBufferImportActualAttemptOperation::ObserveImplementationOwnerShellReport,
+            RuntimeSurfaceCommitBufferImportActualAttemptOperation::CheckActualAttemptAdmission,
+            RuntimeSurfaceCommitBufferImportActualAttemptOperation::CheckRealBufferImportImplementation,
+            RuntimeSurfaceCommitBufferImportActualAttemptOperation::BuildActualAttemptRecord,
+        ],
+        blockers,
+    }
+}
+
 /// Runtime-owned renderer-admission work intent consumer。
 #[derive(Debug, Default)]
 pub struct RuntimeSurfaceCommitRendererAdmissionOwner;
@@ -4273,6 +4488,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// buffer import implementation owner shell report。
     pub buffer_import_implementation_owner_shell_report:
         RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport,
+
+    /// actual buffer import attempt admission / record report。
+    pub buffer_import_actual_attempt_record: RuntimeSurfaceCommitBufferImportActualAttemptRecord,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -4304,6 +4522,7 @@ pub struct NestedRuntimeCoordinator {
     buffer_import_execution_dry_run: RuntimeSurfaceCommitBufferImportExecutionDryRun,
     buffer_import_implementation_owner_shell:
         RuntimeSurfaceCommitBufferImportImplementationOwnerShell,
+    buffer_import_actual_attempt_recorder: RuntimeSurfaceCommitBufferImportActualAttemptRecorder,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -4357,6 +4576,8 @@ impl NestedRuntimeCoordinator {
             buffer_import_execution_dry_run: RuntimeSurfaceCommitBufferImportExecutionDryRun::new(),
             buffer_import_implementation_owner_shell:
                 RuntimeSurfaceCommitBufferImportImplementationOwnerShell::new(),
+            buffer_import_actual_attempt_recorder:
+                RuntimeSurfaceCommitBufferImportActualAttemptRecorder::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -4625,6 +4846,11 @@ impl NestedRuntimeCoordinator {
             .buffer_import_implementation_owner_shell_report_from_execution_dry_run(
                 &buffer_import_execution_dry_run_report,
             );
+        let buffer_import_actual_attempt_record = self
+            .buffer_import_actual_attempt_recorder
+            .buffer_import_actual_attempt_record_from_owner_shell(
+                &buffer_import_implementation_owner_shell_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -4653,6 +4879,7 @@ impl NestedRuntimeCoordinator {
             buffer_import_precondition_gate_report,
             buffer_import_execution_dry_run_report,
             buffer_import_implementation_owner_shell_report,
+            buffer_import_actual_attempt_record,
         }
     }
 
@@ -4735,10 +4962,12 @@ mod tests {
 
     use super::{
         NestedRuntimeCoordinator, NestedRuntimeCoordinatorBlocker, NestedRuntimePumpErrorKind,
+        RuntimeSurfaceCommitBufferImportActualAttemptBlocker,
         RuntimeSurfaceCommitBufferImportExecutionBlocker,
         RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker,
         RuntimeSurfaceCommitBufferImportPreconditionGateReport,
         RuntimeSurfaceCommitRenderBackendKind,
+        buffer_import_actual_attempt_record_from_owner_shell,
         buffer_import_execution_dry_run_report_from_precondition_gate,
         buffer_import_implementation_owner_shell_report_from_execution_dry_run,
         nested_runtime_coordinator_readiness_report,
@@ -4931,6 +5160,70 @@ mod tests {
         assert!(!blocked_owner_report.frame_callback_done_sent);
         assert!(!blocked_owner_report.input_support);
         assert!(!blocked_owner_report.core_mutation_invoked);
+    }
+
+    /// Phase 55L actual attempt record records admission decisions without importing buffers.
+    #[test]
+    fn buffer_import_actual_attempt_record_preserves_blocked_import_truth() {
+        let noop_dry_run = buffer_import_execution_dry_run_report_from_precondition_gate(
+            &precondition_gate_report(false),
+        );
+        let noop_owner_report =
+            buffer_import_implementation_owner_shell_report_from_execution_dry_run(&noop_dry_run);
+        let noop_attempt_record =
+            buffer_import_actual_attempt_record_from_owner_shell(&noop_owner_report);
+
+        assert!(noop_attempt_record.actual_attempt_record_available);
+        assert!(noop_attempt_record.actual_attempt_recorded);
+        assert!(noop_attempt_record.actual_attempt_admission_checked);
+        assert!(!noop_attempt_record.actual_attempt_admitted);
+        assert!(noop_attempt_record.actual_attempt_blocked);
+        assert!(!noop_attempt_record.actual_import_required);
+        assert!(noop_attempt_record.blockers.contains(
+            &RuntimeSurfaceCommitBufferImportActualAttemptBlocker::NoActualImportRequired
+        ));
+        assert!(noop_attempt_record.blockers.contains(
+            &RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingAttemptAdmission
+        ));
+        assert!(!noop_attempt_record.buffer_import_attempted);
+        assert!(!noop_attempt_record.buffer_imported);
+        assert!(!noop_attempt_record.texture_created);
+        assert!(!noop_attempt_record.renderer_called);
+        assert!(!noop_attempt_record.damage_submitted);
+        assert!(!noop_attempt_record.frame_callback_done_sent);
+        assert!(!noop_attempt_record.input_support);
+        assert!(!noop_attempt_record.core_mutation_invoked);
+
+        let blocked_dry_run = buffer_import_execution_dry_run_report_from_precondition_gate(
+            &precondition_gate_report(true),
+        );
+        let blocked_owner_report =
+            buffer_import_implementation_owner_shell_report_from_execution_dry_run(
+                &blocked_dry_run,
+            );
+        let blocked_attempt_record =
+            buffer_import_actual_attempt_record_from_owner_shell(&blocked_owner_report);
+
+        assert!(blocked_attempt_record.actual_attempt_record_available);
+        assert!(blocked_attempt_record.actual_attempt_recorded);
+        assert!(blocked_attempt_record.actual_attempt_admission_checked);
+        assert!(!blocked_attempt_record.actual_attempt_admitted);
+        assert!(blocked_attempt_record.actual_attempt_blocked);
+        assert!(blocked_attempt_record.actual_import_required);
+        assert!(blocked_attempt_record.blockers.contains(
+            &RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingRealBufferImportImplementation,
+        ));
+        assert!(blocked_attempt_record.blockers.contains(
+            &RuntimeSurfaceCommitBufferImportActualAttemptBlocker::MissingAttemptAdmission
+        ));
+        assert!(!blocked_attempt_record.buffer_import_attempted);
+        assert!(!blocked_attempt_record.buffer_imported);
+        assert!(!blocked_attempt_record.texture_created);
+        assert!(!blocked_attempt_record.renderer_called);
+        assert!(!blocked_attempt_record.damage_submitted);
+        assert!(!blocked_attempt_record.frame_callback_done_sent);
+        assert!(!blocked_attempt_record.input_support);
+        assert!(!blocked_attempt_record.core_mutation_invoked);
     }
 
     /// 验证没有 client 的 single pump 安全返回，不 panic、不制造 core mutation。

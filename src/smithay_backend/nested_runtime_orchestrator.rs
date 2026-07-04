@@ -3221,13 +3221,13 @@ mod tests {
         assert_eq!(
             report
                 .surface_commit
-                .buffer_import_actual_attempt_admitted_count,
+                .buffer_import_actual_attempt_record_admitted_count,
             0
         );
         assert_eq!(
             report
                 .surface_commit
-                .buffer_import_actual_attempt_blocked_count,
+                .buffer_import_actual_attempt_record_blocked_count,
             3
         );
         assert_eq!(
@@ -3311,6 +3311,129 @@ mod tests {
             !report
                 .surface_commit
                 .buffer_import_implementation_owner_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_record_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_records
+                .len(),
+            3
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_record_available
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_recorded_count,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_admission_checked_count,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_admitted_count,
+            0
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_blocked_count,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_required_count,
+            0
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_owner_shell_blocked
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_no_actual_import_required
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_missing_admission
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_missing_frame_callback_done
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_actual_attempt_buffer_import_attempted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_actual_attempt_buffer_imported
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_actual_attempt_texture_created
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_actual_attempt_renderer_called
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_actual_attempt_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_actual_attempt_frame_callback_done_sent
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_actual_attempt_input_support
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_actual_attempt_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
