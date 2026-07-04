@@ -5821,6 +5821,138 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55K 必须建立 buffer import implementation owner shell / actual import owner boundary。
+    #[test]
+    fn buffer_import_implementation_owner_shell_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55K coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55K loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55K orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55K_BUFFER_IMPORT_IMPLEMENTATION_OWNER_SHELL.md"),
+        )
+        .expect("Phase 55K 文档必须存在");
+
+        for required in [
+            "pub struct RuntimeSurfaceCommitBufferImportImplementationOwnerShell",
+            "buffer_import_implementation_owner_shell:",
+            "RuntimeSurfaceCommitBufferImportImplementationOwnerShell",
+            "pub struct RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport",
+            "pub enum RuntimeSurfaceCommitBufferImportImplementationOwnerOperation",
+            "pub enum RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker",
+            "pub fn buffer_import_implementation_owner_shell_report_from_execution_dry_run",
+            "pub source_buffer_import_execution_dry_run_report_observed: bool",
+            "pub observed_execution_dry_run_report:",
+            "RuntimeSurfaceCommitBufferImportExecutionDryRunReport",
+            "pub implementation_owner_shell_available: bool",
+            "pub real_importer_implementation_available: bool",
+            "pub actual_import_attempt_admitted: bool",
+            "pub actual_import_attempt_blocked: bool",
+            "pub actual_import_required: bool",
+            "MissingRealBufferImportImplementation",
+            "ExecutionDryRunBlocked",
+            "NoActualImportRequired",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 55K coordinator buffer import implementation owner shell 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport",
+            "pub buffer_import_implementation_owner_shell_invocations: usize",
+            "pub buffer_import_implementation_owner_shell_reports:",
+            "Vec<RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport>",
+            "pub buffer_import_implementation_owner_shell_available: bool",
+            "pub buffer_import_real_implementation_available: bool",
+            "pub buffer_import_actual_attempt_admitted_count: usize",
+            "pub buffer_import_actual_attempt_blocked_count: usize",
+            "pub buffer_import_implementation_owner_missing_real_importer: bool",
+            "pub buffer_import_implementation_owner_execution_dry_run_blocked: bool",
+            "NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_implementation_owner_shell_report",
+            "report.buffer_import_implementation_owner_shell_report",
+            "buffer_import_implementation_owner_buffer_imported",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 55K loop buffer import implementation owner shell 缺少证据: {required}"
+            );
+        }
+
+        for required in [
+            "buffer_import_implementation_owner_shell_invocations",
+            "buffer_import_implementation_owner_shell_available",
+            "buffer_import_real_implementation_available",
+            "buffer_import_actual_attempt_admitted_count",
+            "buffer_import_actual_attempt_blocked_count",
+            "buffer_import_implementation_owner_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55K orchestrator buffer import implementation owner shell 缺少证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "render_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            ".done(",
+            "render_invoked: true",
+            "input_invoked: true",
+            "damage_submitted: true",
+            "renderable_buffer: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55K buffer import implementation owner shell 包含禁止 token: {forbidden}"
+            );
+        }
+
+        for required in [
+            "implementation_owner_shell_available = true",
+            "real_importer_implementation_available = false",
+            "actual_import_attempt_admitted = false",
+            "actual_import_attempt_blocked = true",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55K doc 缺少 owner shell/capability truth: {required}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
