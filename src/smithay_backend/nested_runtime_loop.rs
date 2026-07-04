@@ -27,6 +27,8 @@ use crate::{
         RuntimeSurfaceCommitBufferImportImplementationBlocker,
         RuntimeSurfaceCommitBufferImportImplementationBoundaryReport,
         RuntimeSurfaceCommitBufferImportImplementationDescriptor,
+        RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker,
+        RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport,
         RuntimeSurfaceCommitBufferImportPlanningBlocker,
         RuntimeSurfaceCommitBufferImportPlanningReport,
         RuntimeSurfaceCommitBufferImportPreconditionGateBlocker,
@@ -1599,6 +1601,79 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// execution dry-run 是否触发 core mutation；Phase 55J 固定保持 false。
     pub buffer_import_execution_core_mutation_invoked: bool,
 
+    /// buffer import implementation owner shell seam 被调用的次数。
+    pub buffer_import_implementation_owner_shell_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 buffer import implementation owner shell reports。
+    pub buffer_import_implementation_owner_shell_reports:
+        Vec<RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport>,
+
+    /// implementation owner shell 是否可用。
+    pub buffer_import_implementation_owner_shell_available: bool,
+
+    /// 真实 buffer import implementation 是否可用；Phase 55K 固定保持 false。
+    pub buffer_import_real_implementation_available: bool,
+
+    /// actual import attempt 被允许的数量；Phase 55K 应保持 0。
+    pub buffer_import_actual_attempt_admitted_count: usize,
+
+    /// actual import attempt 被阻止的数量。
+    pub buffer_import_actual_attempt_blocked_count: usize,
+
+    /// implementation owner shell 观察到 actual import required 的数量。
+    pub buffer_import_implementation_owner_actual_required_count: usize,
+
+    /// implementation owner shell 观察到 execution dry-run report 的数量。
+    pub buffer_import_implementation_owner_execution_reports_observed: usize,
+
+    /// implementation owner shell 是否缺少 execution dry-run report。
+    pub buffer_import_implementation_owner_missing_execution_dry_run_report: bool,
+
+    /// implementation owner shell 是否因 execution dry-run blocked 而 blocked。
+    pub buffer_import_implementation_owner_execution_dry_run_blocked: bool,
+
+    /// implementation owner shell 是否因无需 actual import 而 no-op。
+    pub buffer_import_implementation_owner_no_actual_import_required: bool,
+
+    /// implementation owner shell 是否缺少真实 buffer importer implementation。
+    pub buffer_import_implementation_owner_missing_real_importer: bool,
+
+    /// implementation owner shell 是否仍缺少 texture creation。
+    pub buffer_import_implementation_owner_missing_texture_creation: bool,
+
+    /// implementation owner shell 是否仍缺少 renderer call。
+    pub buffer_import_implementation_owner_missing_renderer_call: bool,
+
+    /// implementation owner shell 是否仍缺少 damage submit。
+    pub buffer_import_implementation_owner_missing_damage_submit: bool,
+
+    /// implementation owner shell 是否仍缺少 frame callback done。
+    pub buffer_import_implementation_owner_missing_frame_callback_done: bool,
+
+    /// implementation owner shell 是否尝试 import buffer；Phase 55K 固定保持 false。
+    pub buffer_import_implementation_owner_buffer_import_attempted: bool,
+
+    /// implementation owner shell 是否 import buffer；Phase 55K 固定保持 false。
+    pub buffer_import_implementation_owner_buffer_imported: bool,
+
+    /// implementation owner shell 是否创建 texture；Phase 55K 固定保持 false。
+    pub buffer_import_implementation_owner_texture_created: bool,
+
+    /// implementation owner shell 是否调用 renderer；Phase 55K 固定保持 false。
+    pub buffer_import_implementation_owner_renderer_called: bool,
+
+    /// implementation owner shell 是否提交 damage；Phase 55K 固定保持 false。
+    pub buffer_import_implementation_owner_damage_submitted: bool,
+
+    /// implementation owner shell 是否发送 frame callback done；Phase 55K 固定保持 false。
+    pub buffer_import_implementation_owner_frame_callback_done_sent: bool,
+
+    /// implementation owner shell 是否接入 input；Phase 55K 固定保持 false。
+    pub buffer_import_implementation_owner_input_support: bool,
+
+    /// implementation owner shell 是否触发 core mutation；Phase 55K 固定保持 false。
+    pub buffer_import_implementation_owner_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -1997,6 +2072,30 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             buffer_import_execution_frame_callback_done_sent: false,
             buffer_import_execution_input_support: false,
             buffer_import_execution_core_mutation_invoked: false,
+            buffer_import_implementation_owner_shell_invocations: 0,
+            buffer_import_implementation_owner_shell_reports: Vec::new(),
+            buffer_import_implementation_owner_shell_available: false,
+            buffer_import_real_implementation_available: false,
+            buffer_import_actual_attempt_admitted_count: 0,
+            buffer_import_actual_attempt_blocked_count: 0,
+            buffer_import_implementation_owner_actual_required_count: 0,
+            buffer_import_implementation_owner_execution_reports_observed: 0,
+            buffer_import_implementation_owner_missing_execution_dry_run_report: false,
+            buffer_import_implementation_owner_execution_dry_run_blocked: false,
+            buffer_import_implementation_owner_no_actual_import_required: false,
+            buffer_import_implementation_owner_missing_real_importer: false,
+            buffer_import_implementation_owner_missing_texture_creation: false,
+            buffer_import_implementation_owner_missing_renderer_call: false,
+            buffer_import_implementation_owner_missing_damage_submit: false,
+            buffer_import_implementation_owner_missing_frame_callback_done: false,
+            buffer_import_implementation_owner_buffer_import_attempted: false,
+            buffer_import_implementation_owner_buffer_imported: false,
+            buffer_import_implementation_owner_texture_created: false,
+            buffer_import_implementation_owner_renderer_called: false,
+            buffer_import_implementation_owner_damage_submitted: false,
+            buffer_import_implementation_owner_frame_callback_done_sent: false,
+            buffer_import_implementation_owner_input_support: false,
+            buffer_import_implementation_owner_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -2879,6 +2978,70 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_buffer_import_implementation_owner_shell_report(
+        report: &RuntimeSurfaceCommitBufferImportImplementationOwnerShellReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            buffer_import_implementation_owner_shell_invocations: usize::from(
+                report.owner_shell_invoked,
+            ),
+            buffer_import_implementation_owner_shell_reports: vec![report.clone()],
+            buffer_import_implementation_owner_shell_available: report
+                .implementation_owner_shell_available,
+            buffer_import_real_implementation_available: report
+                .real_importer_implementation_available,
+            buffer_import_actual_attempt_admitted_count: usize::from(
+                report.actual_import_attempt_admitted,
+            ),
+            buffer_import_actual_attempt_blocked_count: usize::from(
+                report.actual_import_attempt_blocked,
+            ),
+            buffer_import_implementation_owner_actual_required_count: usize::from(
+                report.actual_import_required,
+            ),
+            buffer_import_implementation_owner_execution_reports_observed: usize::from(
+                report.source_buffer_import_execution_dry_run_report_observed,
+            ),
+            buffer_import_implementation_owner_missing_execution_dry_run_report: has_blocker(
+                RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker::MissingExecutionDryRunReport,
+            ),
+            buffer_import_implementation_owner_execution_dry_run_blocked: has_blocker(
+                RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker::ExecutionDryRunBlocked,
+            ),
+            buffer_import_implementation_owner_no_actual_import_required: has_blocker(
+                RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker::NoActualImportRequired,
+            ),
+            buffer_import_implementation_owner_missing_real_importer: has_blocker(
+                RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker::MissingRealBufferImportImplementation,
+            ),
+            buffer_import_implementation_owner_missing_texture_creation: has_blocker(
+                RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker::MissingTextureCreation,
+            ),
+            buffer_import_implementation_owner_missing_renderer_call: has_blocker(
+                RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker::MissingRendererCall,
+            ),
+            buffer_import_implementation_owner_missing_damage_submit: has_blocker(
+                RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker::MissingDamageSubmit,
+            ),
+            buffer_import_implementation_owner_missing_frame_callback_done: has_blocker(
+                RuntimeSurfaceCommitBufferImportImplementationOwnerBlocker::MissingFrameCallbackDone,
+            ),
+            buffer_import_implementation_owner_buffer_import_attempted: report
+                .buffer_import_attempted,
+            buffer_import_implementation_owner_buffer_imported: report.buffer_imported,
+            buffer_import_implementation_owner_texture_created: report.texture_created,
+            buffer_import_implementation_owner_renderer_called: report.renderer_called,
+            buffer_import_implementation_owner_damage_submitted: report.damage_submitted,
+            buffer_import_implementation_owner_frame_callback_done_sent: report
+                .frame_callback_done_sent,
+            buffer_import_implementation_owner_input_support: report.input_support,
+            buffer_import_implementation_owner_core_mutation_invoked: report
+                .core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -3656,6 +3819,59 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.buffer_import_execution_input_support |= delta.buffer_import_execution_input_support;
         self.buffer_import_execution_core_mutation_invoked |=
             delta.buffer_import_execution_core_mutation_invoked;
+        self.buffer_import_implementation_owner_shell_invocations = self
+            .buffer_import_implementation_owner_shell_invocations
+            .saturating_add(delta.buffer_import_implementation_owner_shell_invocations);
+        self.buffer_import_implementation_owner_shell_reports
+            .extend(delta.buffer_import_implementation_owner_shell_reports);
+        self.buffer_import_implementation_owner_shell_available |=
+            delta.buffer_import_implementation_owner_shell_available;
+        self.buffer_import_real_implementation_available |=
+            delta.buffer_import_real_implementation_available;
+        self.buffer_import_actual_attempt_admitted_count = self
+            .buffer_import_actual_attempt_admitted_count
+            .saturating_add(delta.buffer_import_actual_attempt_admitted_count);
+        self.buffer_import_actual_attempt_blocked_count = self
+            .buffer_import_actual_attempt_blocked_count
+            .saturating_add(delta.buffer_import_actual_attempt_blocked_count);
+        self.buffer_import_implementation_owner_actual_required_count = self
+            .buffer_import_implementation_owner_actual_required_count
+            .saturating_add(delta.buffer_import_implementation_owner_actual_required_count);
+        self.buffer_import_implementation_owner_execution_reports_observed = self
+            .buffer_import_implementation_owner_execution_reports_observed
+            .saturating_add(delta.buffer_import_implementation_owner_execution_reports_observed);
+        self.buffer_import_implementation_owner_missing_execution_dry_run_report |=
+            delta.buffer_import_implementation_owner_missing_execution_dry_run_report;
+        self.buffer_import_implementation_owner_execution_dry_run_blocked |=
+            delta.buffer_import_implementation_owner_execution_dry_run_blocked;
+        self.buffer_import_implementation_owner_no_actual_import_required |=
+            delta.buffer_import_implementation_owner_no_actual_import_required;
+        self.buffer_import_implementation_owner_missing_real_importer |=
+            delta.buffer_import_implementation_owner_missing_real_importer;
+        self.buffer_import_implementation_owner_missing_texture_creation |=
+            delta.buffer_import_implementation_owner_missing_texture_creation;
+        self.buffer_import_implementation_owner_missing_renderer_call |=
+            delta.buffer_import_implementation_owner_missing_renderer_call;
+        self.buffer_import_implementation_owner_missing_damage_submit |=
+            delta.buffer_import_implementation_owner_missing_damage_submit;
+        self.buffer_import_implementation_owner_missing_frame_callback_done |=
+            delta.buffer_import_implementation_owner_missing_frame_callback_done;
+        self.buffer_import_implementation_owner_buffer_import_attempted |=
+            delta.buffer_import_implementation_owner_buffer_import_attempted;
+        self.buffer_import_implementation_owner_buffer_imported |=
+            delta.buffer_import_implementation_owner_buffer_imported;
+        self.buffer_import_implementation_owner_texture_created |=
+            delta.buffer_import_implementation_owner_texture_created;
+        self.buffer_import_implementation_owner_renderer_called |=
+            delta.buffer_import_implementation_owner_renderer_called;
+        self.buffer_import_implementation_owner_damage_submitted |=
+            delta.buffer_import_implementation_owner_damage_submitted;
+        self.buffer_import_implementation_owner_frame_callback_done_sent |=
+            delta.buffer_import_implementation_owner_frame_callback_done_sent;
+        self.buffer_import_implementation_owner_input_support |=
+            delta.buffer_import_implementation_owner_input_support;
+        self.buffer_import_implementation_owner_core_mutation_invoked |=
+            delta.buffer_import_implementation_owner_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -3898,6 +4114,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_execution_dry_run_report(
                 &report.buffer_import_execution_dry_run_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_implementation_owner_shell_report(
+                &report.buffer_import_implementation_owner_shell_report,
             ),
         );
 
@@ -7174,6 +7395,123 @@ mod tests {
             !report
                 .surface_commit
                 .buffer_import_execution_core_mutation_invoked
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_shell_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_shell_reports
+                .len(),
+            3
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_shell_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_real_implementation_available
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_admitted_count,
+            0
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_actual_attempt_blocked_count,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_actual_required_count,
+            0
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_execution_reports_observed,
+            3
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_execution_dry_run_blocked
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_no_actual_import_required
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_missing_texture_creation
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_missing_renderer_call
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_missing_damage_submit
+        );
+        assert!(
+            report
+                .surface_commit
+                .buffer_import_implementation_owner_missing_frame_callback_done
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_implementation_owner_buffer_import_attempted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_implementation_owner_buffer_imported
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_implementation_owner_texture_created
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_implementation_owner_renderer_called
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_implementation_owner_damage_submitted
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_implementation_owner_frame_callback_done_sent
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_implementation_owner_input_support
+        );
+        assert!(
+            !report
+                .surface_commit
+                .buffer_import_implementation_owner_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
