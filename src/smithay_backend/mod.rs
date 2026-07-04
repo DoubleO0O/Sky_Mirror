@@ -6216,6 +6216,130 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 55N 只做真实 import route 决策矩阵和非执行 adapter contract。
+    ///
+    /// 这个 source-contract 防止把路线推荐写成真实实现：buffer import 仍未发生，
+    /// texture creation 仍未发生，renderer call 仍未发生，frame callback done 仍未发送，
+    /// core mutation 仍未发生。
+    #[test]
+    fn real_import_route_decision_matrix_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 55N coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 55N loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 55N orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_55N_REAL_IMPORT_ROUTE_DECISION_MATRIX.md"),
+        )
+        .expect("Phase 55N 文档必须存在");
+
+        // 文档必须证明 Phase 55N 只提供决策矩阵和非执行 contract，不进入真实资源实现。
+        for required in [
+            "Phase 55N - Real Import Route Decision Matrix",
+            "SHM-first nested MVP route",
+            "dmabuf route",
+            "EGL/GLES/GBM route",
+            "WGPU route",
+            "hybrid staged route",
+            "Non-executing Adapter Contract",
+            "input evidence",
+            "output evidence",
+            "adapter surface id",
+            "commit sequence",
+            "buffer presence evidence",
+            "buffer candidate evidence",
+            "actual import required",
+            "precondition gate evidence",
+            "execution dry-run evidence",
+            "implementation owner shell evidence",
+            "route selected",
+            "adapter contract available",
+            "real importer missing",
+            "execution allowed = false",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+            "Phase 56A: minimal SHM-first buffer import adapter skeleton",
+            "WindowId",
+            "Geometry",
+            "State",
+            "Layout",
+            "Action",
+            "Command",
+            "smithay_backend / Linux-only adapter",
+            "This is a recommendation, not an implementation",
+            "waiting for user authorization on Phase 56A",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 55N decision matrix 文档缺少非执行 contract 证据: {required}"
+            );
+        }
+
+        // 生产 source 仍必须保持真实执行 capability 为 false；测试字符串本身不作为生产证据。
+        for required in [
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                coordinator.contains(required) || runtime_loop.contains(required),
+                "Phase 55N source 缺少 capability truth false 证据: {required}"
+            );
+        }
+
+        // Phase 55N 不新增 production seam，但必须继续保留 55L actual attempt record 的报告边界。
+        for required in [
+            "buffer_import_actual_attempt_record_invocations",
+            "buffer_import_actual_attempt_record_available",
+            "buffer_import_actual_attempt_recorded_count",
+            "buffer_import_actual_attempt_admission_checked_count",
+            "buffer_import_actual_attempt_record_blocked_count",
+            "buffer_import_actual_attempt_buffer_imported",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 55N orchestrator 缺少既有 actual attempt record 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+        ] {
+            assert!(
+                !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 55N source 包含禁止的真实执行声明: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {
