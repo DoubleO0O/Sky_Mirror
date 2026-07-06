@@ -54,6 +54,126 @@ pub fn observe_wl_buffer_type_boundary(_buffer: &WlBuffer) -> LinuxShmBufferType
     }
 }
 
+/// The SHM metadata taxonomy observed at the Linux-only adapter boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinuxShmBufferMetadataKind {
+    /// A Smithay-managed SHM buffer exposed metadata.
+    Shm,
+    /// A concrete `WlBuffer` was present but not managed by Smithay SHM.
+    UnsupportedNonShmBuffer,
+    /// Metadata could not be read safely or no concrete buffer was available.
+    Unavailable,
+}
+
+/// Pure-data SHM buffer metadata evidence.
+///
+/// This copies only Smithay `BufferData` fields. It never retains a `WlBuffer`,
+/// never imports a buffer, and never creates a texture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxShmBufferMetadataEvidence {
+    /// The Linux-only adapter attempted metadata extraction.
+    pub shm_metadata_extraction_attempted: bool,
+
+    /// The taxonomy result for the observed buffer.
+    pub shm_buffer_metadata_kind: LinuxShmBufferMetadataKind,
+
+    /// Metadata is available and can be reported as pure data.
+    pub shm_metadata_available: bool,
+
+    /// Metadata was observed from Smithay `BufferData`.
+    pub shm_metadata_observed: bool,
+
+    /// Buffer offset in bytes.
+    pub offset: Option<i32>,
+
+    /// Buffer width from Smithay SHM metadata.
+    pub width: Option<i32>,
+
+    /// Buffer height from Smithay SHM metadata.
+    pub height: Option<i32>,
+
+    /// Buffer stride in bytes.
+    pub stride: Option<i32>,
+
+    /// Buffer format rendered as a stable debug string.
+    pub format: Option<String>,
+
+    /// Metadata extraction failed or is unsupported.
+    pub unavailable_or_unsupported_reason: Option<String>,
+
+    /// Phase 56B does not attempt real import.
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56B does not complete real import.
+    pub buffer_imported: bool,
+
+    /// Phase 56B does not create textures.
+    pub texture_created: bool,
+
+    /// Phase 56B does not call a renderer.
+    pub renderer_called: bool,
+}
+
+/// Extract SHM buffer metadata from a concrete `WlBuffer` at the Linux-only adapter boundary.
+///
+/// The closure copies only `BufferData` fields. It does not retain SHM memory,
+/// construct a slice, import a buffer, create a texture, or call a renderer.
+#[must_use = "SHM metadata evidence is not a buffer import"]
+pub fn extract_shm_buffer_metadata_evidence(buffer: &WlBuffer) -> LinuxShmBufferMetadataEvidence {
+    match smithay::wayland::shm::with_buffer_contents(buffer, |_, _, metadata| metadata) {
+        Ok(metadata) => LinuxShmBufferMetadataEvidence {
+            shm_metadata_extraction_attempted: true,
+            shm_buffer_metadata_kind: LinuxShmBufferMetadataKind::Shm,
+            shm_metadata_available: true,
+            shm_metadata_observed: true,
+            offset: Some(metadata.offset),
+            width: Some(metadata.width),
+            height: Some(metadata.height),
+            stride: Some(metadata.stride),
+            format: Some(format!("{:?}", metadata.format)),
+            unavailable_or_unsupported_reason: None,
+            buffer_import_attempted: false,
+            buffer_imported: false,
+            texture_created: false,
+            renderer_called: false,
+        },
+        Err(smithay::wayland::shm::BufferAccessError::NotManaged) => {
+            LinuxShmBufferMetadataEvidence {
+                shm_metadata_extraction_attempted: true,
+                shm_buffer_metadata_kind: LinuxShmBufferMetadataKind::UnsupportedNonShmBuffer,
+                shm_metadata_available: false,
+                shm_metadata_observed: false,
+                offset: None,
+                width: None,
+                height: None,
+                stride: None,
+                format: None,
+                unavailable_or_unsupported_reason: Some("UnsupportedNonShmBuffer".to_owned()),
+                buffer_import_attempted: false,
+                buffer_imported: false,
+                texture_created: false,
+                renderer_called: false,
+            }
+        }
+        Err(error) => LinuxShmBufferMetadataEvidence {
+            shm_metadata_extraction_attempted: true,
+            shm_buffer_metadata_kind: LinuxShmBufferMetadataKind::Unavailable,
+            shm_metadata_available: false,
+            shm_metadata_observed: false,
+            offset: None,
+            width: None,
+            height: None,
+            stride: None,
+            format: None,
+            unavailable_or_unsupported_reason: Some(format!("{error:?}")),
+            buffer_import_attempted: false,
+            buffer_imported: false,
+            texture_created: false,
+            renderer_called: false,
+        },
+    }
+}
+
 /// Phase 56A SHM-first adapter operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation {
@@ -183,6 +303,125 @@ pub struct RuntimeSurfaceCommitShmFirstBufferImportAdapterReport {
     pub blockers: Vec<RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker>,
 }
 
+/// Phase 56B metadata operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitShmBufferMetadataOperation {
+    /// Observe the Phase 56A SHM-first adapter report.
+    ObserveShmFirstAdapterReport,
+    /// Check for concrete SHM metadata evidence.
+    CheckShmMetadataEvidence,
+    /// Classify metadata availability.
+    ClassifyMetadataAvailability,
+    /// Build the pure-data metadata report.
+    BuildMetadataReport,
+}
+
+/// Phase 56B metadata blockers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitShmBufferMetadataBlocker {
+    /// No Phase 56A adapter report was observed.
+    MissingShmFirstAdapterReport,
+    /// Runtime does not yet carry a concrete `WlBuffer`.
+    MetadataUnavailable,
+    /// The concrete buffer was not Smithay SHM-managed.
+    UnsupportedNonShmBuffer,
+    /// Texture creation remains forbidden in Phase 56B.
+    TextureCreationForbiddenInPhase56B,
+    /// Renderer calls remain forbidden in Phase 56B.
+    RendererCallForbiddenInPhase56B,
+    /// Damage submit remains forbidden in Phase 56B.
+    DamageSubmitForbiddenInPhase56B,
+    /// Frame callback done remains forbidden in Phase 56B.
+    FrameCallbackDoneForbiddenInPhase56B,
+    /// DRM / GBM / dmabuf routes remain forbidden in Phase 56B.
+    DrmGbmDmabufForbiddenInPhase56B,
+}
+
+/// Runtime-visible pure-data SHM metadata report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitShmBufferMetadataReport {
+    /// Metadata report seam was invoked.
+    pub shm_metadata_report_invoked: bool,
+
+    /// Source Phase 56A adapter report was observed.
+    pub source_shm_first_adapter_report_observed: bool,
+
+    /// The observed Phase 56A adapter report.
+    pub observed_shm_first_adapter_report: RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+
+    /// Metadata extraction boundary is defined.
+    pub shm_metadata_extraction_boundary_available: bool,
+
+    /// Metadata evidence is available.
+    pub shm_metadata_available: bool,
+
+    /// Metadata was observed from a concrete SHM buffer.
+    pub shm_metadata_observed: bool,
+
+    /// Metadata is unavailable in this runtime path.
+    pub shm_metadata_unavailable: bool,
+
+    /// Metadata taxonomy kind.
+    pub shm_buffer_metadata_kind: LinuxShmBufferMetadataKind,
+
+    /// Width metadata was observed.
+    pub width_observed: bool,
+
+    /// Height metadata was observed.
+    pub height_observed: bool,
+
+    /// Stride metadata was observed.
+    pub stride_observed: bool,
+
+    /// Format metadata was observed.
+    pub format_observed: bool,
+
+    /// Buffer offset in bytes.
+    pub offset: Option<i32>,
+
+    /// Buffer width.
+    pub width: Option<i32>,
+
+    /// Buffer height.
+    pub height: Option<i32>,
+
+    /// Buffer stride.
+    pub stride: Option<i32>,
+
+    /// Buffer format.
+    pub format: Option<String>,
+
+    /// Phase 56B does not attempt real import.
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56B does not complete real import.
+    pub buffer_imported: bool,
+
+    /// Phase 56B does not create textures.
+    pub texture_created: bool,
+
+    /// Phase 56B does not call a renderer.
+    pub renderer_called: bool,
+
+    /// Phase 56B does not submit damage.
+    pub damage_submitted: bool,
+
+    /// Phase 56B does not send frame callback done.
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56B does not connect input.
+    pub input_support: bool,
+
+    /// Phase 56B does not mutate core.
+    pub core_mutation_invoked: bool,
+
+    /// Operations performed by the metadata seam.
+    pub operations: Vec<RuntimeSurfaceCommitShmBufferMetadataOperation>,
+
+    /// Blockers that keep the path evidence-only.
+    pub blockers: Vec<RuntimeSurfaceCommitShmBufferMetadataBlocker>,
+}
+
 /// Runtime-owned Linux-only SHM-first adapter skeleton.
 #[derive(Debug, Default)]
 pub struct LinuxShmFirstBufferImportAdapterSkeleton;
@@ -200,6 +439,15 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
         boundary: Option<LinuxShmBufferTypeBoundaryEvidence>,
     ) -> RuntimeSurfaceCommitShmFirstBufferImportAdapterReport {
         shm_first_buffer_import_adapter_report_from_actual_attempt_record(record, boundary)
+    }
+
+    /// Build the Phase 56B metadata report from the Phase 56A adapter report.
+    pub fn metadata_report_from_adapter_report(
+        &mut self,
+        report: &RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+        metadata: Option<LinuxShmBufferMetadataEvidence>,
+    ) -> RuntimeSurfaceCommitShmBufferMetadataReport {
+        shm_buffer_metadata_report_from_adapter_report(report, metadata)
     }
 }
 
@@ -279,6 +527,85 @@ pub fn shm_first_buffer_import_adapter_report_from_actual_attempt_record(
             RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation::CheckWlBufferTypeBoundary,
             RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation::CheckNoTextureBoundary,
             RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation::BuildEvidenceOnlyReport,
+        ],
+        blockers,
+    }
+}
+
+/// Convert Phase 56A adapter report and optional Linux-only metadata evidence into a runtime report.
+#[must_use = "SHM metadata report remains evidence-only in Phase 56B"]
+pub fn shm_buffer_metadata_report_from_adapter_report(
+    report: &RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+    metadata: Option<LinuxShmBufferMetadataEvidence>,
+) -> RuntimeSurfaceCommitShmBufferMetadataReport {
+    let metadata_available = metadata
+        .as_ref()
+        .is_some_and(|evidence| evidence.shm_metadata_available);
+    let metadata_observed = metadata
+        .as_ref()
+        .is_some_and(|evidence| evidence.shm_metadata_observed);
+    let metadata_kind = metadata
+        .as_ref()
+        .map_or(LinuxShmBufferMetadataKind::Unavailable, |evidence| {
+            evidence.shm_buffer_metadata_kind.clone()
+        });
+    let mut blockers = Vec::new();
+    if !report.shm_buffer_import_adapter_invoked {
+        blockers.push(RuntimeSurfaceCommitShmBufferMetadataBlocker::MissingShmFirstAdapterReport);
+    }
+    if !metadata_available {
+        blockers.push(RuntimeSurfaceCommitShmBufferMetadataBlocker::MetadataUnavailable);
+    }
+    if metadata_kind == LinuxShmBufferMetadataKind::UnsupportedNonShmBuffer {
+        blockers.push(RuntimeSurfaceCommitShmBufferMetadataBlocker::UnsupportedNonShmBuffer);
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitShmBufferMetadataBlocker::TextureCreationForbiddenInPhase56B,
+        RuntimeSurfaceCommitShmBufferMetadataBlocker::RendererCallForbiddenInPhase56B,
+        RuntimeSurfaceCommitShmBufferMetadataBlocker::DamageSubmitForbiddenInPhase56B,
+        RuntimeSurfaceCommitShmBufferMetadataBlocker::FrameCallbackDoneForbiddenInPhase56B,
+        RuntimeSurfaceCommitShmBufferMetadataBlocker::DrmGbmDmabufForbiddenInPhase56B,
+    ]);
+
+    let offset = metadata.as_ref().and_then(|evidence| evidence.offset);
+    let width = metadata.as_ref().and_then(|evidence| evidence.width);
+    let height = metadata.as_ref().and_then(|evidence| evidence.height);
+    let stride = metadata.as_ref().and_then(|evidence| evidence.stride);
+    let format = metadata
+        .as_ref()
+        .and_then(|evidence| evidence.format.clone());
+
+    RuntimeSurfaceCommitShmBufferMetadataReport {
+        shm_metadata_report_invoked: true,
+        source_shm_first_adapter_report_observed: report.shm_buffer_import_adapter_invoked,
+        observed_shm_first_adapter_report: report.clone(),
+        shm_metadata_extraction_boundary_available: true,
+        shm_metadata_available: metadata_available,
+        shm_metadata_observed: metadata_observed,
+        shm_metadata_unavailable: !metadata_available,
+        shm_buffer_metadata_kind: metadata_kind,
+        width_observed: width.is_some(),
+        height_observed: height.is_some(),
+        stride_observed: stride.is_some(),
+        format_observed: format.is_some(),
+        offset,
+        width,
+        height,
+        stride,
+        format,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitShmBufferMetadataOperation::ObserveShmFirstAdapterReport,
+            RuntimeSurfaceCommitShmBufferMetadataOperation::CheckShmMetadataEvidence,
+            RuntimeSurfaceCommitShmBufferMetadataOperation::ClassifyMetadataAvailability,
+            RuntimeSurfaceCommitShmBufferMetadataOperation::BuildMetadataReport,
         ],
         blockers,
     }
