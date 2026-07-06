@@ -604,6 +604,17 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitShmBufferMetadataReport {
         shm_buffer_metadata_report_from_adapter_report(report, metadata)
     }
+
+    /// 从 Phase 56D metadata validation harness report 派生 Phase 56E texture precondition audit。
+    ///
+    /// 该 owner 方法只生成 blocked pure-data report；texture precondition allowed
+    /// 不等于 texture created，metadata sufficient 不等于 renderer call。
+    pub fn texture_creation_precondition_audit_from_metadata_report(
+        &mut self,
+        report: &RuntimeSurfaceCommitShmBufferMetadataReport,
+    ) -> RuntimeSurfaceCommitTextureCreationPreconditionAuditReport {
+        texture_creation_precondition_audit_from_metadata_report(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -802,5 +813,384 @@ pub fn shm_buffer_metadata_report_from_adapter_report(
             RuntimeSurfaceCommitShmBufferMetadataOperation::BuildMetadataReport,
         ],
         blockers,
+    }
+}
+
+/// Phase 56E texture creation 前置条件审计执行的纯数据步骤。
+///
+/// 这些步骤只消费 Phase 56D validation harness 与 metadata evidence；texture
+/// precondition allowed 不等于 texture created，metadata sufficient 也不等于
+/// renderer call。本阶段不创建 texture、不调用 renderer、不提交 damage、不发送
+/// frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureCreationPreconditionOperation {
+    /// 观察 Phase 56B/56C/56D SHM metadata report。
+    ObserveShmMetadataReport,
+    /// 检查 validation harness 是否覆盖所需 blocker paths。
+    CheckValidationHarness,
+    /// 检查 metadata 字段是否足以作为未来 texture precondition evidence。
+    CheckMetadataPreconditionInputs,
+    /// 检查 renderer backend instance 是否真实可用。
+    CheckRendererBackendInstance,
+    /// 检查 texture import route 是否真实可用。
+    CheckTextureImportRoute,
+    /// 构建安全 blocked audit report。
+    BuildTexturePreconditionAuditReport,
+}
+
+/// Phase 56E texture creation 前置条件 blocker taxonomy。
+///
+/// 每个 blocker 都是安全边界：它说明为什么当前只能停在 audit/report，不能把
+/// runtime evidence 误报为真实 texture object、renderer call、damage submit 或
+/// frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureCreationPreconditionBlocker {
+    /// 缺少 Phase 56D validation harness evidence。
+    MetadataValidationMissing,
+    /// metadata 尚不足以允许 texture precondition。
+    MetadataInsufficient,
+    /// width metadata 未知。
+    UnknownWidth,
+    /// height metadata 未知。
+    UnknownHeight,
+    /// stride metadata 未知。
+    UnknownStride,
+    /// format metadata 未知。
+    UnknownFormat,
+    /// buffer kind 不是已支持的 SHM evidence。
+    UnsupportedBufferKind,
+    /// 缺少 buffer lifetime ownership policy。
+    MissingLifetimePolicy,
+    /// 缺少 cleanup ownership policy。
+    MissingCleanupPolicy,
+    /// 缺少真实 renderer backend instance。
+    MissingRendererBackendInstance,
+    /// 缺少真实 texture import route。
+    MissingTextureImportRoute,
+    /// 缺少 damage 到 texture/render 的映射策略。
+    MissingDamageToTextureMapping,
+    /// 缺少 frame callback completion policy。
+    MissingFrameCallbackCompletionPolicy,
+    /// runtime 只有 evidence，没有 texture creation execution。
+    RuntimeEvidenceWithoutTextureCreation,
+}
+
+/// Phase 56E texture precondition checklist。
+///
+/// checklist 是 pure-data 审计结果。真实 Smithay / Wayland / `WlBuffer` /
+/// `BufferData` / texture / renderer 类型仍只能停留在 `smithay_backend` 的
+/// Linux-only adapter/glue 层，core 不感知这些资源类型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureCreationPreconditionChecklist {
+    /// Phase 56D validation harness 是否通过。
+    pub metadata_validation_passed: bool,
+
+    /// metadata 是否足以进入 texture precondition；本阶段保持 false。
+    pub metadata_sufficient_for_texture_precondition: bool,
+
+    /// width metadata 是否已知。
+    pub width_known: bool,
+
+    /// height metadata 是否已知。
+    pub height_known: bool,
+
+    /// stride metadata 是否已知。
+    pub stride_known: bool,
+
+    /// format metadata 是否已知。
+    pub format_known: bool,
+
+    /// buffer kind 是否受支持。
+    pub buffer_kind_supported: bool,
+
+    /// buffer lifetime policy 是否已知；本阶段保持 false。
+    pub lifetime_policy_known: bool,
+
+    /// cleanup policy 是否已知；本阶段保持 false。
+    pub cleanup_policy_known: bool,
+
+    /// 真实 renderer backend instance 是否可用；本阶段保持 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// 真实 texture import route 是否可用；本阶段保持 false。
+    pub texture_import_route_available: bool,
+
+    /// damage-to-texture/render mapping 是否可用；本阶段保持 false。
+    pub damage_to_texture_mapping_available: bool,
+
+    /// frame callback completion policy 是否可用；本阶段保持 false。
+    pub frame_callback_completion_policy_available: bool,
+
+    /// 是否允许进入 texture precondition；Phase 56E 固定 blocked/false。
+    pub texture_precondition_allowed: bool,
+}
+
+/// Phase 56E texture creation precondition audit report。
+///
+/// 该 report 从 Phase 56D validation harness 派生，只说明 texture creation 之前
+/// 还缺哪些安全前置条件。它不 import buffer、不创建 texture、不调用 renderer、
+/// 不提交 damage、不发送 frame callback done、不接 input，也不触发 core mutation。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureCreationPreconditionAuditReport {
+    /// texture precondition audit seam 是否可用。
+    pub texture_precondition_audit_available: bool,
+
+    /// 是否观察到上游 SHM metadata report。
+    pub source_metadata_report_observed: bool,
+
+    /// 观察到的上游 SHM metadata report；直接消费 validation harness 时为空。
+    pub observed_metadata_report: Option<RuntimeSurfaceCommitShmBufferMetadataReport>,
+
+    /// Phase 56D validation harness report。
+    pub validation_harness_report: RuntimeSurfaceCommitShmMetadataValidationHarnessReport,
+
+    /// texture precondition checklist。
+    pub checklist: RuntimeSurfaceCommitTextureCreationPreconditionChecklist,
+
+    /// metadata 是否足以进入 texture precondition；本阶段保持 false。
+    pub metadata_sufficient_for_texture_precondition: bool,
+
+    /// renderer backend instance 是否真实可用；本阶段保持 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// texture import route 是否真实可用；本阶段保持 false。
+    pub texture_import_route_available: bool,
+
+    /// damage-to-texture/render mapping 是否真实可用；本阶段保持 false。
+    pub damage_to_texture_mapping_available: bool,
+
+    /// frame callback completion policy 是否真实可用；本阶段保持 false。
+    pub frame_callback_completion_policy_available: bool,
+
+    /// 是否允许进入 texture precondition；Phase 56E 固定 false。
+    pub texture_precondition_allowed: bool,
+
+    /// 是否因缺少真实资源前置条件而 blocked；Phase 56E 固定 true。
+    pub texture_precondition_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub texture_precondition_blocker_reason: &'static str,
+
+    /// Phase 56E 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56E 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56E 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56E 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56E 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56E 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56E 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56E 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// 审计执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitTextureCreationPreconditionOperation>,
+
+    /// 阻止进入真实 texture creation 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitTextureCreationPreconditionBlocker>,
+}
+
+/// 从 Phase 56D validation harness / metadata report 派生 texture precondition audit。
+///
+/// 这是 Phase 56E 的唯一执行入口：它只生成 pure-data blocked report。真实
+/// buffer 类型仍留在 Linux-only adapter，core 不感知 `wl_buffer`、Smithay
+/// `BufferData`、texture 或 renderer。本函数不创建 texture、不调用 renderer、
+/// 不提交 damage、不发送 frame callback done。
+#[must_use = "texture precondition audit is not texture creation"]
+pub fn texture_creation_precondition_audit_from_metadata_report(
+    report: &RuntimeSurfaceCommitShmBufferMetadataReport,
+) -> RuntimeSurfaceCommitTextureCreationPreconditionAuditReport {
+    texture_creation_precondition_audit_from_parts(
+        true,
+        Some(report.clone()),
+        report.validation_harness_report.clone(),
+        report.width_observed,
+        report.height_observed,
+        report.stride_observed,
+        report.format_observed,
+        report.shm_buffer_metadata_kind == LinuxShmBufferMetadataKind::Shm,
+    )
+}
+
+/// 直接从 Phase 56D validation harness report 派生 Phase 56E audit。
+///
+/// 该入口用于证明 validation harness 可以被提升为 texture precondition audit
+/// evidence，但仍不会创建 texture、不会调用 renderer，也不会把任何真实
+/// `WlBuffer` / `BufferData` / texture / renderer 类型传入 core。
+#[must_use = "validation harness audit is not texture creation"]
+pub fn texture_creation_precondition_audit_from_validation_harness_report(
+    validation_harness_report: &RuntimeSurfaceCommitShmMetadataValidationHarnessReport,
+) -> RuntimeSurfaceCommitTextureCreationPreconditionAuditReport {
+    texture_creation_precondition_audit_from_parts(
+        false,
+        None,
+        validation_harness_report.clone(),
+        false,
+        false,
+        false,
+        false,
+        false,
+    )
+}
+
+fn texture_creation_precondition_audit_from_parts(
+    source_metadata_report_observed: bool,
+    observed_metadata_report: Option<RuntimeSurfaceCommitShmBufferMetadataReport>,
+    validation_harness_report: RuntimeSurfaceCommitShmMetadataValidationHarnessReport,
+    width_observed: bool,
+    height_observed: bool,
+    stride_observed: bool,
+    format_observed: bool,
+    buffer_kind_supported: bool,
+) -> RuntimeSurfaceCommitTextureCreationPreconditionAuditReport {
+    let metadata_validation_passed = validation_harness_report.validation_harness_invoked
+        && validation_harness_report.all_validation_paths_covered;
+
+    // Phase 56E 故意保持 conservative：即使 metadata 字段未来齐全，只要缺少
+    // lifetime/cleanup/renderer/texture/damage/frame policy，就不能允许 texture precondition。
+    let checklist = RuntimeSurfaceCommitTextureCreationPreconditionChecklist {
+        metadata_validation_passed,
+        metadata_sufficient_for_texture_precondition: false,
+        width_known: width_observed,
+        height_known: height_observed,
+        stride_known: stride_observed,
+        format_known: format_observed,
+        buffer_kind_supported,
+        lifetime_policy_known: false,
+        cleanup_policy_known: false,
+        renderer_backend_instance_available: false,
+        texture_import_route_available: false,
+        damage_to_texture_mapping_available: false,
+        frame_callback_completion_policy_available: false,
+        texture_precondition_allowed: false,
+    };
+
+    let mut blockers = Vec::new();
+    if !checklist.metadata_validation_passed {
+        blockers.push(
+            RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MetadataValidationMissing,
+        );
+    }
+    blockers.push(RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MetadataInsufficient);
+    if !checklist.width_known {
+        blockers.push(RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnknownWidth);
+    }
+    if !checklist.height_known {
+        blockers.push(RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnknownHeight);
+    }
+    if !checklist.stride_known {
+        blockers.push(RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnknownStride);
+    }
+    if !checklist.format_known {
+        blockers.push(RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnknownFormat);
+    }
+    if !checklist.buffer_kind_supported {
+        blockers
+            .push(RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnsupportedBufferKind);
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingLifetimePolicy,
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingCleanupPolicy,
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingRendererBackendInstance,
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingTextureImportRoute,
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingDamageToTextureMapping,
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingFrameCallbackCompletionPolicy,
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker::RuntimeEvidenceWithoutTextureCreation,
+    ]);
+
+    RuntimeSurfaceCommitTextureCreationPreconditionAuditReport {
+        texture_precondition_audit_available: true,
+        source_metadata_report_observed,
+        observed_metadata_report,
+        validation_harness_report,
+        checklist,
+        metadata_sufficient_for_texture_precondition: false,
+        renderer_backend_instance_available: false,
+        texture_import_route_available: false,
+        damage_to_texture_mapping_available: false,
+        frame_callback_completion_policy_available: false,
+        texture_precondition_allowed: false,
+        texture_precondition_blocked: true,
+        texture_precondition_blocker_reason: "missing renderer backend instance / texture import route / damage mapping / frame callback completion policy",
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitTextureCreationPreconditionOperation::ObserveShmMetadataReport,
+            RuntimeSurfaceCommitTextureCreationPreconditionOperation::CheckValidationHarness,
+            RuntimeSurfaceCommitTextureCreationPreconditionOperation::CheckMetadataPreconditionInputs,
+            RuntimeSurfaceCommitTextureCreationPreconditionOperation::CheckRendererBackendInstance,
+            RuntimeSurfaceCommitTextureCreationPreconditionOperation::CheckTextureImportRoute,
+            RuntimeSurfaceCommitTextureCreationPreconditionOperation::BuildTexturePreconditionAuditReport,
+        ],
+        blockers,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
+        texture_creation_precondition_audit_from_validation_harness_report,
+        validate_shm_metadata_harness_paths,
+    };
+
+    /// Phase 56E 从 Phase 56D validation harness report 派生 texture precondition audit。
+    ///
+    /// 该测试固定：texture precondition blocked 只是安全边界，不代表 texture created、
+    /// renderer called、damage submitted 或 frame callback done。真实 buffer / texture /
+    /// renderer 类型仍只能停留在 smithay_backend 的 Linux-only adapter 层，core 不感知。
+    #[test]
+    fn derives_blocked_texture_precondition_audit_from_metadata_validation_harness() {
+        let validation_harness = validate_shm_metadata_harness_paths();
+        let audit =
+            texture_creation_precondition_audit_from_validation_harness_report(&validation_harness);
+
+        assert!(audit.texture_precondition_audit_available);
+        assert!(!audit.source_metadata_report_observed);
+        assert!(audit.observed_metadata_report.is_none());
+        assert!(audit.validation_harness_report.validation_harness_invoked);
+        assert!(audit.validation_harness_report.all_validation_paths_covered);
+        assert!(!audit.texture_precondition_allowed);
+        assert!(audit.texture_precondition_blocked);
+        assert!(!audit.checklist.metadata_sufficient_for_texture_precondition);
+        assert!(!audit.checklist.renderer_backend_instance_available);
+        assert!(!audit.checklist.texture_import_route_available);
+        assert!(!audit.checklist.damage_to_texture_mapping_available);
+        assert!(!audit.checklist.frame_callback_completion_policy_available);
+        assert!(audit.blockers.contains(
+            &RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingRendererBackendInstance
+        ));
+        assert!(audit.blockers.contains(
+            &RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingTextureImportRoute
+        ));
+        assert!(audit.blockers.contains(
+            &RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingFrameCallbackCompletionPolicy
+        ));
+        assert!(!audit.buffer_import_attempted);
+        assert!(!audit.buffer_imported);
+        assert!(!audit.texture_created);
+        assert!(!audit.renderer_called);
+        assert!(!audit.damage_submitted);
+        assert!(!audit.frame_callback_done_sent);
+        assert!(!audit.input_support);
+        assert!(!audit.core_mutation_invoked);
     }
 }

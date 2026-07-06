@@ -20,6 +20,8 @@ use crate::{
         RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataReport,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+        RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
+        RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
     },
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
@@ -1968,6 +1970,91 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// SHM metadata seam 是否触发 core mutation；Phase 56B 固定保持 false。
     pub shm_buffer_metadata_core_mutation_invoked: bool,
 
+    /// Phase 56E texture precondition audit seam 被调用的次数。
+    pub texture_precondition_audit_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 texture precondition audit reports。
+    pub texture_precondition_audit_reports:
+        Vec<RuntimeSurfaceCommitTextureCreationPreconditionAuditReport>,
+
+    /// Phase 56E texture precondition 是否允许继续；固定为 false。
+    pub texture_precondition_allowed: bool,
+
+    /// Phase 56E texture precondition 是否 blocked；固定为 true。
+    pub texture_precondition_blocked: bool,
+
+    /// metadata validation harness 是否通过。
+    pub texture_precondition_metadata_validation_passed: bool,
+
+    /// metadata 是否足以进入 texture precondition；Phase 56E 固定保持 false。
+    pub texture_precondition_metadata_sufficient_for_texture_precondition: bool,
+
+    /// 是否缺少 metadata validation evidence。
+    pub texture_precondition_metadata_validation_missing: bool,
+
+    /// 是否缺少足够 metadata。
+    pub texture_precondition_metadata_insufficient: bool,
+
+    /// 是否缺少 width。
+    pub texture_precondition_unknown_width: bool,
+
+    /// 是否缺少 height。
+    pub texture_precondition_unknown_height: bool,
+
+    /// 是否缺少 stride。
+    pub texture_precondition_unknown_stride: bool,
+
+    /// 是否缺少 format。
+    pub texture_precondition_unknown_format: bool,
+
+    /// 是否因 unsupported buffer kind blocked。
+    pub texture_precondition_unsupported_buffer_kind: bool,
+
+    /// 是否缺少 lifetime policy。
+    pub texture_precondition_missing_lifetime_policy: bool,
+
+    /// 是否缺少 cleanup policy。
+    pub texture_precondition_missing_cleanup_policy: bool,
+
+    /// 是否缺少真实 renderer backend instance。
+    pub texture_precondition_missing_renderer_backend_instance: bool,
+
+    /// 是否缺少真实 texture import route。
+    pub texture_precondition_missing_texture_import_route: bool,
+
+    /// 是否缺少 damage-to-texture mapping。
+    pub texture_precondition_missing_damage_to_texture_mapping: bool,
+
+    /// 是否缺少 frame callback completion policy。
+    pub texture_precondition_missing_frame_callback_completion_policy: bool,
+
+    /// 是否只有 runtime evidence、没有 texture creation execution。
+    pub texture_precondition_runtime_evidence_without_texture_creation: bool,
+
+    /// Phase 56E 是否尝试 import buffer；固定保持 false。
+    pub texture_precondition_buffer_import_attempted: bool,
+
+    /// Phase 56E 是否 import buffer；固定保持 false。
+    pub texture_precondition_buffer_imported: bool,
+
+    /// Phase 56E 是否创建 texture；固定保持 false。
+    pub texture_precondition_texture_created: bool,
+
+    /// Phase 56E 是否调用 renderer；固定保持 false。
+    pub texture_precondition_renderer_called: bool,
+
+    /// Phase 56E 是否提交 damage；固定保持 false。
+    pub texture_precondition_damage_submitted: bool,
+
+    /// Phase 56E 是否发送 frame callback done；固定保持 false。
+    pub texture_precondition_frame_callback_done_sent: bool,
+
+    /// Phase 56E 是否接入 input；固定保持 false。
+    pub texture_precondition_input_support: bool,
+
+    /// Phase 56E 是否触发 core mutation；固定保持 false。
+    pub texture_precondition_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -2485,6 +2572,34 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             shm_buffer_metadata_frame_callback_done_sent: false,
             shm_buffer_metadata_input_support: false,
             shm_buffer_metadata_core_mutation_invoked: false,
+            texture_precondition_audit_invocations: 0,
+            texture_precondition_audit_reports: Vec::new(),
+            texture_precondition_allowed: false,
+            texture_precondition_blocked: false,
+            texture_precondition_metadata_validation_passed: false,
+            texture_precondition_metadata_sufficient_for_texture_precondition: false,
+            texture_precondition_metadata_validation_missing: false,
+            texture_precondition_metadata_insufficient: false,
+            texture_precondition_unknown_width: false,
+            texture_precondition_unknown_height: false,
+            texture_precondition_unknown_stride: false,
+            texture_precondition_unknown_format: false,
+            texture_precondition_unsupported_buffer_kind: false,
+            texture_precondition_missing_lifetime_policy: false,
+            texture_precondition_missing_cleanup_policy: false,
+            texture_precondition_missing_renderer_backend_instance: false,
+            texture_precondition_missing_texture_import_route: false,
+            texture_precondition_missing_damage_to_texture_mapping: false,
+            texture_precondition_missing_frame_callback_completion_policy: false,
+            texture_precondition_runtime_evidence_without_texture_creation: false,
+            texture_precondition_buffer_import_attempted: false,
+            texture_precondition_buffer_imported: false,
+            texture_precondition_texture_created: false,
+            texture_precondition_renderer_called: false,
+            texture_precondition_damage_submitted: false,
+            texture_precondition_frame_callback_done_sent: false,
+            texture_precondition_input_support: false,
+            texture_precondition_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -3647,6 +3762,76 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_texture_creation_precondition_audit_report(
+        report: &RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            texture_precondition_audit_invocations: usize::from(
+                report.texture_precondition_audit_available,
+            ),
+            texture_precondition_audit_reports: vec![report.clone()],
+            texture_precondition_allowed: report.texture_precondition_allowed,
+            texture_precondition_blocked: report.texture_precondition_blocked,
+            texture_precondition_metadata_validation_passed: report
+                .checklist
+                .metadata_validation_passed,
+            texture_precondition_metadata_sufficient_for_texture_precondition: report
+                .metadata_sufficient_for_texture_precondition,
+            texture_precondition_metadata_validation_missing: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MetadataValidationMissing,
+            ),
+            texture_precondition_metadata_insufficient: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MetadataInsufficient,
+            ),
+            texture_precondition_unknown_width: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnknownWidth,
+            ),
+            texture_precondition_unknown_height: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnknownHeight,
+            ),
+            texture_precondition_unknown_stride: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnknownStride,
+            ),
+            texture_precondition_unknown_format: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnknownFormat,
+            ),
+            texture_precondition_unsupported_buffer_kind: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::UnsupportedBufferKind,
+            ),
+            texture_precondition_missing_lifetime_policy: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingLifetimePolicy,
+            ),
+            texture_precondition_missing_cleanup_policy: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingCleanupPolicy,
+            ),
+            texture_precondition_missing_renderer_backend_instance: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingRendererBackendInstance,
+            ),
+            texture_precondition_missing_texture_import_route: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingTextureImportRoute,
+            ),
+            texture_precondition_missing_damage_to_texture_mapping: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingDamageToTextureMapping,
+            ),
+            texture_precondition_missing_frame_callback_completion_policy: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::MissingFrameCallbackCompletionPolicy,
+            ),
+            texture_precondition_runtime_evidence_without_texture_creation: has_blocker(
+                RuntimeSurfaceCommitTextureCreationPreconditionBlocker::RuntimeEvidenceWithoutTextureCreation,
+            ),
+            texture_precondition_buffer_import_attempted: report.buffer_import_attempted,
+            texture_precondition_buffer_imported: report.buffer_imported,
+            texture_precondition_texture_created: report.texture_created,
+            texture_precondition_renderer_called: report.renderer_called,
+            texture_precondition_damage_submitted: report.damage_submitted,
+            texture_precondition_frame_callback_done_sent: report.frame_callback_done_sent,
+            texture_precondition_input_support: report.input_support,
+            texture_precondition_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -4654,6 +4839,52 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.shm_buffer_metadata_input_support |= delta.shm_buffer_metadata_input_support;
         self.shm_buffer_metadata_core_mutation_invoked |=
             delta.shm_buffer_metadata_core_mutation_invoked;
+        self.texture_precondition_audit_invocations = self
+            .texture_precondition_audit_invocations
+            .saturating_add(delta.texture_precondition_audit_invocations);
+        self.texture_precondition_audit_reports
+            .extend(delta.texture_precondition_audit_reports);
+        self.texture_precondition_allowed |= delta.texture_precondition_allowed;
+        self.texture_precondition_blocked |= delta.texture_precondition_blocked;
+        self.texture_precondition_metadata_validation_passed |=
+            delta.texture_precondition_metadata_validation_passed;
+        self.texture_precondition_metadata_sufficient_for_texture_precondition |=
+            delta.texture_precondition_metadata_sufficient_for_texture_precondition;
+        self.texture_precondition_metadata_validation_missing |=
+            delta.texture_precondition_metadata_validation_missing;
+        self.texture_precondition_metadata_insufficient |=
+            delta.texture_precondition_metadata_insufficient;
+        self.texture_precondition_unknown_width |= delta.texture_precondition_unknown_width;
+        self.texture_precondition_unknown_height |= delta.texture_precondition_unknown_height;
+        self.texture_precondition_unknown_stride |= delta.texture_precondition_unknown_stride;
+        self.texture_precondition_unknown_format |= delta.texture_precondition_unknown_format;
+        self.texture_precondition_unsupported_buffer_kind |=
+            delta.texture_precondition_unsupported_buffer_kind;
+        self.texture_precondition_missing_lifetime_policy |=
+            delta.texture_precondition_missing_lifetime_policy;
+        self.texture_precondition_missing_cleanup_policy |=
+            delta.texture_precondition_missing_cleanup_policy;
+        self.texture_precondition_missing_renderer_backend_instance |=
+            delta.texture_precondition_missing_renderer_backend_instance;
+        self.texture_precondition_missing_texture_import_route |=
+            delta.texture_precondition_missing_texture_import_route;
+        self.texture_precondition_missing_damage_to_texture_mapping |=
+            delta.texture_precondition_missing_damage_to_texture_mapping;
+        self.texture_precondition_missing_frame_callback_completion_policy |=
+            delta.texture_precondition_missing_frame_callback_completion_policy;
+        self.texture_precondition_runtime_evidence_without_texture_creation |=
+            delta.texture_precondition_runtime_evidence_without_texture_creation;
+        self.texture_precondition_buffer_import_attempted |=
+            delta.texture_precondition_buffer_import_attempted;
+        self.texture_precondition_buffer_imported |= delta.texture_precondition_buffer_imported;
+        self.texture_precondition_texture_created |= delta.texture_precondition_texture_created;
+        self.texture_precondition_renderer_called |= delta.texture_precondition_renderer_called;
+        self.texture_precondition_damage_submitted |= delta.texture_precondition_damage_submitted;
+        self.texture_precondition_frame_callback_done_sent |=
+            delta.texture_precondition_frame_callback_done_sent;
+        self.texture_precondition_input_support |= delta.texture_precondition_input_support;
+        self.texture_precondition_core_mutation_invoked |=
+            delta.texture_precondition_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -4916,6 +5147,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_shm_buffer_metadata_report(
                 &report.shm_buffer_metadata_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_texture_creation_precondition_audit_report(
+                &report.texture_creation_precondition_audit_report,
             ),
         );
 
@@ -8667,6 +8903,64 @@ mod tests {
             !report
                 .surface_commit
                 .shm_buffer_metadata_core_mutation_invoked
+        );
+        assert_eq!(
+            report.surface_commit.texture_precondition_audit_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .texture_precondition_audit_reports
+                .len(),
+            3
+        );
+        assert!(!report.surface_commit.texture_precondition_allowed);
+        assert!(report.surface_commit.texture_precondition_blocked);
+        assert!(
+            report
+                .surface_commit
+                .texture_precondition_metadata_validation_passed
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_precondition_metadata_sufficient_for_texture_precondition
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_precondition_missing_renderer_backend_instance
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_precondition_missing_texture_import_route
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_precondition_missing_frame_callback_completion_policy
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_precondition_buffer_import_attempted
+        );
+        assert!(!report.surface_commit.texture_precondition_buffer_imported);
+        assert!(!report.surface_commit.texture_precondition_texture_created);
+        assert!(!report.surface_commit.texture_precondition_renderer_called);
+        assert!(!report.surface_commit.texture_precondition_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .texture_precondition_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.texture_precondition_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .texture_precondition_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);

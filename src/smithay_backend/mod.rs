@@ -383,9 +383,15 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
     RuntimeSurfaceCommitShmMetadataValidationHarnessReport,
-    RuntimeSurfaceCommitShmMetadataValidationPath, extract_shm_buffer_metadata_evidence,
+    RuntimeSurfaceCommitShmMetadataValidationPath,
+    RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
+    RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
+    RuntimeSurfaceCommitTextureCreationPreconditionChecklist,
+    RuntimeSurfaceCommitTextureCreationPreconditionOperation, extract_shm_buffer_metadata_evidence,
     observe_wl_buffer_type_boundary, shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
+    texture_creation_precondition_audit_from_metadata_report,
+    texture_creation_precondition_audit_from_validation_harness_report,
     validate_shm_metadata_harness_paths,
 };
 #[allow(unused_imports)]
@@ -6980,6 +6986,154 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56D source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56E 审计 SHM metadata validation harness 到 texture creation 的前置条件。
+    ///
+    /// 这个 source-contract 只允许 pure-data texture precondition audit report；
+    /// texture precondition allowed 不等于 texture created，metadata sufficient
+    /// 不等于 renderer call，真实 buffer/texture/renderer 类型不得进入 core。
+    #[test]
+    fn texture_creation_precondition_audit_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56E SHM metadata adapter module 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56E loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56E orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56E_TEXTURE_CREATION_PRECONDITION_AUDIT.md"),
+        )
+        .expect("Phase 56E 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56E - Texture Creation Precondition Audit",
+            "Texture Creation Precondition Audit",
+            "texture_created = false",
+            "renderer_called = false",
+            "frame_callback_done_sent = false",
+            "Texture Precondition Checklist",
+            "metadata_validation_passed",
+            "metadata_sufficient_for_texture_precondition",
+            "renderer_backend_instance_available",
+            "texture_import_route_available",
+            "frame_callback_completion_policy_available",
+            "texture_precondition_allowed",
+            "Blocker Taxonomy",
+            "missing_renderer_backend_instance",
+            "missing_texture_import_route",
+            "missing_frame_callback_completion_policy",
+            "Phase 56F",
+            "requires separate",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56E 文档缺少 texture precondition audit 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitTextureCreationPreconditionBlocker",
+            "MetadataValidationMissing",
+            "MetadataInsufficient",
+            "MissingRendererBackendInstance",
+            "MissingTextureImportRoute",
+            "MissingDamageToTextureMapping",
+            "MissingFrameCallbackCompletionPolicy",
+            "RuntimeEvidenceWithoutTextureCreation",
+            "pub struct RuntimeSurfaceCommitTextureCreationPreconditionChecklist",
+            "pub struct RuntimeSurfaceCommitTextureCreationPreconditionAuditReport",
+            "pub fn texture_creation_precondition_audit_from_metadata_report",
+            "texture_precondition_audit_available: true",
+            "texture_precondition_allowed: false",
+            "texture_precondition_blocked: true",
+            "metadata_sufficient_for_texture_precondition: false",
+            "renderer_backend_instance_available: false",
+            "texture_import_route_available: false",
+            "damage_to_texture_mapping_available: false",
+            "frame_callback_completion_policy_available: false",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56E adapter production source 缺少 texture precondition audit: {required}"
+            );
+        }
+
+        for required in [
+            "pub texture_precondition_audit_invocations: usize",
+            "pub texture_precondition_audit_reports:",
+            "Vec<RuntimeSurfaceCommitTextureCreationPreconditionAuditReport>",
+            "pub texture_precondition_allowed: bool",
+            "pub texture_precondition_blocked: bool",
+            "pub texture_precondition_missing_renderer_backend_instance: bool",
+            "pub texture_precondition_missing_texture_import_route: bool",
+            "pub texture_precondition_missing_frame_callback_completion_policy: bool",
+            "from_texture_creation_precondition_audit_report",
+            "report.texture_creation_precondition_audit_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56E loop 缺少 texture precondition audit 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "texture_precondition_audit_invocations",
+            "texture_precondition_audit_reports",
+            "texture_precondition_allowed",
+            "texture_precondition_blocked",
+            "texture_precondition_missing_renderer_backend_instance",
+            "texture_precondition_missing_texture_import_route",
+            "texture_precondition_missing_frame_callback_completion_policy",
+            "texture_precondition_texture_created",
+            "texture_precondition_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56E orchestrator test/report 缺少 texture precondition audit 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56E source 包含禁止的真实执行/后端 token: {forbidden}"
             );
         }
     }
