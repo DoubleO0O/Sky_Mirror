@@ -3541,6 +3541,41 @@ mod tests {
         assert!(
             report
                 .surface_commit
+                .shm_buffer_metadata_blocker_refinement_applied
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_no_real_wl_buffer_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_wl_buffer_available_but_not_shm
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_shm_like_candidate_missing_safe_accessor
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_insufficient_for_texture_precondition
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_missing_lifetime_cleanup_policy
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_evidence_only_not_import_execution
+        );
+        assert!(
+            report
+                .surface_commit
                 .shm_buffer_metadata_texture_creation_forbidden
         );
         assert!(

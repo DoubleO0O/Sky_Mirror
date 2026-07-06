@@ -1878,6 +1878,27 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// 是否因 non-SHM buffer unsupported 而 blocked。
     pub shm_buffer_metadata_unsupported_non_shm_buffer: bool,
 
+    /// Phase 56C refined blocker taxonomy 是否已应用。
+    pub shm_buffer_metadata_blocker_refinement_applied: bool,
+
+    /// 是否因 runtime report 没有 concrete `WlBuffer` 而 blocked。
+    pub shm_buffer_metadata_no_real_wl_buffer_available: bool,
+
+    /// 是否因 concrete `WlBuffer` 不是 SHM 而 blocked。
+    pub shm_buffer_metadata_wl_buffer_available_but_not_shm: bool,
+
+    /// 是否因 SHM-like candidate 缺少 safe Smithay metadata accessor 而 blocked。
+    pub shm_buffer_metadata_shm_like_candidate_missing_safe_accessor: bool,
+
+    /// 是否因 metadata 不足以满足 texture precondition 而 blocked。
+    pub shm_buffer_metadata_insufficient_for_texture_precondition: bool,
+
+    /// 是否因缺少 buffer lifetime / cleanup ownership policy 而 blocked。
+    pub shm_buffer_metadata_missing_lifetime_cleanup_policy: bool,
+
+    /// 是否因 runtime report 只有 evidence、不是 import execution 而 blocked。
+    pub shm_buffer_metadata_evidence_only_not_import_execution: bool,
+
     /// Phase 56B 是否仍禁止 texture creation。
     pub shm_buffer_metadata_texture_creation_forbidden: bool,
 
@@ -2404,6 +2425,13 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             shm_buffer_metadata_missing_adapter_report: false,
             shm_buffer_metadata_unavailable_blocker: false,
             shm_buffer_metadata_unsupported_non_shm_buffer: false,
+            shm_buffer_metadata_blocker_refinement_applied: false,
+            shm_buffer_metadata_no_real_wl_buffer_available: false,
+            shm_buffer_metadata_wl_buffer_available_but_not_shm: false,
+            shm_buffer_metadata_shm_like_candidate_missing_safe_accessor: false,
+            shm_buffer_metadata_insufficient_for_texture_precondition: false,
+            shm_buffer_metadata_missing_lifetime_cleanup_policy: false,
+            shm_buffer_metadata_evidence_only_not_import_execution: false,
             shm_buffer_metadata_texture_creation_forbidden: false,
             shm_buffer_metadata_renderer_call_forbidden: false,
             shm_buffer_metadata_damage_submit_forbidden: false,
@@ -3508,6 +3536,26 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             shm_buffer_metadata_unsupported_non_shm_buffer: has_blocker(
                 RuntimeSurfaceCommitShmBufferMetadataBlocker::UnsupportedNonShmBuffer,
             ),
+            shm_buffer_metadata_blocker_refinement_applied:
+                report.metadata_blocker_refinement_applied,
+            shm_buffer_metadata_no_real_wl_buffer_available: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::NoRealWlBufferAvailable,
+            ),
+            shm_buffer_metadata_wl_buffer_available_but_not_shm: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::WlBufferAvailableButNotShm,
+            ),
+            shm_buffer_metadata_shm_like_candidate_missing_safe_accessor: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::ShmLikeCandidateMissingSafeSmithayMetadataAccessor,
+            ),
+            shm_buffer_metadata_insufficient_for_texture_precondition: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::MetadataObservableButInsufficientForTexturePrecondition,
+            ),
+            shm_buffer_metadata_missing_lifetime_cleanup_policy: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::MissingBufferLifetimeCleanupOwnershipPolicy,
+            ),
+            shm_buffer_metadata_evidence_only_not_import_execution: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::RuntimeReportOnlyHasEvidenceNotImportExecution,
+            ),
             shm_buffer_metadata_texture_creation_forbidden: has_blocker(
                 RuntimeSurfaceCommitShmBufferMetadataBlocker::TextureCreationForbiddenInPhase56B,
             ),
@@ -4485,6 +4533,20 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.shm_buffer_metadata_unavailable_blocker;
         self.shm_buffer_metadata_unsupported_non_shm_buffer |=
             delta.shm_buffer_metadata_unsupported_non_shm_buffer;
+        self.shm_buffer_metadata_blocker_refinement_applied |=
+            delta.shm_buffer_metadata_blocker_refinement_applied;
+        self.shm_buffer_metadata_no_real_wl_buffer_available |=
+            delta.shm_buffer_metadata_no_real_wl_buffer_available;
+        self.shm_buffer_metadata_wl_buffer_available_but_not_shm |=
+            delta.shm_buffer_metadata_wl_buffer_available_but_not_shm;
+        self.shm_buffer_metadata_shm_like_candidate_missing_safe_accessor |=
+            delta.shm_buffer_metadata_shm_like_candidate_missing_safe_accessor;
+        self.shm_buffer_metadata_insufficient_for_texture_precondition |=
+            delta.shm_buffer_metadata_insufficient_for_texture_precondition;
+        self.shm_buffer_metadata_missing_lifetime_cleanup_policy |=
+            delta.shm_buffer_metadata_missing_lifetime_cleanup_policy;
+        self.shm_buffer_metadata_evidence_only_not_import_execution |=
+            delta.shm_buffer_metadata_evidence_only_not_import_execution;
         self.shm_buffer_metadata_texture_creation_forbidden |=
             delta.shm_buffer_metadata_texture_creation_forbidden;
         self.shm_buffer_metadata_renderer_call_forbidden |=
@@ -8387,6 +8449,41 @@ mod tests {
             report
                 .surface_commit
                 .shm_buffer_metadata_unavailable_blocker
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_blocker_refinement_applied
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_no_real_wl_buffer_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_wl_buffer_available_but_not_shm
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_shm_like_candidate_missing_safe_accessor
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_insufficient_for_texture_precondition
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_missing_lifetime_cleanup_policy
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_evidence_only_not_import_execution
         );
         assert!(
             report
