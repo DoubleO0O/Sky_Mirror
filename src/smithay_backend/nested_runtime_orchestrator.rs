@@ -3670,6 +3670,64 @@ mod tests {
                 .surface_commit
                 .shm_buffer_metadata_core_mutation_invoked
         );
+        assert_eq!(
+            report.surface_commit.texture_precondition_audit_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .texture_precondition_audit_reports
+                .len(),
+            3
+        );
+        assert!(!report.surface_commit.texture_precondition_allowed);
+        assert!(report.surface_commit.texture_precondition_blocked);
+        assert!(
+            report
+                .surface_commit
+                .texture_precondition_metadata_validation_passed
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_precondition_metadata_sufficient_for_texture_precondition
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_precondition_missing_renderer_backend_instance
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_precondition_missing_texture_import_route
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_precondition_missing_frame_callback_completion_policy
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_precondition_buffer_import_attempted
+        );
+        assert!(!report.surface_commit.texture_precondition_buffer_imported);
+        assert!(!report.surface_commit.texture_precondition_texture_created);
+        assert!(!report.surface_commit.texture_precondition_renderer_called);
+        assert!(!report.surface_commit.texture_precondition_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .texture_precondition_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.texture_precondition_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .texture_precondition_core_mutation_invoked
+        );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);

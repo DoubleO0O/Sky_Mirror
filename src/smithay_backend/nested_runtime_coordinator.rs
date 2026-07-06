@@ -21,6 +21,7 @@ use crate::{
         linux_shm_buffer_import_adapter::{
             LinuxShmFirstBufferImportAdapterSkeleton, RuntimeSurfaceCommitShmBufferMetadataReport,
             RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+            RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
         },
         linux_toplevel_admission_bridge::PendingXdgToplevelAdmission,
         linux_toplevel_admission_runtime_queue::{
@@ -4502,6 +4503,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// Phase 56B SHM buffer metadata evidence report。
     pub shm_buffer_metadata_report: RuntimeSurfaceCommitShmBufferMetadataReport,
+
+    /// Phase 56E texture creation precondition audit report。
+    pub texture_creation_precondition_audit_report:
+        RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -4870,6 +4875,9 @@ impl NestedRuntimeCoordinator {
         let shm_buffer_metadata_report = self
             .shm_first_buffer_import_adapter
             .metadata_report_from_adapter_report(&shm_first_buffer_import_adapter_report, None);
+        let texture_creation_precondition_audit_report = self
+            .shm_first_buffer_import_adapter
+            .texture_creation_precondition_audit_from_metadata_report(&shm_buffer_metadata_report);
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -4901,6 +4909,7 @@ impl NestedRuntimeCoordinator {
             buffer_import_actual_attempt_record,
             shm_first_buffer_import_adapter_report,
             shm_buffer_metadata_report,
+            texture_creation_precondition_audit_report,
         }
     }
 
