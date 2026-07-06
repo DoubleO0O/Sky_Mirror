@@ -16,6 +16,10 @@ use smithay::reexports::calloop::LoopSignal;
 use crate::{
     core::state::State,
     smithay_backend::RuntimeToplevelAdmissionDrainTick,
+    smithay_backend::linux_shm_buffer_import_adapter::{
+        RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
+        RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+    },
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
         NestedRuntimeLiveAdmissionUnmapPumpReport, NestedRuntimePumpError, NestedRuntimePumpReport,
@@ -1752,6 +1756,91 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// actual attempt record 是否触发 core mutation；Phase 55L 固定保持 false。
     pub buffer_import_actual_attempt_core_mutation_invoked: bool,
 
+    /// Phase 56A SHM-first adapter skeleton seam 被调用的次数。
+    pub shm_buffer_import_adapter_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 SHM-first adapter skeleton reports。
+    pub shm_buffer_import_adapter_reports:
+        Vec<RuntimeSurfaceCommitShmFirstBufferImportAdapterReport>,
+
+    /// SHM-first adapter skeleton 是否可用。
+    pub shm_buffer_adapter_available: bool,
+
+    /// SHM-first import route 是否已选择。
+    pub shm_buffer_import_route_selected: bool,
+
+    /// runtime 是否已观察到真实 `WlBuffer` 类型边界。
+    pub shm_buffer_type_boundary_observed: bool,
+
+    /// Smithay SHM access 类型边界是否可用。
+    pub smithay_shm_access_type_available: bool,
+
+    /// SHM-first import execution 是否被阻止。
+    pub shm_buffer_import_execution_blocked: bool,
+
+    /// SHM-first report 是否保持 evidence-only。
+    pub shm_buffer_import_evidence_only_report: bool,
+
+    /// SHM-first report 是否明确 no-texture。
+    pub shm_buffer_import_no_texture_report: bool,
+
+    /// SHM-first report 是否缺少/不支持具体 `WlBuffer` 执行。
+    pub shm_buffer_import_unsupported_or_missing_wl_buffer: bool,
+
+    /// SHM-first adapter 观察到 actual import required 的数量。
+    pub shm_buffer_import_actual_required_count: usize,
+
+    /// SHM-first adapter 是否缺少 actual-attempt record。
+    pub shm_buffer_import_missing_actual_attempt_record: bool,
+
+    /// SHM-first adapter 是否缺少 `WlBuffer` 类型边界 observation。
+    pub shm_buffer_import_missing_wl_buffer_type_boundary: bool,
+
+    /// SHM-first adapter 是否缺少 SHM buffer access evidence。
+    pub shm_buffer_import_missing_shm_buffer_access_evidence: bool,
+
+    /// SHM-first adapter 是否因无需 actual import 而 no-op。
+    pub shm_buffer_import_no_actual_import_required: bool,
+
+    /// Phase 56A 是否仍禁止 texture creation。
+    pub shm_buffer_import_texture_creation_forbidden: bool,
+
+    /// Phase 56A 是否仍禁止 renderer call。
+    pub shm_buffer_import_renderer_call_forbidden: bool,
+
+    /// Phase 56A 是否仍禁止 damage submit。
+    pub shm_buffer_import_damage_submit_forbidden: bool,
+
+    /// Phase 56A 是否仍禁止 frame callback done。
+    pub shm_buffer_import_frame_callback_done_forbidden: bool,
+
+    /// Phase 56A 是否仍禁止 DRM / GBM / dmabuf。
+    pub shm_buffer_import_drm_gbm_dmabuf_forbidden: bool,
+
+    /// SHM-first adapter 是否尝试 import buffer；Phase 56A 固定保持 false。
+    pub shm_buffer_import_buffer_import_attempted: bool,
+
+    /// SHM-first adapter 是否 import buffer；Phase 56A 固定保持 false。
+    pub shm_buffer_import_buffer_imported: bool,
+
+    /// SHM-first adapter 是否创建 texture；Phase 56A 固定保持 false。
+    pub shm_buffer_import_texture_created: bool,
+
+    /// SHM-first adapter 是否调用 renderer；Phase 56A 固定保持 false。
+    pub shm_buffer_import_renderer_called: bool,
+
+    /// SHM-first adapter 是否提交 damage；Phase 56A 固定保持 false。
+    pub shm_buffer_import_damage_submitted: bool,
+
+    /// SHM-first adapter 是否发送 frame callback done；Phase 56A 固定保持 false。
+    pub shm_buffer_import_frame_callback_done_sent: bool,
+
+    /// SHM-first adapter 是否接入 input；Phase 56A 固定保持 false。
+    pub shm_buffer_import_input_support: bool,
+
+    /// SHM-first adapter 是否触发 core mutation；Phase 56A 固定保持 false。
+    pub shm_buffer_import_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -2199,6 +2288,34 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             buffer_import_actual_attempt_frame_callback_done_sent: false,
             buffer_import_actual_attempt_input_support: false,
             buffer_import_actual_attempt_core_mutation_invoked: false,
+            shm_buffer_import_adapter_invocations: 0,
+            shm_buffer_import_adapter_reports: Vec::new(),
+            shm_buffer_adapter_available: false,
+            shm_buffer_import_route_selected: false,
+            shm_buffer_type_boundary_observed: false,
+            smithay_shm_access_type_available: false,
+            shm_buffer_import_execution_blocked: false,
+            shm_buffer_import_evidence_only_report: false,
+            shm_buffer_import_no_texture_report: false,
+            shm_buffer_import_unsupported_or_missing_wl_buffer: false,
+            shm_buffer_import_actual_required_count: 0,
+            shm_buffer_import_missing_actual_attempt_record: false,
+            shm_buffer_import_missing_wl_buffer_type_boundary: false,
+            shm_buffer_import_missing_shm_buffer_access_evidence: false,
+            shm_buffer_import_no_actual_import_required: false,
+            shm_buffer_import_texture_creation_forbidden: false,
+            shm_buffer_import_renderer_call_forbidden: false,
+            shm_buffer_import_damage_submit_forbidden: false,
+            shm_buffer_import_frame_callback_done_forbidden: false,
+            shm_buffer_import_drm_gbm_dmabuf_forbidden: false,
+            shm_buffer_import_buffer_import_attempted: false,
+            shm_buffer_import_buffer_imported: false,
+            shm_buffer_import_texture_created: false,
+            shm_buffer_import_renderer_called: false,
+            shm_buffer_import_damage_submitted: false,
+            shm_buffer_import_frame_callback_done_sent: false,
+            shm_buffer_import_input_support: false,
+            shm_buffer_import_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -3209,6 +3326,64 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_shm_first_buffer_import_adapter_report(
+        report: &RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            shm_buffer_import_adapter_invocations: usize::from(
+                report.shm_buffer_import_adapter_invoked,
+            ),
+            shm_buffer_import_adapter_reports: vec![report.clone()],
+            shm_buffer_adapter_available: report.shm_buffer_adapter_available,
+            shm_buffer_import_route_selected: report.shm_buffer_import_route_selected,
+            shm_buffer_type_boundary_observed: report.shm_buffer_type_boundary_observed,
+            smithay_shm_access_type_available: report.smithay_shm_access_type_available,
+            shm_buffer_import_execution_blocked: report.shm_buffer_import_execution_blocked,
+            shm_buffer_import_evidence_only_report: report.evidence_only_report,
+            shm_buffer_import_no_texture_report: report.no_texture_report,
+            shm_buffer_import_unsupported_or_missing_wl_buffer: report
+                .unsupported_or_missing_wl_buffer_report,
+            shm_buffer_import_actual_required_count: usize::from(report.actual_import_required),
+            shm_buffer_import_missing_actual_attempt_record: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::MissingActualAttemptRecord,
+            ),
+            shm_buffer_import_missing_wl_buffer_type_boundary: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::MissingWlBufferTypeBoundaryObservation,
+            ),
+            shm_buffer_import_missing_shm_buffer_access_evidence: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::MissingShmBufferAccessEvidence,
+            ),
+            shm_buffer_import_no_actual_import_required: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::NoActualImportRequired,
+            ),
+            shm_buffer_import_texture_creation_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::TextureCreationForbiddenInPhase56A,
+            ),
+            shm_buffer_import_renderer_call_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::RendererCallForbiddenInPhase56A,
+            ),
+            shm_buffer_import_damage_submit_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::DamageSubmitForbiddenInPhase56A,
+            ),
+            shm_buffer_import_frame_callback_done_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::FrameCallbackDoneForbiddenInPhase56A,
+            ),
+            shm_buffer_import_drm_gbm_dmabuf_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker::DrmGbmDmabufForbiddenInPhase56A,
+            ),
+            shm_buffer_import_buffer_import_attempted: report.buffer_import_attempted,
+            shm_buffer_import_buffer_imported: report.buffer_imported,
+            shm_buffer_import_texture_created: report.texture_created,
+            shm_buffer_import_renderer_called: report.renderer_called,
+            shm_buffer_import_damage_submitted: report.damage_submitted,
+            shm_buffer_import_frame_callback_done_sent: report.frame_callback_done_sent,
+            shm_buffer_import_input_support: report.input_support,
+            shm_buffer_import_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -4095,6 +4270,52 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.buffer_import_actual_attempt_input_support;
         self.buffer_import_actual_attempt_core_mutation_invoked |=
             delta.buffer_import_actual_attempt_core_mutation_invoked;
+        self.shm_buffer_import_adapter_invocations = self
+            .shm_buffer_import_adapter_invocations
+            .saturating_add(delta.shm_buffer_import_adapter_invocations);
+        self.shm_buffer_import_adapter_reports
+            .extend(delta.shm_buffer_import_adapter_reports);
+        self.shm_buffer_adapter_available |= delta.shm_buffer_adapter_available;
+        self.shm_buffer_import_route_selected |= delta.shm_buffer_import_route_selected;
+        self.shm_buffer_type_boundary_observed |= delta.shm_buffer_type_boundary_observed;
+        self.smithay_shm_access_type_available |= delta.smithay_shm_access_type_available;
+        self.shm_buffer_import_execution_blocked |= delta.shm_buffer_import_execution_blocked;
+        self.shm_buffer_import_evidence_only_report |= delta.shm_buffer_import_evidence_only_report;
+        self.shm_buffer_import_no_texture_report |= delta.shm_buffer_import_no_texture_report;
+        self.shm_buffer_import_unsupported_or_missing_wl_buffer |=
+            delta.shm_buffer_import_unsupported_or_missing_wl_buffer;
+        self.shm_buffer_import_actual_required_count = self
+            .shm_buffer_import_actual_required_count
+            .saturating_add(delta.shm_buffer_import_actual_required_count);
+        self.shm_buffer_import_missing_actual_attempt_record |=
+            delta.shm_buffer_import_missing_actual_attempt_record;
+        self.shm_buffer_import_missing_wl_buffer_type_boundary |=
+            delta.shm_buffer_import_missing_wl_buffer_type_boundary;
+        self.shm_buffer_import_missing_shm_buffer_access_evidence |=
+            delta.shm_buffer_import_missing_shm_buffer_access_evidence;
+        self.shm_buffer_import_no_actual_import_required |=
+            delta.shm_buffer_import_no_actual_import_required;
+        self.shm_buffer_import_texture_creation_forbidden |=
+            delta.shm_buffer_import_texture_creation_forbidden;
+        self.shm_buffer_import_renderer_call_forbidden |=
+            delta.shm_buffer_import_renderer_call_forbidden;
+        self.shm_buffer_import_damage_submit_forbidden |=
+            delta.shm_buffer_import_damage_submit_forbidden;
+        self.shm_buffer_import_frame_callback_done_forbidden |=
+            delta.shm_buffer_import_frame_callback_done_forbidden;
+        self.shm_buffer_import_drm_gbm_dmabuf_forbidden |=
+            delta.shm_buffer_import_drm_gbm_dmabuf_forbidden;
+        self.shm_buffer_import_buffer_import_attempted |=
+            delta.shm_buffer_import_buffer_import_attempted;
+        self.shm_buffer_import_buffer_imported |= delta.shm_buffer_import_buffer_imported;
+        self.shm_buffer_import_texture_created |= delta.shm_buffer_import_texture_created;
+        self.shm_buffer_import_renderer_called |= delta.shm_buffer_import_renderer_called;
+        self.shm_buffer_import_damage_submitted |= delta.shm_buffer_import_damage_submitted;
+        self.shm_buffer_import_frame_callback_done_sent |=
+            delta.shm_buffer_import_frame_callback_done_sent;
+        self.shm_buffer_import_input_support |= delta.shm_buffer_import_input_support;
+        self.shm_buffer_import_core_mutation_invoked |=
+            delta.shm_buffer_import_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -4347,6 +4568,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_buffer_import_actual_attempt_record(
                 &report.buffer_import_actual_attempt_record,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_shm_first_buffer_import_adapter_report(
+                &report.shm_first_buffer_import_adapter_report,
             ),
         );
 
@@ -7863,6 +8089,95 @@ mod tests {
             !report
                 .surface_commit
                 .buffer_import_actual_attempt_core_mutation_invoked
+        );
+        assert_eq!(
+            report.surface_commit.shm_buffer_import_adapter_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .shm_buffer_import_adapter_reports
+                .len(),
+            3
+        );
+        assert!(report.surface_commit.shm_buffer_adapter_available);
+        assert!(report.surface_commit.shm_buffer_import_route_selected);
+        assert!(!report.surface_commit.shm_buffer_type_boundary_observed);
+        assert!(!report.surface_commit.smithay_shm_access_type_available);
+        assert!(report.surface_commit.shm_buffer_import_execution_blocked);
+        assert!(report.surface_commit.shm_buffer_import_evidence_only_report);
+        assert!(report.surface_commit.shm_buffer_import_no_texture_report);
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_unsupported_or_missing_wl_buffer
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .shm_buffer_import_actual_required_count,
+            0
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_missing_wl_buffer_type_boundary
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_missing_shm_buffer_access_evidence
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_no_actual_import_required
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_texture_creation_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_renderer_call_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_damage_submit_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_frame_callback_done_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_import_drm_gbm_dmabuf_forbidden
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_import_buffer_import_attempted
+        );
+        assert!(!report.surface_commit.shm_buffer_import_buffer_imported);
+        assert!(!report.surface_commit.shm_buffer_import_texture_created);
+        assert!(!report.surface_commit.shm_buffer_import_renderer_called);
+        assert!(!report.surface_commit.shm_buffer_import_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_import_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.shm_buffer_import_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_import_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);

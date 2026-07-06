@@ -86,6 +86,9 @@ pub mod linux_new_toplevel_callback_observation;
 /// Linux Smithay 资源与纯数据 runtime 的组合探针。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_runtime;
+/// Linux-only SHM-first buffer import adapter skeleton；不 import buffer 或创建 texture。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub mod linux_shm_buffer_import_adapter;
 /// Linux-only live callback 到 pending ledger admission intent 的桥接 seam。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_admission_bridge;
@@ -370,6 +373,15 @@ pub use linux_new_toplevel_callback_observation::{
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_runtime::SmithayLinuxRuntimeProbe;
+#[allow(unused_imports)]
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub use linux_shm_buffer_import_adapter::{
+    LinuxShmBufferTypeBoundaryEvidence, LinuxShmFirstBufferImportAdapterSkeleton,
+    RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
+    RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation,
+    RuntimeSurfaceCommitShmFirstBufferImportAdapterReport, observe_wl_buffer_type_boundary,
+    shm_first_buffer_import_adapter_report_from_actual_attempt_record,
+};
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_toplevel_admission_bridge::{
@@ -6336,6 +6348,185 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 55N source 包含禁止的真实执行声明: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56A 建立 Linux-only SHM-first buffer import adapter skeleton。
+    ///
+    /// 这个 source-contract 允许真实 Smithay `WlBuffer` 类型只出现在 Linux-only
+    /// adapter/glue 文件中，但仍禁止 buffer import、texture creation、renderer call、
+    /// damage submit、frame callback done、input 和 core mutation。
+    #[test]
+    fn shm_first_buffer_import_adapter_skeleton_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56A SHM-first adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56A coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56A loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56A orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56A_SHM_FIRST_BUFFER_IMPORT_ADAPTER_SKELETON.md"),
+        )
+        .expect("Phase 56A 文档必须存在");
+        let mod_source = std::fs::read_to_string(root.join("src/smithay_backend/mod.rs"))
+            .expect("smithay_backend mod source 必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56A - SHM-first Buffer Import Adapter Skeleton",
+            "Linux-only adapter skeleton",
+            "WlBuffer",
+            "evidence-only",
+            "blocked",
+            "unsupported",
+            "no-texture",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+            "Phase 56B",
+            "requires separate user",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56A 文档缺少 SHM-first skeleton 证据: {required}"
+            );
+        }
+
+        for required in [
+            "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]\npub mod linux_shm_buffer_import_adapter;",
+            "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]\npub use linux_shm_buffer_import_adapter::{",
+        ] {
+            assert!(
+                mod_source.contains(required),
+                "Phase 56A mod.rs 缺少 Linux-only gate/re-export: {required}"
+            );
+        }
+
+        for required in [
+            "use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;",
+            "pub fn observe_wl_buffer_type_boundary(",
+            "_buffer: &WlBuffer",
+            "std::any::type_name::<smithay::wayland::shm::BufferData>()",
+            "std::any::type_name::<\n            smithay::wayland::shm::BufferAccessError,",
+            "pub struct LinuxShmFirstBufferImportAdapterSkeleton",
+            "pub struct RuntimeSurfaceCommitShmFirstBufferImportAdapterReport",
+            "pub enum RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker",
+            "pub fn shm_first_buffer_import_adapter_report_from_actual_attempt_record",
+            "shm_buffer_adapter_available: true",
+            "shm_buffer_import_route_selected: true",
+            "shm_buffer_import_execution_blocked: true",
+            "evidence_only_report: true",
+            "no_texture_report: true",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+            "TextureCreationForbiddenInPhase56A",
+            "RendererCallForbiddenInPhase56A",
+            "DamageSubmitForbiddenInPhase56A",
+            "FrameCallbackDoneForbiddenInPhase56A",
+            "DrmGbmDmabufForbiddenInPhase56A",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56A adapter production source 缺少边界证据: {required}"
+            );
+        }
+
+        for required in [
+            "shm_first_buffer_import_adapter: LinuxShmFirstBufferImportAdapterSkeleton",
+            "pub shm_first_buffer_import_adapter_report:",
+            ".report_from_actual_attempt_record(&buffer_import_actual_attempt_record, None)",
+            "shm_first_buffer_import_adapter_report,",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56A coordinator 缺少 adapter skeleton 接入证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub shm_buffer_import_adapter_invocations: usize",
+            "Vec<RuntimeSurfaceCommitShmFirstBufferImportAdapterReport>",
+            "pub shm_buffer_adapter_available: bool",
+            "pub shm_buffer_import_route_selected: bool",
+            "pub shm_buffer_type_boundary_observed: bool",
+            "pub shm_buffer_import_execution_blocked: bool",
+            "pub shm_buffer_import_no_texture_report: bool",
+            "pub shm_buffer_import_buffer_import_attempted: bool",
+            "pub shm_buffer_import_buffer_imported: bool",
+            "pub shm_buffer_import_texture_created: bool",
+            "pub shm_buffer_import_renderer_called: bool",
+            "from_shm_first_buffer_import_adapter_report",
+            "report.shm_first_buffer_import_adapter_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56A loop 缺少 adapter skeleton 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "shm_buffer_import_adapter_invocations",
+            "shm_buffer_import_adapter_reports",
+            "shm_buffer_adapter_available",
+            "shm_buffer_import_route_selected",
+            "shm_buffer_import_execution_blocked",
+            "shm_buffer_import_buffer_import_attempted",
+            "shm_buffer_import_buffer_imported",
+            "shm_buffer_import_texture_created",
+            "shm_buffer_import_renderer_called",
+            "shm_buffer_import_core_mutation_invoked",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56A orchestrator test/report 缺少 adapter skeleton 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "with_buffer_contents(",
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden),
+                "Phase 56A source 包含禁止的真实执行/后端 token: {forbidden}"
             );
         }
     }
