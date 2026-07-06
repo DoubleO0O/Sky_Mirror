@@ -17,6 +17,7 @@ use crate::{
     core::state::State,
     smithay_backend::RuntimeToplevelAdmissionDrainTick,
     smithay_backend::linux_shm_buffer_import_adapter::{
+        RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataReport,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
     },
@@ -1841,6 +1842,81 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// SHM-first adapter 是否触发 core mutation；Phase 56A 固定保持 false。
     pub shm_buffer_import_core_mutation_invoked: bool,
 
+    /// Phase 56B SHM metadata seam 被调用的次数。
+    pub shm_buffer_metadata_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 SHM metadata reports。
+    pub shm_buffer_metadata_reports: Vec<RuntimeSurfaceCommitShmBufferMetadataReport>,
+
+    /// SHM metadata extraction boundary 是否可用。
+    pub shm_buffer_metadata_available: bool,
+
+    /// 是否观察到 concrete SHM metadata。
+    pub shm_buffer_metadata_observed: bool,
+
+    /// runtime path 是否缺少 concrete SHM metadata。
+    pub shm_buffer_metadata_unavailable: bool,
+
+    /// 是否观察到 width metadata。
+    pub shm_buffer_metadata_width_observed: bool,
+
+    /// 是否观察到 height metadata。
+    pub shm_buffer_metadata_height_observed: bool,
+
+    /// 是否观察到 stride metadata。
+    pub shm_buffer_metadata_stride_observed: bool,
+
+    /// 是否观察到 format metadata。
+    pub shm_buffer_metadata_format_observed: bool,
+
+    /// 是否缺少 Phase 56A adapter report。
+    pub shm_buffer_metadata_missing_adapter_report: bool,
+
+    /// 是否因 metadata unavailable 而 blocked。
+    pub shm_buffer_metadata_unavailable_blocker: bool,
+
+    /// 是否因 non-SHM buffer unsupported 而 blocked。
+    pub shm_buffer_metadata_unsupported_non_shm_buffer: bool,
+
+    /// Phase 56B 是否仍禁止 texture creation。
+    pub shm_buffer_metadata_texture_creation_forbidden: bool,
+
+    /// Phase 56B 是否仍禁止 renderer call。
+    pub shm_buffer_metadata_renderer_call_forbidden: bool,
+
+    /// Phase 56B 是否仍禁止 damage submit。
+    pub shm_buffer_metadata_damage_submit_forbidden: bool,
+
+    /// Phase 56B 是否仍禁止 frame callback done。
+    pub shm_buffer_metadata_frame_callback_done_forbidden: bool,
+
+    /// Phase 56B 是否仍禁止 DRM / GBM / dmabuf。
+    pub shm_buffer_metadata_drm_gbm_dmabuf_forbidden: bool,
+
+    /// SHM metadata seam 是否尝试 import buffer；Phase 56B 固定保持 false。
+    pub shm_buffer_metadata_buffer_import_attempted: bool,
+
+    /// SHM metadata seam 是否 import buffer；Phase 56B 固定保持 false。
+    pub shm_buffer_metadata_buffer_imported: bool,
+
+    /// SHM metadata seam 是否创建 texture；Phase 56B 固定保持 false。
+    pub shm_buffer_metadata_texture_created: bool,
+
+    /// SHM metadata seam 是否调用 renderer；Phase 56B 固定保持 false。
+    pub shm_buffer_metadata_renderer_called: bool,
+
+    /// SHM metadata seam 是否提交 damage；Phase 56B 固定保持 false。
+    pub shm_buffer_metadata_damage_submitted: bool,
+
+    /// SHM metadata seam 是否发送 frame callback done；Phase 56B 固定保持 false。
+    pub shm_buffer_metadata_frame_callback_done_sent: bool,
+
+    /// SHM metadata seam 是否接入 input；Phase 56B 固定保持 false。
+    pub shm_buffer_metadata_input_support: bool,
+
+    /// SHM metadata seam 是否触发 core mutation；Phase 56B 固定保持 false。
+    pub shm_buffer_metadata_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -2316,6 +2392,31 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             shm_buffer_import_frame_callback_done_sent: false,
             shm_buffer_import_input_support: false,
             shm_buffer_import_core_mutation_invoked: false,
+            shm_buffer_metadata_invocations: 0,
+            shm_buffer_metadata_reports: Vec::new(),
+            shm_buffer_metadata_available: false,
+            shm_buffer_metadata_observed: false,
+            shm_buffer_metadata_unavailable: false,
+            shm_buffer_metadata_width_observed: false,
+            shm_buffer_metadata_height_observed: false,
+            shm_buffer_metadata_stride_observed: false,
+            shm_buffer_metadata_format_observed: false,
+            shm_buffer_metadata_missing_adapter_report: false,
+            shm_buffer_metadata_unavailable_blocker: false,
+            shm_buffer_metadata_unsupported_non_shm_buffer: false,
+            shm_buffer_metadata_texture_creation_forbidden: false,
+            shm_buffer_metadata_renderer_call_forbidden: false,
+            shm_buffer_metadata_damage_submit_forbidden: false,
+            shm_buffer_metadata_frame_callback_done_forbidden: false,
+            shm_buffer_metadata_drm_gbm_dmabuf_forbidden: false,
+            shm_buffer_metadata_buffer_import_attempted: false,
+            shm_buffer_metadata_buffer_imported: false,
+            shm_buffer_metadata_texture_created: false,
+            shm_buffer_metadata_renderer_called: false,
+            shm_buffer_metadata_damage_submitted: false,
+            shm_buffer_metadata_frame_callback_done_sent: false,
+            shm_buffer_metadata_input_support: false,
+            shm_buffer_metadata_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -3384,6 +3485,56 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_shm_buffer_metadata_report(
+        report: &RuntimeSurfaceCommitShmBufferMetadataReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            shm_buffer_metadata_invocations: usize::from(report.shm_metadata_report_invoked),
+            shm_buffer_metadata_reports: vec![report.clone()],
+            shm_buffer_metadata_available: report.shm_metadata_available,
+            shm_buffer_metadata_observed: report.shm_metadata_observed,
+            shm_buffer_metadata_unavailable: report.shm_metadata_unavailable,
+            shm_buffer_metadata_width_observed: report.width_observed,
+            shm_buffer_metadata_height_observed: report.height_observed,
+            shm_buffer_metadata_stride_observed: report.stride_observed,
+            shm_buffer_metadata_format_observed: report.format_observed,
+            shm_buffer_metadata_missing_adapter_report: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::MissingShmFirstAdapterReport,
+            ),
+            shm_buffer_metadata_unavailable_blocker: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::MetadataUnavailable,
+            ),
+            shm_buffer_metadata_unsupported_non_shm_buffer: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::UnsupportedNonShmBuffer,
+            ),
+            shm_buffer_metadata_texture_creation_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::TextureCreationForbiddenInPhase56B,
+            ),
+            shm_buffer_metadata_renderer_call_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::RendererCallForbiddenInPhase56B,
+            ),
+            shm_buffer_metadata_damage_submit_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::DamageSubmitForbiddenInPhase56B,
+            ),
+            shm_buffer_metadata_frame_callback_done_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::FrameCallbackDoneForbiddenInPhase56B,
+            ),
+            shm_buffer_metadata_drm_gbm_dmabuf_forbidden: has_blocker(
+                RuntimeSurfaceCommitShmBufferMetadataBlocker::DrmGbmDmabufForbiddenInPhase56B,
+            ),
+            shm_buffer_metadata_buffer_import_attempted: report.buffer_import_attempted,
+            shm_buffer_metadata_buffer_imported: report.buffer_imported,
+            shm_buffer_metadata_texture_created: report.texture_created,
+            shm_buffer_metadata_renderer_called: report.renderer_called,
+            shm_buffer_metadata_damage_submitted: report.damage_submitted,
+            shm_buffer_metadata_frame_callback_done_sent: report.frame_callback_done_sent,
+            shm_buffer_metadata_input_support: report.input_support,
+            shm_buffer_metadata_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -4316,6 +4467,45 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.shm_buffer_import_input_support |= delta.shm_buffer_import_input_support;
         self.shm_buffer_import_core_mutation_invoked |=
             delta.shm_buffer_import_core_mutation_invoked;
+        self.shm_buffer_metadata_invocations = self
+            .shm_buffer_metadata_invocations
+            .saturating_add(delta.shm_buffer_metadata_invocations);
+        self.shm_buffer_metadata_reports
+            .extend(delta.shm_buffer_metadata_reports);
+        self.shm_buffer_metadata_available |= delta.shm_buffer_metadata_available;
+        self.shm_buffer_metadata_observed |= delta.shm_buffer_metadata_observed;
+        self.shm_buffer_metadata_unavailable |= delta.shm_buffer_metadata_unavailable;
+        self.shm_buffer_metadata_width_observed |= delta.shm_buffer_metadata_width_observed;
+        self.shm_buffer_metadata_height_observed |= delta.shm_buffer_metadata_height_observed;
+        self.shm_buffer_metadata_stride_observed |= delta.shm_buffer_metadata_stride_observed;
+        self.shm_buffer_metadata_format_observed |= delta.shm_buffer_metadata_format_observed;
+        self.shm_buffer_metadata_missing_adapter_report |=
+            delta.shm_buffer_metadata_missing_adapter_report;
+        self.shm_buffer_metadata_unavailable_blocker |=
+            delta.shm_buffer_metadata_unavailable_blocker;
+        self.shm_buffer_metadata_unsupported_non_shm_buffer |=
+            delta.shm_buffer_metadata_unsupported_non_shm_buffer;
+        self.shm_buffer_metadata_texture_creation_forbidden |=
+            delta.shm_buffer_metadata_texture_creation_forbidden;
+        self.shm_buffer_metadata_renderer_call_forbidden |=
+            delta.shm_buffer_metadata_renderer_call_forbidden;
+        self.shm_buffer_metadata_damage_submit_forbidden |=
+            delta.shm_buffer_metadata_damage_submit_forbidden;
+        self.shm_buffer_metadata_frame_callback_done_forbidden |=
+            delta.shm_buffer_metadata_frame_callback_done_forbidden;
+        self.shm_buffer_metadata_drm_gbm_dmabuf_forbidden |=
+            delta.shm_buffer_metadata_drm_gbm_dmabuf_forbidden;
+        self.shm_buffer_metadata_buffer_import_attempted |=
+            delta.shm_buffer_metadata_buffer_import_attempted;
+        self.shm_buffer_metadata_buffer_imported |= delta.shm_buffer_metadata_buffer_imported;
+        self.shm_buffer_metadata_texture_created |= delta.shm_buffer_metadata_texture_created;
+        self.shm_buffer_metadata_renderer_called |= delta.shm_buffer_metadata_renderer_called;
+        self.shm_buffer_metadata_damage_submitted |= delta.shm_buffer_metadata_damage_submitted;
+        self.shm_buffer_metadata_frame_callback_done_sent |=
+            delta.shm_buffer_metadata_frame_callback_done_sent;
+        self.shm_buffer_metadata_input_support |= delta.shm_buffer_metadata_input_support;
+        self.shm_buffer_metadata_core_mutation_invoked |=
+            delta.shm_buffer_metadata_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -4573,6 +4763,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_shm_first_buffer_import_adapter_report(
                 &report.shm_first_buffer_import_adapter_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_shm_buffer_metadata_report(
+                &report.shm_buffer_metadata_report,
             ),
         );
 
@@ -8178,6 +8373,65 @@ mod tests {
             !report
                 .surface_commit
                 .shm_buffer_import_core_mutation_invoked
+        );
+        assert_eq!(report.surface_commit.shm_buffer_metadata_invocations, 3);
+        assert_eq!(report.surface_commit.shm_buffer_metadata_reports.len(), 3);
+        assert!(!report.surface_commit.shm_buffer_metadata_available);
+        assert!(!report.surface_commit.shm_buffer_metadata_observed);
+        assert!(report.surface_commit.shm_buffer_metadata_unavailable);
+        assert!(!report.surface_commit.shm_buffer_metadata_width_observed);
+        assert!(!report.surface_commit.shm_buffer_metadata_height_observed);
+        assert!(!report.surface_commit.shm_buffer_metadata_stride_observed);
+        assert!(!report.surface_commit.shm_buffer_metadata_format_observed);
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_unavailable_blocker
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_texture_creation_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_renderer_call_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_damage_submit_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_frame_callback_done_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_drm_gbm_dmabuf_forbidden
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_buffer_import_attempted
+        );
+        assert!(!report.surface_commit.shm_buffer_metadata_buffer_imported);
+        assert!(!report.surface_commit.shm_buffer_metadata_texture_created);
+        assert!(!report.surface_commit.shm_buffer_metadata_renderer_called);
+        assert!(!report.surface_commit.shm_buffer_metadata_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.shm_buffer_metadata_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_core_mutation_invoked
         );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);

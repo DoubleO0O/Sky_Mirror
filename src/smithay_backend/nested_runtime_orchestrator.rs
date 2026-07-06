@@ -3524,6 +3524,65 @@ mod tests {
                 .surface_commit
                 .shm_buffer_import_core_mutation_invoked
         );
+        assert_eq!(report.surface_commit.shm_buffer_metadata_invocations, 3);
+        assert_eq!(report.surface_commit.shm_buffer_metadata_reports.len(), 3);
+        assert!(!report.surface_commit.shm_buffer_metadata_available);
+        assert!(!report.surface_commit.shm_buffer_metadata_observed);
+        assert!(report.surface_commit.shm_buffer_metadata_unavailable);
+        assert!(!report.surface_commit.shm_buffer_metadata_width_observed);
+        assert!(!report.surface_commit.shm_buffer_metadata_height_observed);
+        assert!(!report.surface_commit.shm_buffer_metadata_stride_observed);
+        assert!(!report.surface_commit.shm_buffer_metadata_format_observed);
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_unavailable_blocker
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_texture_creation_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_renderer_call_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_damage_submit_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_frame_callback_done_forbidden
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_drm_gbm_dmabuf_forbidden
+        );
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_buffer_import_attempted
+        );
+        assert!(!report.surface_commit.shm_buffer_metadata_buffer_imported);
+        assert!(!report.surface_commit.shm_buffer_metadata_texture_created);
+        assert!(!report.surface_commit.shm_buffer_metadata_renderer_called);
+        assert!(!report.surface_commit.shm_buffer_metadata_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.shm_buffer_metadata_input_support);
+        assert!(
+            !report
+                .surface_commit
+                .shm_buffer_metadata_core_mutation_invoked
+        );
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);

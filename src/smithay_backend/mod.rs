@@ -376,10 +376,13 @@ pub use linux_runtime::SmithayLinuxRuntimeProbe;
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_shm_buffer_import_adapter::{
-    LinuxShmBufferTypeBoundaryEvidence, LinuxShmFirstBufferImportAdapterSkeleton,
+    LinuxShmBufferMetadataEvidence, LinuxShmBufferMetadataKind, LinuxShmBufferTypeBoundaryEvidence,
+    LinuxShmFirstBufferImportAdapterSkeleton, RuntimeSurfaceCommitShmBufferMetadataBlocker,
+    RuntimeSurfaceCommitShmBufferMetadataOperation, RuntimeSurfaceCommitShmBufferMetadataReport,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation,
-    RuntimeSurfaceCommitShmFirstBufferImportAdapterReport, observe_wl_buffer_type_boundary,
+    RuntimeSurfaceCommitShmFirstBufferImportAdapterReport, extract_shm_buffer_metadata_evidence,
+    observe_wl_buffer_type_boundary, shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
 };
 #[allow(unused_imports)]
@@ -6507,7 +6510,6 @@ mod nested_socket_probe_gate_tests {
         }
 
         for forbidden in [
-            "with_buffer_contents(",
             "buffer_import_attempted: true",
             "buffer_imported: true",
             "texture_created: true",
@@ -6527,6 +6529,169 @@ mod nested_socket_probe_gate_tests {
                     && !coordinator.contains(forbidden)
                     && !runtime_loop.contains(forbidden),
                 "Phase 56A source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56B 建立 Linux-only SHM buffer metadata evidence / taxonomy。
+    ///
+    /// 这个 source-contract 允许 Linux-only adapter 层读取 Smithay `BufferData`
+    /// metadata，但仍禁止 buffer import、texture creation、renderer call、damage submit、
+    /// frame callback done、input 和 core mutation。
+    #[test]
+    fn shm_buffer_metadata_evidence_taxonomy_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56B SHM metadata adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56B coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56B loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56B orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56B_SHM_BUFFER_METADATA_EVIDENCE.md"),
+        )
+        .expect("Phase 56B 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56B - SHM Buffer Metadata Evidence",
+            "SHM buffer metadata evidence",
+            "offset",
+            "width",
+            "height",
+            "stride",
+            "format",
+            "unavailable / unsupported blocker",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+            "Phase 56C",
+            "requires separate",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56B 文档缺少 metadata evidence 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub struct LinuxShmBufferMetadataEvidence",
+            "pub enum LinuxShmBufferMetadataKind",
+            "pub enum RuntimeSurfaceCommitShmBufferMetadataBlocker",
+            "pub struct RuntimeSurfaceCommitShmBufferMetadataReport",
+            "pub fn extract_shm_buffer_metadata_evidence",
+            "smithay::wayland::shm::with_buffer_contents",
+            "metadata.offset",
+            "metadata.width",
+            "metadata.height",
+            "metadata.stride",
+            "metadata.format",
+            "shm_metadata_available: true",
+            "shm_metadata_observed: true",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+            "MetadataUnavailable",
+            "UnsupportedNonShmBuffer",
+            "TextureCreationForbiddenInPhase56B",
+            "RendererCallForbiddenInPhase56B",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56B adapter production source 缺少 metadata evidence: {required}"
+            );
+        }
+
+        for required in [
+            "pub shm_buffer_metadata_report:",
+            "metadata_report_from_adapter_report",
+            "shm_buffer_metadata_report,",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56B coordinator 缺少 metadata report 接入证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub shm_buffer_metadata_invocations: usize",
+            "Vec<RuntimeSurfaceCommitShmBufferMetadataReport>",
+            "pub shm_buffer_metadata_available: bool",
+            "pub shm_buffer_metadata_observed: bool",
+            "pub shm_buffer_metadata_unavailable: bool",
+            "pub shm_buffer_metadata_width_observed: bool",
+            "pub shm_buffer_metadata_stride_observed: bool",
+            "pub shm_buffer_metadata_format_observed: bool",
+            "pub shm_buffer_metadata_buffer_import_attempted: bool",
+            "pub shm_buffer_metadata_buffer_imported: bool",
+            "pub shm_buffer_metadata_texture_created: bool",
+            "pub shm_buffer_metadata_renderer_called: bool",
+            "from_shm_buffer_metadata_report",
+            "report.shm_buffer_metadata_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56B loop 缺少 metadata 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "shm_buffer_metadata_invocations",
+            "shm_buffer_metadata_reports",
+            "shm_buffer_metadata_available",
+            "shm_buffer_metadata_unavailable",
+            "shm_buffer_metadata_buffer_imported",
+            "shm_buffer_metadata_texture_created",
+            "shm_buffer_metadata_renderer_called",
+            "shm_buffer_metadata_core_mutation_invoked",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56B orchestrator test/report 缺少 metadata 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !coordinator.contains(forbidden)
+                    && !runtime_loop.contains(forbidden),
+                "Phase 56B source 包含禁止的真实执行/后端 token: {forbidden}"
             );
         }
     }

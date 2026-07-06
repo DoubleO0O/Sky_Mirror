@@ -19,7 +19,7 @@ use crate::{
             LiveToplevelAdmissionOwnerReport, enqueue_live_toplevel_admission_from_observation,
         },
         linux_shm_buffer_import_adapter::{
-            LinuxShmFirstBufferImportAdapterSkeleton,
+            LinuxShmFirstBufferImportAdapterSkeleton, RuntimeSurfaceCommitShmBufferMetadataReport,
             RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
         },
         linux_toplevel_admission_bridge::PendingXdgToplevelAdmission,
@@ -4499,6 +4499,9 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// Phase 56A SHM-first buffer import adapter skeleton report。
     pub shm_first_buffer_import_adapter_report:
         RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+
+    /// Phase 56B SHM buffer metadata evidence report。
+    pub shm_buffer_metadata_report: RuntimeSurfaceCommitShmBufferMetadataReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -4864,6 +4867,9 @@ impl NestedRuntimeCoordinator {
         let shm_first_buffer_import_adapter_report = self
             .shm_first_buffer_import_adapter
             .report_from_actual_attempt_record(&buffer_import_actual_attempt_record, None);
+        let shm_buffer_metadata_report = self
+            .shm_first_buffer_import_adapter
+            .metadata_report_from_adapter_report(&shm_first_buffer_import_adapter_report, None);
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -4894,6 +4900,7 @@ impl NestedRuntimeCoordinator {
             buffer_import_implementation_owner_shell_report,
             buffer_import_actual_attempt_record,
             shm_first_buffer_import_adapter_report,
+            shm_buffer_metadata_report,
         }
     }
 
