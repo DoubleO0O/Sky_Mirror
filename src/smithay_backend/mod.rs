@@ -6696,6 +6696,143 @@ mod nested_socket_probe_gate_tests {
         }
     }
 
+    /// Phase 56C 细化 SHM metadata unavailable / unsupported / blocked taxonomy。
+    ///
+    /// 这个 source-contract 只允许 Linux-only adapter 层继续细化 metadata blocker
+    /// report；仍禁止 buffer import、texture creation、renderer call、damage submit、
+    /// frame callback done、input 和 core mutation。
+    #[test]
+    fn shm_metadata_blocker_refinement_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56C SHM metadata adapter module 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56C loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56C orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56C_SHM_METADATA_BLOCKER_REFINEMENT.md"),
+        )
+        .expect("Phase 56C 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56C - SHM Metadata Unsupported / Blocker Refinement",
+            "no real WlBuffer available",
+            "WlBuffer available but not SHM",
+            "SHM-like candidate but missing safe Smithay metadata accessor",
+            "metadata observable but insufficient for texture precondition",
+            "missing buffer lifetime / cleanup ownership policy",
+            "runtime report only has evidence, not import execution",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+            "Phase 56D",
+            "requires separate",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56C 文档缺少 refined blocker taxonomy 证据: {required}"
+            );
+        }
+
+        for required in [
+            "NoRealWlBufferAvailable",
+            "WlBufferAvailableButNotShm",
+            "ShmLikeCandidateMissingSafeSmithayMetadataAccessor",
+            "MetadataObservableButInsufficientForTexturePrecondition",
+            "MissingBufferLifetimeCleanupOwnershipPolicy",
+            "RuntimeReportOnlyHasEvidenceNotImportExecution",
+            "metadata_blocker_refinement_applied: true",
+            "no_real_wl_buffer_available",
+            "wl_buffer_available_but_not_shm",
+            "shm_like_candidate_missing_safe_accessor",
+            "metadata_insufficient_for_texture_precondition",
+            "missing_buffer_lifetime_cleanup_policy",
+            "runtime_report_only_has_evidence_not_import_execution",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56C adapter production source 缺少 refined blocker taxonomy: {required}"
+            );
+        }
+
+        for required in [
+            "pub shm_buffer_metadata_blocker_refinement_applied: bool",
+            "pub shm_buffer_metadata_no_real_wl_buffer_available: bool",
+            "pub shm_buffer_metadata_wl_buffer_available_but_not_shm: bool",
+            "pub shm_buffer_metadata_shm_like_candidate_missing_safe_accessor: bool",
+            "pub shm_buffer_metadata_insufficient_for_texture_precondition: bool",
+            "pub shm_buffer_metadata_missing_lifetime_cleanup_policy: bool",
+            "pub shm_buffer_metadata_evidence_only_not_import_execution: bool",
+            "RuntimeReportOnlyHasEvidenceNotImportExecution",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56C loop 缺少 refined blocker 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "shm_buffer_metadata_blocker_refinement_applied",
+            "shm_buffer_metadata_no_real_wl_buffer_available",
+            "shm_buffer_metadata_missing_lifetime_cleanup_policy",
+            "shm_buffer_metadata_evidence_only_not_import_execution",
+            "shm_buffer_metadata_buffer_import_attempted",
+            "shm_buffer_metadata_texture_created",
+            "shm_buffer_metadata_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56C orchestrator test/report 缺少 refined blocker 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56C source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
     /// Phase 52P controlled xdg_wm_base bind API 必须同时受 feature 与 Linux target 隔离。
     #[test]
     fn controlled_xdg_wm_base_bind_api_is_linux_only() {

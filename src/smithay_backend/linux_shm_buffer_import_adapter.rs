@@ -312,6 +312,8 @@ pub enum RuntimeSurfaceCommitShmBufferMetadataOperation {
     CheckShmMetadataEvidence,
     /// Classify metadata availability.
     ClassifyMetadataAvailability,
+    /// Refine unavailable / unsupported / blocked metadata reasons.
+    RefineMetadataBlockers,
     /// Build the pure-data metadata report.
     BuildMetadataReport,
 }
@@ -325,6 +327,18 @@ pub enum RuntimeSurfaceCommitShmBufferMetadataBlocker {
     MetadataUnavailable,
     /// The concrete buffer was not Smithay SHM-managed.
     UnsupportedNonShmBuffer,
+    /// The runtime report has no concrete `WlBuffer` available.
+    NoRealWlBufferAvailable,
+    /// A concrete `WlBuffer` was available but Smithay did not manage it as SHM.
+    WlBufferAvailableButNotShm,
+    /// A SHM-like candidate could not be read through a safe Smithay metadata accessor.
+    ShmLikeCandidateMissingSafeSmithayMetadataAccessor,
+    /// Metadata was observable but is not sufficient to satisfy texture preconditions.
+    MetadataObservableButInsufficientForTexturePrecondition,
+    /// Buffer lifetime and cleanup ownership policy is not defined yet.
+    MissingBufferLifetimeCleanupOwnershipPolicy,
+    /// Runtime report carries only evidence and must not be treated as import execution.
+    RuntimeReportOnlyHasEvidenceNotImportExecution,
     /// Texture creation remains forbidden in Phase 56B.
     TextureCreationForbiddenInPhase56B,
     /// Renderer calls remain forbidden in Phase 56B.
@@ -363,6 +377,27 @@ pub struct RuntimeSurfaceCommitShmBufferMetadataReport {
 
     /// Metadata taxonomy kind.
     pub shm_buffer_metadata_kind: LinuxShmBufferMetadataKind,
+
+    /// Phase 56C refined blocker taxonomy was applied.
+    pub metadata_blocker_refinement_applied: bool,
+
+    /// No concrete `WlBuffer` was available to the runtime report path.
+    pub no_real_wl_buffer_available: bool,
+
+    /// A concrete `WlBuffer` was available but not Smithay SHM-managed.
+    pub wl_buffer_available_but_not_shm: bool,
+
+    /// A SHM-like candidate lacked a safe Smithay metadata accessor.
+    pub shm_like_candidate_missing_safe_accessor: bool,
+
+    /// Metadata exists but does not satisfy texture preconditions.
+    pub metadata_insufficient_for_texture_precondition: bool,
+
+    /// Buffer lifetime and cleanup ownership policy is still missing.
+    pub missing_buffer_lifetime_cleanup_policy: bool,
+
+    /// This report is evidence only and does not execute import.
+    pub runtime_report_only_has_evidence_not_import_execution: bool,
 
     /// Width metadata was observed.
     pub width_observed: bool,
@@ -538,6 +573,7 @@ pub fn shm_buffer_metadata_report_from_adapter_report(
     report: &RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
     metadata: Option<LinuxShmBufferMetadataEvidence>,
 ) -> RuntimeSurfaceCommitShmBufferMetadataReport {
+    let no_real_wl_buffer_available = metadata.is_none();
     let metadata_available = metadata
         .as_ref()
         .is_some_and(|evidence| evidence.shm_metadata_available);
@@ -559,6 +595,34 @@ pub fn shm_buffer_metadata_report_from_adapter_report(
     if metadata_kind == LinuxShmBufferMetadataKind::UnsupportedNonShmBuffer {
         blockers.push(RuntimeSurfaceCommitShmBufferMetadataBlocker::UnsupportedNonShmBuffer);
     }
+    if no_real_wl_buffer_available {
+        blockers.push(RuntimeSurfaceCommitShmBufferMetadataBlocker::NoRealWlBufferAvailable);
+    }
+    let wl_buffer_available_but_not_shm =
+        metadata_kind == LinuxShmBufferMetadataKind::UnsupportedNonShmBuffer;
+    if wl_buffer_available_but_not_shm {
+        blockers.push(RuntimeSurfaceCommitShmBufferMetadataBlocker::WlBufferAvailableButNotShm);
+    }
+    let shm_like_candidate_missing_safe_accessor = metadata.as_ref().is_some_and(|evidence| {
+        evidence.shm_metadata_extraction_attempted
+            && evidence.shm_buffer_metadata_kind == LinuxShmBufferMetadataKind::Unavailable
+            && !evidence.shm_metadata_available
+    });
+    if shm_like_candidate_missing_safe_accessor {
+        blockers.push(
+            RuntimeSurfaceCommitShmBufferMetadataBlocker::ShmLikeCandidateMissingSafeSmithayMetadataAccessor,
+        );
+    }
+    let metadata_insufficient_for_texture_precondition = metadata_observed;
+    if metadata_insufficient_for_texture_precondition {
+        blockers.push(
+            RuntimeSurfaceCommitShmBufferMetadataBlocker::MetadataObservableButInsufficientForTexturePrecondition,
+        );
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitShmBufferMetadataBlocker::MissingBufferLifetimeCleanupOwnershipPolicy,
+        RuntimeSurfaceCommitShmBufferMetadataBlocker::RuntimeReportOnlyHasEvidenceNotImportExecution,
+    ]);
     blockers.extend([
         RuntimeSurfaceCommitShmBufferMetadataBlocker::TextureCreationForbiddenInPhase56B,
         RuntimeSurfaceCommitShmBufferMetadataBlocker::RendererCallForbiddenInPhase56B,
@@ -584,6 +648,13 @@ pub fn shm_buffer_metadata_report_from_adapter_report(
         shm_metadata_observed: metadata_observed,
         shm_metadata_unavailable: !metadata_available,
         shm_buffer_metadata_kind: metadata_kind,
+        metadata_blocker_refinement_applied: true,
+        no_real_wl_buffer_available,
+        wl_buffer_available_but_not_shm,
+        shm_like_candidate_missing_safe_accessor,
+        metadata_insufficient_for_texture_precondition,
+        missing_buffer_lifetime_cleanup_policy: true,
+        runtime_report_only_has_evidence_not_import_execution: true,
         width_observed: width.is_some(),
         height_observed: height.is_some(),
         stride_observed: stride.is_some(),
@@ -605,6 +676,7 @@ pub fn shm_buffer_metadata_report_from_adapter_report(
             RuntimeSurfaceCommitShmBufferMetadataOperation::ObserveShmFirstAdapterReport,
             RuntimeSurfaceCommitShmBufferMetadataOperation::CheckShmMetadataEvidence,
             RuntimeSurfaceCommitShmBufferMetadataOperation::ClassifyMetadataAvailability,
+            RuntimeSurfaceCommitShmBufferMetadataOperation::RefineMetadataBlockers,
             RuntimeSurfaceCommitShmBufferMetadataOperation::BuildMetadataReport,
         ],
         blockers,
