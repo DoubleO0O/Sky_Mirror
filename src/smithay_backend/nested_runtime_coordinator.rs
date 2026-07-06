@@ -18,6 +18,10 @@ use crate::{
         linux_live_toplevel_admission_owner::{
             LiveToplevelAdmissionOwnerReport, enqueue_live_toplevel_admission_from_observation,
         },
+        linux_shm_buffer_import_adapter::{
+            LinuxShmFirstBufferImportAdapterSkeleton,
+            RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+        },
         linux_toplevel_admission_bridge::PendingXdgToplevelAdmission,
         linux_toplevel_admission_runtime_queue::{
             RuntimeToplevelAdmissionDrainReport, RuntimeToplevelAdmissionDrainTick,
@@ -4491,6 +4495,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// actual buffer import attempt admission / record report。
     pub buffer_import_actual_attempt_record: RuntimeSurfaceCommitBufferImportActualAttemptRecord,
+
+    /// Phase 56A SHM-first buffer import adapter skeleton report。
+    pub shm_first_buffer_import_adapter_report:
+        RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -4523,6 +4531,7 @@ pub struct NestedRuntimeCoordinator {
     buffer_import_implementation_owner_shell:
         RuntimeSurfaceCommitBufferImportImplementationOwnerShell,
     buffer_import_actual_attempt_recorder: RuntimeSurfaceCommitBufferImportActualAttemptRecorder,
+    shm_first_buffer_import_adapter: LinuxShmFirstBufferImportAdapterSkeleton,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
 }
 
@@ -4578,6 +4587,7 @@ impl NestedRuntimeCoordinator {
                 RuntimeSurfaceCommitBufferImportImplementationOwnerShell::new(),
             buffer_import_actual_attempt_recorder:
                 RuntimeSurfaceCommitBufferImportActualAttemptRecorder::new(),
+            shm_first_buffer_import_adapter: LinuxShmFirstBufferImportAdapterSkeleton::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
         })
     }
@@ -4851,6 +4861,9 @@ impl NestedRuntimeCoordinator {
             .buffer_import_actual_attempt_record_from_owner_shell(
                 &buffer_import_implementation_owner_shell_report,
             );
+        let shm_first_buffer_import_adapter_report = self
+            .shm_first_buffer_import_adapter
+            .report_from_actual_attempt_record(&buffer_import_actual_attempt_record, None);
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -4880,6 +4893,7 @@ impl NestedRuntimeCoordinator {
             buffer_import_execution_dry_run_report,
             buffer_import_implementation_owner_shell_report,
             buffer_import_actual_attempt_record,
+            shm_first_buffer_import_adapter_report,
         }
     }
 
