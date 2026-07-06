@@ -3573,6 +3573,58 @@ mod tests {
                 .surface_commit
                 .shm_buffer_metadata_evidence_only_not_import_execution
         );
+        assert_eq!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_harness_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_paths_covered,
+            21
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_all_paths_covered
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_no_real_wl_buffer_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_non_shm_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_metadata_unavailable_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_partially_available_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_insufficient_for_texture_precondition_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_missing_lifetime_cleanup_policy_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_evidence_without_import_execution_path
+        );
         assert!(
             report
                 .surface_commit

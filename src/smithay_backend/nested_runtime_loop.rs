@@ -1899,6 +1899,36 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// 是否因 runtime report 只有 evidence、不是 import execution 而 blocked。
     pub shm_buffer_metadata_evidence_only_not_import_execution: bool,
 
+    /// Phase 56D validation harness 被调用的次数。
+    pub shm_buffer_metadata_validation_harness_invocations: usize,
+
+    /// Phase 56D validation harness 覆盖的 controlled path 数量。
+    pub shm_buffer_metadata_validation_paths_covered: usize,
+
+    /// Phase 56D validation harness 是否覆盖所有 required paths。
+    pub shm_buffer_metadata_validation_all_paths_covered: bool,
+
+    /// 是否验证 no real WlBuffer path。
+    pub shm_buffer_metadata_validation_no_real_wl_buffer_path: bool,
+
+    /// 是否验证 non-SHM path。
+    pub shm_buffer_metadata_validation_non_shm_path: bool,
+
+    /// 是否验证 metadata unavailable path。
+    pub shm_buffer_metadata_validation_metadata_unavailable_path: bool,
+
+    /// 是否验证 metadata partially available path。
+    pub shm_buffer_metadata_validation_partially_available_path: bool,
+
+    /// 是否验证 metadata insufficient for texture precondition path。
+    pub shm_buffer_metadata_validation_insufficient_for_texture_precondition_path: bool,
+
+    /// 是否验证 missing lifetime / cleanup ownership policy path。
+    pub shm_buffer_metadata_validation_missing_lifetime_cleanup_policy_path: bool,
+
+    /// 是否验证 runtime evidence without import execution path。
+    pub shm_buffer_metadata_validation_evidence_without_import_execution_path: bool,
+
     /// Phase 56B 是否仍禁止 texture creation。
     pub shm_buffer_metadata_texture_creation_forbidden: bool,
 
@@ -2432,6 +2462,16 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             shm_buffer_metadata_insufficient_for_texture_precondition: false,
             shm_buffer_metadata_missing_lifetime_cleanup_policy: false,
             shm_buffer_metadata_evidence_only_not_import_execution: false,
+            shm_buffer_metadata_validation_harness_invocations: 0,
+            shm_buffer_metadata_validation_paths_covered: 0,
+            shm_buffer_metadata_validation_all_paths_covered: false,
+            shm_buffer_metadata_validation_no_real_wl_buffer_path: false,
+            shm_buffer_metadata_validation_non_shm_path: false,
+            shm_buffer_metadata_validation_metadata_unavailable_path: false,
+            shm_buffer_metadata_validation_partially_available_path: false,
+            shm_buffer_metadata_validation_insufficient_for_texture_precondition_path: false,
+            shm_buffer_metadata_validation_missing_lifetime_cleanup_policy_path: false,
+            shm_buffer_metadata_validation_evidence_without_import_execution_path: false,
             shm_buffer_metadata_texture_creation_forbidden: false,
             shm_buffer_metadata_renderer_call_forbidden: false,
             shm_buffer_metadata_damage_submit_forbidden: false,
@@ -3517,6 +3557,7 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         report: &RuntimeSurfaceCommitShmBufferMetadataReport,
     ) -> Self {
         let has_blocker = |blocker| report.blockers.contains(&blocker);
+        let validation_harness_report = &report.validation_harness_report;
         Self {
             shm_buffer_metadata_invocations: usize::from(report.shm_metadata_report_invoked),
             shm_buffer_metadata_reports: vec![report.clone()],
@@ -3556,6 +3597,29 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             shm_buffer_metadata_evidence_only_not_import_execution: has_blocker(
                 RuntimeSurfaceCommitShmBufferMetadataBlocker::RuntimeReportOnlyHasEvidenceNotImportExecution,
             ),
+            shm_buffer_metadata_validation_harness_invocations: usize::from(
+                validation_harness_report.validation_harness_invoked,
+            ),
+            shm_buffer_metadata_validation_paths_covered:
+                validation_harness_report.validation_paths_covered,
+            shm_buffer_metadata_validation_all_paths_covered:
+                validation_harness_report.all_validation_paths_covered,
+            shm_buffer_metadata_validation_no_real_wl_buffer_path: validation_harness_report
+                .no_real_wl_buffer_path_validated,
+            shm_buffer_metadata_validation_non_shm_path: validation_harness_report
+                .non_shm_path_validated,
+            shm_buffer_metadata_validation_metadata_unavailable_path: validation_harness_report
+                .metadata_unavailable_path_validated,
+            shm_buffer_metadata_validation_partially_available_path: validation_harness_report
+                .metadata_partially_available_path_validated,
+            shm_buffer_metadata_validation_insufficient_for_texture_precondition_path:
+                validation_harness_report
+                    .metadata_insufficient_for_texture_precondition_path_validated,
+            shm_buffer_metadata_validation_missing_lifetime_cleanup_policy_path:
+                validation_harness_report.missing_lifetime_cleanup_policy_path_validated,
+            shm_buffer_metadata_validation_evidence_without_import_execution_path:
+                validation_harness_report
+                    .runtime_evidence_without_import_execution_path_validated,
             shm_buffer_metadata_texture_creation_forbidden: has_blocker(
                 RuntimeSurfaceCommitShmBufferMetadataBlocker::TextureCreationForbiddenInPhase56B,
             ),
@@ -4547,6 +4611,28 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.shm_buffer_metadata_missing_lifetime_cleanup_policy;
         self.shm_buffer_metadata_evidence_only_not_import_execution |=
             delta.shm_buffer_metadata_evidence_only_not_import_execution;
+        self.shm_buffer_metadata_validation_harness_invocations = self
+            .shm_buffer_metadata_validation_harness_invocations
+            .saturating_add(delta.shm_buffer_metadata_validation_harness_invocations);
+        self.shm_buffer_metadata_validation_paths_covered = self
+            .shm_buffer_metadata_validation_paths_covered
+            .saturating_add(delta.shm_buffer_metadata_validation_paths_covered);
+        self.shm_buffer_metadata_validation_all_paths_covered |=
+            delta.shm_buffer_metadata_validation_all_paths_covered;
+        self.shm_buffer_metadata_validation_no_real_wl_buffer_path |=
+            delta.shm_buffer_metadata_validation_no_real_wl_buffer_path;
+        self.shm_buffer_metadata_validation_non_shm_path |=
+            delta.shm_buffer_metadata_validation_non_shm_path;
+        self.shm_buffer_metadata_validation_metadata_unavailable_path |=
+            delta.shm_buffer_metadata_validation_metadata_unavailable_path;
+        self.shm_buffer_metadata_validation_partially_available_path |=
+            delta.shm_buffer_metadata_validation_partially_available_path;
+        self.shm_buffer_metadata_validation_insufficient_for_texture_precondition_path |=
+            delta.shm_buffer_metadata_validation_insufficient_for_texture_precondition_path;
+        self.shm_buffer_metadata_validation_missing_lifetime_cleanup_policy_path |=
+            delta.shm_buffer_metadata_validation_missing_lifetime_cleanup_policy_path;
+        self.shm_buffer_metadata_validation_evidence_without_import_execution_path |=
+            delta.shm_buffer_metadata_validation_evidence_without_import_execution_path;
         self.shm_buffer_metadata_texture_creation_forbidden |=
             delta.shm_buffer_metadata_texture_creation_forbidden;
         self.shm_buffer_metadata_renderer_call_forbidden |=
@@ -8484,6 +8570,58 @@ mod tests {
             report
                 .surface_commit
                 .shm_buffer_metadata_evidence_only_not_import_execution
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_harness_invocations,
+            3
+        );
+        assert_eq!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_paths_covered,
+            21
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_all_paths_covered
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_no_real_wl_buffer_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_non_shm_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_metadata_unavailable_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_partially_available_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_insufficient_for_texture_precondition_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_missing_lifetime_cleanup_policy_path
+        );
+        assert!(
+            report
+                .surface_commit
+                .shm_buffer_metadata_validation_evidence_without_import_execution_path
         );
         assert!(
             report
