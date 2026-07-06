@@ -381,9 +381,12 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitShmBufferMetadataOperation, RuntimeSurfaceCommitShmBufferMetadataReport,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation,
-    RuntimeSurfaceCommitShmFirstBufferImportAdapterReport, extract_shm_buffer_metadata_evidence,
+    RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+    RuntimeSurfaceCommitShmMetadataValidationHarnessReport,
+    RuntimeSurfaceCommitShmMetadataValidationPath, extract_shm_buffer_metadata_evidence,
     observe_wl_buffer_type_boundary, shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
+    validate_shm_metadata_harness_paths,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -6829,6 +6832,154 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56C source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56D 为 SHM metadata evidence / blocker taxonomy 建立 validation harness。
+    ///
+    /// 这个 source-contract 只允许 pure-data / controlled validation report；
+    /// 仍禁止 buffer import、texture creation、renderer call、damage submit、
+    /// frame callback done、input 和 core mutation。
+    #[test]
+    fn shm_metadata_validation_harness_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56D SHM metadata adapter module 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56D loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56D orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56D_SHM_METADATA_VALIDATION_HARNESS.md"),
+        )
+        .expect("Phase 56D 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56D - SHM Metadata Validation Harness",
+            "no real WlBuffer path",
+            "non-SHM path",
+            "metadata unavailable path",
+            "metadata partially available path",
+            "metadata insufficient for texture precondition path",
+            "missing lifetime / cleanup ownership policy path",
+            "runtime evidence without import execution path",
+            "buffer_import_attempted = false",
+            "buffer_imported = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "input_support = false",
+            "core_mutation_invoked = false",
+            "Phase 56E",
+            "requires separate",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56D 文档缺少 validation harness 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitShmMetadataValidationPath",
+            "NoRealWlBuffer",
+            "NonShm",
+            "MetadataUnavailable",
+            "MetadataPartiallyAvailable",
+            "MetadataInsufficientForTexturePrecondition",
+            "MissingLifetimeCleanupOwnershipPolicy",
+            "RuntimeEvidenceWithoutImportExecution",
+            "pub struct RuntimeSurfaceCommitShmMetadataValidationHarnessReport",
+            "pub fn validate_shm_metadata_harness_paths",
+            "validation_harness_invoked: true",
+            "all_validation_paths_covered: true",
+            "no_real_wl_buffer_path_validated",
+            "non_shm_path_validated",
+            "metadata_unavailable_path_validated",
+            "metadata_partially_available_path_validated",
+            "metadata_insufficient_for_texture_precondition_path_validated",
+            "missing_lifetime_cleanup_policy_path_validated",
+            "runtime_evidence_without_import_execution_path_validated",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56D adapter production source 缺少 validation harness: {required}"
+            );
+        }
+
+        for required in [
+            "pub shm_buffer_metadata_validation_harness_invocations: usize",
+            "pub shm_buffer_metadata_validation_paths_covered: usize",
+            "pub shm_buffer_metadata_validation_all_paths_covered: bool",
+            "pub shm_buffer_metadata_validation_no_real_wl_buffer_path: bool",
+            "pub shm_buffer_metadata_validation_non_shm_path: bool",
+            "pub shm_buffer_metadata_validation_metadata_unavailable_path: bool",
+            "pub shm_buffer_metadata_validation_partially_available_path: bool",
+            "pub shm_buffer_metadata_validation_insufficient_for_texture_precondition_path: bool",
+            "pub shm_buffer_metadata_validation_missing_lifetime_cleanup_policy_path: bool",
+            "pub shm_buffer_metadata_validation_evidence_without_import_execution_path: bool",
+            "validation_harness_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56D loop 缺少 validation harness 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "shm_buffer_metadata_validation_harness_invocations",
+            "shm_buffer_metadata_validation_all_paths_covered",
+            "shm_buffer_metadata_validation_no_real_wl_buffer_path",
+            "shm_buffer_metadata_validation_non_shm_path",
+            "shm_buffer_metadata_validation_evidence_without_import_execution_path",
+            "shm_buffer_metadata_buffer_import_attempted",
+            "shm_buffer_metadata_texture_created",
+            "shm_buffer_metadata_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56D orchestrator test/report 缺少 validation harness 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56D source 包含禁止的真实执行/后端 token: {forbidden}"
             );
         }
     }
