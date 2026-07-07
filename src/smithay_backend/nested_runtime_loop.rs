@@ -23,6 +23,8 @@ use crate::{
         RuntimeSurfaceCommitTextureCreationBlocker, RuntimeSurfaceCommitTextureCreationNoopReport,
         RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
+        RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
+        RuntimeSurfaceCommitTextureOwnerBoundaryReport,
     },
     smithay_backend::nested_runtime_coordinator::{
         NestedRuntimeCoordinator, NestedRuntimeLiveAdmissionPumpReport,
@@ -2146,6 +2148,99 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// Phase 56F 是否触发 core mutation；固定保持 false。
     pub texture_creation_core_mutation_invoked: bool,
 
+    /// Phase 56G texture owner boundary seam 被调用的次数。
+    pub texture_owner_boundary_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 texture owner boundary reports。
+    pub texture_owner_boundary_reports: Vec<RuntimeSurfaceCommitTextureOwnerBoundaryReport>,
+
+    /// Phase 56G texture owner boundary 是否可用。
+    pub texture_owner_boundary_available: bool,
+
+    /// Phase 56G texture owner boundary 是否 blocked。
+    pub texture_owner_boundary_blocked: bool,
+
+    /// Phase 56G texture creation request owner 是否已定义。
+    pub texture_owner_texture_creation_request_owner_defined: bool,
+
+    /// Phase 56G future texture handle owner 是否已定义；固定保持 false。
+    pub texture_owner_future_texture_handle_owner_defined: bool,
+
+    /// Phase 56G future texture lifetime owner 是否已定义；固定保持 false。
+    pub texture_owner_future_texture_lifetime_owner_defined: bool,
+
+    /// Phase 56G future texture cleanup owner 是否已定义；固定保持 false。
+    pub texture_owner_future_texture_cleanup_owner_defined: bool,
+
+    /// Phase 56G future texture release owner 是否已定义；固定保持 false。
+    pub texture_owner_future_texture_release_owner_defined: bool,
+
+    /// Phase 56G future texture invalidation owner 是否已定义；固定保持 false。
+    pub texture_owner_future_texture_invalidation_owner_defined: bool,
+
+    /// Phase 56G renderer backend instance 是否可用；固定保持 false。
+    pub texture_owner_renderer_backend_instance_available: bool,
+
+    /// Phase 56G texture import route 是否可用；固定保持 false。
+    pub texture_owner_texture_import_route_available: bool,
+
+    /// Phase 56G 是否仍只是 texture creation no-op。
+    pub texture_owner_texture_creation_noop_only: bool,
+
+    /// Phase 56G 是否缺少 texture owner boundary policy。
+    pub texture_owner_missing_texture_owner_boundary: bool,
+
+    /// Phase 56G 是否缺少 future texture handle policy。
+    pub texture_owner_missing_future_texture_handle_policy: bool,
+
+    /// Phase 56G 是否缺少 future texture lifetime policy。
+    pub texture_owner_missing_future_texture_lifetime_policy: bool,
+
+    /// Phase 56G 是否缺少 future texture cleanup policy。
+    pub texture_owner_missing_future_texture_cleanup_policy: bool,
+
+    /// Phase 56G 是否缺少 future texture release policy。
+    pub texture_owner_missing_future_texture_release_policy: bool,
+
+    /// Phase 56G 是否缺少 future texture invalidation policy。
+    pub texture_owner_missing_future_texture_invalidation_policy: bool,
+
+    /// Phase 56G 是否缺少 renderer backend instance。
+    pub texture_owner_missing_renderer_backend_instance: bool,
+
+    /// Phase 56G 是否缺少 texture import route。
+    pub texture_owner_missing_texture_import_route: bool,
+
+    /// Phase 56G 是否只有 runtime evidence、没有 texture ownership execution。
+    pub texture_owner_runtime_evidence_without_texture_ownership: bool,
+
+    /// Phase 56G 是否只有 owner boundary、没有 texture creation。
+    pub texture_owner_boundary_without_texture_creation: bool,
+
+    /// Phase 56G 是否尝试 import buffer；固定保持 false。
+    pub texture_owner_buffer_import_attempted: bool,
+
+    /// Phase 56G 是否 import buffer；固定保持 false。
+    pub texture_owner_buffer_imported: bool,
+
+    /// Phase 56G 是否创建 texture；固定保持 false。
+    pub texture_owner_texture_created: bool,
+
+    /// Phase 56G 是否调用 renderer；固定保持 false。
+    pub texture_owner_renderer_called: bool,
+
+    /// Phase 56G 是否提交 damage；固定保持 false。
+    pub texture_owner_damage_submitted: bool,
+
+    /// Phase 56G 是否发送 frame callback done；固定保持 false。
+    pub texture_owner_frame_callback_done_sent: bool,
+
+    /// Phase 56G 是否接入 input；固定保持 false。
+    pub texture_owner_input_support: bool,
+
+    /// Phase 56G 是否触发 core mutation；固定保持 false。
+    pub texture_owner_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -2721,6 +2816,37 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             texture_creation_frame_callback_done_sent: false,
             texture_creation_input_support: false,
             texture_creation_core_mutation_invoked: false,
+            texture_owner_boundary_invocations: 0,
+            texture_owner_boundary_reports: Vec::new(),
+            texture_owner_boundary_available: false,
+            texture_owner_boundary_blocked: false,
+            texture_owner_texture_creation_request_owner_defined: false,
+            texture_owner_future_texture_handle_owner_defined: false,
+            texture_owner_future_texture_lifetime_owner_defined: false,
+            texture_owner_future_texture_cleanup_owner_defined: false,
+            texture_owner_future_texture_release_owner_defined: false,
+            texture_owner_future_texture_invalidation_owner_defined: false,
+            texture_owner_renderer_backend_instance_available: false,
+            texture_owner_texture_import_route_available: false,
+            texture_owner_texture_creation_noop_only: false,
+            texture_owner_missing_texture_owner_boundary: false,
+            texture_owner_missing_future_texture_handle_policy: false,
+            texture_owner_missing_future_texture_lifetime_policy: false,
+            texture_owner_missing_future_texture_cleanup_policy: false,
+            texture_owner_missing_future_texture_release_policy: false,
+            texture_owner_missing_future_texture_invalidation_policy: false,
+            texture_owner_missing_renderer_backend_instance: false,
+            texture_owner_missing_texture_import_route: false,
+            texture_owner_runtime_evidence_without_texture_ownership: false,
+            texture_owner_boundary_without_texture_creation: false,
+            texture_owner_buffer_import_attempted: false,
+            texture_owner_buffer_imported: false,
+            texture_owner_texture_created: false,
+            texture_owner_renderer_called: false,
+            texture_owner_damage_submitted: false,
+            texture_owner_frame_callback_done_sent: false,
+            texture_owner_input_support: false,
+            texture_owner_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -4017,6 +4143,77 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_texture_owner_boundary_report(
+        report: &RuntimeSurfaceCommitTextureOwnerBoundaryReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            texture_owner_boundary_invocations: usize::from(
+                report.texture_owner_boundary_available,
+            ),
+            texture_owner_boundary_reports: vec![report.clone()],
+            texture_owner_boundary_available: report.texture_owner_boundary_available,
+            texture_owner_boundary_blocked: report.texture_owner_boundary_blocked,
+            texture_owner_texture_creation_request_owner_defined: report
+                .texture_creation_request_owner_defined,
+            texture_owner_future_texture_handle_owner_defined: report
+                .future_texture_handle_owner_defined,
+            texture_owner_future_texture_lifetime_owner_defined: report
+                .future_texture_lifetime_owner_defined,
+            texture_owner_future_texture_cleanup_owner_defined: report
+                .future_texture_cleanup_owner_defined,
+            texture_owner_future_texture_release_owner_defined: report
+                .future_texture_release_owner_defined,
+            texture_owner_future_texture_invalidation_owner_defined: report
+                .future_texture_invalidation_owner_defined,
+            texture_owner_renderer_backend_instance_available: report
+                .renderer_backend_instance_available,
+            texture_owner_texture_import_route_available: report.texture_import_route_available,
+            texture_owner_texture_creation_noop_only: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::TextureCreationNoopOnly,
+            ),
+            texture_owner_missing_texture_owner_boundary: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingTextureOwnerBoundary,
+            ),
+            texture_owner_missing_future_texture_handle_policy: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureHandlePolicy,
+            ),
+            texture_owner_missing_future_texture_lifetime_policy: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureLifetimePolicy,
+            ),
+            texture_owner_missing_future_texture_cleanup_policy: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureCleanupPolicy,
+            ),
+            texture_owner_missing_future_texture_release_policy: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureReleasePolicy,
+            ),
+            texture_owner_missing_future_texture_invalidation_policy: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureInvalidationPolicy,
+            ),
+            texture_owner_missing_renderer_backend_instance: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingRendererBackendInstance,
+            ),
+            texture_owner_missing_texture_import_route: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingTextureImportRoute,
+            ),
+            texture_owner_runtime_evidence_without_texture_ownership: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::RuntimeEvidenceWithoutTextureOwnership,
+            ),
+            texture_owner_boundary_without_texture_creation: has_blocker(
+                RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::OwnerBoundaryWithoutTextureCreation,
+            ),
+            texture_owner_buffer_import_attempted: report.buffer_import_attempted,
+            texture_owner_buffer_imported: report.buffer_imported,
+            texture_owner_texture_created: report.texture_created,
+            texture_owner_renderer_called: report.renderer_called,
+            texture_owner_damage_submitted: report.damage_submitted,
+            texture_owner_frame_callback_done_sent: report.frame_callback_done_sent,
+            texture_owner_input_support: report.input_support,
+            texture_owner_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -5121,6 +5318,59 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.texture_creation_frame_callback_done_sent;
         self.texture_creation_input_support |= delta.texture_creation_input_support;
         self.texture_creation_core_mutation_invoked |= delta.texture_creation_core_mutation_invoked;
+        self.texture_owner_boundary_invocations = self
+            .texture_owner_boundary_invocations
+            .saturating_add(delta.texture_owner_boundary_invocations);
+        self.texture_owner_boundary_reports
+            .extend(delta.texture_owner_boundary_reports);
+        self.texture_owner_boundary_available |= delta.texture_owner_boundary_available;
+        self.texture_owner_boundary_blocked |= delta.texture_owner_boundary_blocked;
+        self.texture_owner_texture_creation_request_owner_defined |=
+            delta.texture_owner_texture_creation_request_owner_defined;
+        self.texture_owner_future_texture_handle_owner_defined |=
+            delta.texture_owner_future_texture_handle_owner_defined;
+        self.texture_owner_future_texture_lifetime_owner_defined |=
+            delta.texture_owner_future_texture_lifetime_owner_defined;
+        self.texture_owner_future_texture_cleanup_owner_defined |=
+            delta.texture_owner_future_texture_cleanup_owner_defined;
+        self.texture_owner_future_texture_release_owner_defined |=
+            delta.texture_owner_future_texture_release_owner_defined;
+        self.texture_owner_future_texture_invalidation_owner_defined |=
+            delta.texture_owner_future_texture_invalidation_owner_defined;
+        self.texture_owner_renderer_backend_instance_available |=
+            delta.texture_owner_renderer_backend_instance_available;
+        self.texture_owner_texture_import_route_available |=
+            delta.texture_owner_texture_import_route_available;
+        self.texture_owner_texture_creation_noop_only |=
+            delta.texture_owner_texture_creation_noop_only;
+        self.texture_owner_missing_texture_owner_boundary |=
+            delta.texture_owner_missing_texture_owner_boundary;
+        self.texture_owner_missing_future_texture_handle_policy |=
+            delta.texture_owner_missing_future_texture_handle_policy;
+        self.texture_owner_missing_future_texture_lifetime_policy |=
+            delta.texture_owner_missing_future_texture_lifetime_policy;
+        self.texture_owner_missing_future_texture_cleanup_policy |=
+            delta.texture_owner_missing_future_texture_cleanup_policy;
+        self.texture_owner_missing_future_texture_release_policy |=
+            delta.texture_owner_missing_future_texture_release_policy;
+        self.texture_owner_missing_future_texture_invalidation_policy |=
+            delta.texture_owner_missing_future_texture_invalidation_policy;
+        self.texture_owner_missing_renderer_backend_instance |=
+            delta.texture_owner_missing_renderer_backend_instance;
+        self.texture_owner_missing_texture_import_route |=
+            delta.texture_owner_missing_texture_import_route;
+        self.texture_owner_runtime_evidence_without_texture_ownership |=
+            delta.texture_owner_runtime_evidence_without_texture_ownership;
+        self.texture_owner_boundary_without_texture_creation |=
+            delta.texture_owner_boundary_without_texture_creation;
+        self.texture_owner_buffer_import_attempted |= delta.texture_owner_buffer_import_attempted;
+        self.texture_owner_buffer_imported |= delta.texture_owner_buffer_imported;
+        self.texture_owner_texture_created |= delta.texture_owner_texture_created;
+        self.texture_owner_renderer_called |= delta.texture_owner_renderer_called;
+        self.texture_owner_damage_submitted |= delta.texture_owner_damage_submitted;
+        self.texture_owner_frame_callback_done_sent |= delta.texture_owner_frame_callback_done_sent;
+        self.texture_owner_input_support |= delta.texture_owner_input_support;
+        self.texture_owner_core_mutation_invoked |= delta.texture_owner_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -5393,6 +5643,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_texture_creation_noop_report(
                 &report.texture_creation_noop_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_texture_owner_boundary_report(
+                &report.texture_owner_boundary_report,
             ),
         );
 
@@ -9295,6 +9550,86 @@ mod tests {
         );
         assert!(!report.surface_commit.texture_creation_input_support);
         assert!(!report.surface_commit.texture_creation_core_mutation_invoked);
+        assert_eq!(report.surface_commit.texture_owner_boundary_invocations, 3);
+        assert_eq!(
+            report.surface_commit.texture_owner_boundary_reports.len(),
+            3
+        );
+        assert!(report.surface_commit.texture_owner_boundary_available);
+        assert!(report.surface_commit.texture_owner_boundary_blocked);
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_texture_creation_request_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_handle_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_lifetime_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_cleanup_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_release_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_invalidation_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_renderer_backend_instance_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_texture_import_route_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_texture_creation_noop_only
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_missing_renderer_backend_instance
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_missing_texture_import_route
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_missing_future_texture_cleanup_policy
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_boundary_without_texture_creation
+        );
+        assert!(!report.surface_commit.texture_owner_buffer_import_attempted);
+        assert!(!report.surface_commit.texture_owner_buffer_imported);
+        assert!(!report.surface_commit.texture_owner_texture_created);
+        assert!(!report.surface_commit.texture_owner_renderer_called);
+        assert!(!report.surface_commit.texture_owner_damage_submitted);
+        assert!(!report.surface_commit.texture_owner_frame_callback_done_sent);
+        assert!(!report.surface_commit.texture_owner_input_support);
+        assert!(!report.surface_commit.texture_owner_core_mutation_invoked);
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);

@@ -377,8 +377,9 @@ pub use linux_runtime::SmithayLinuxRuntimeProbe;
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_shm_buffer_import_adapter::{
     LinuxShmBufferMetadataEvidence, LinuxShmBufferMetadataKind, LinuxShmBufferTypeBoundaryEvidence,
-    LinuxShmFirstBufferImportAdapterSkeleton, RuntimeSurfaceCommitShmBufferMetadataBlocker,
-    RuntimeSurfaceCommitShmBufferMetadataOperation, RuntimeSurfaceCommitShmBufferMetadataReport,
+    LinuxShmFirstBufferImportAdapterSkeleton, RuntimeSurfaceCommitFutureTextureOwnershipPolicy,
+    RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataOperation,
+    RuntimeSurfaceCommitShmBufferMetadataReport,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
@@ -390,13 +391,17 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
     RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
     RuntimeSurfaceCommitTextureCreationPreconditionChecklist,
-    RuntimeSurfaceCommitTextureCreationPreconditionOperation, extract_shm_buffer_metadata_evidence,
+    RuntimeSurfaceCommitTextureCreationPreconditionOperation,
+    RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
+    RuntimeSurfaceCommitTextureOwnerBoundaryChecklist,
+    RuntimeSurfaceCommitTextureOwnerBoundaryOperation,
+    RuntimeSurfaceCommitTextureOwnerBoundaryReport, extract_shm_buffer_metadata_evidence,
     observe_wl_buffer_type_boundary, shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
     texture_creation_noop_report_from_precondition_audit,
     texture_creation_precondition_audit_from_metadata_report,
     texture_creation_precondition_audit_from_validation_harness_report,
-    validate_shm_metadata_harness_paths,
+    texture_owner_boundary_report_from_noop_report, validate_shm_metadata_harness_paths,
 };
 #[allow(unused_imports)]
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
@@ -7289,6 +7294,166 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56F source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56G 建立 texture owner boundary。
+    ///
+    /// 这个 source-contract 只允许 pure-data owner boundary report；
+    /// owner boundary 不等于 texture created，future texture handle/id 不等于真实
+    /// TextureId，owner request 不等于 renderer call，真实 buffer/texture/renderer 类型不得进入 core。
+    #[test]
+    fn texture_owner_boundary_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56G SHM metadata adapter module 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56G loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56G orchestrator source 必须存在");
+        let phase_doc =
+            std::fs::read_to_string(root.join("docs/phases/PHASE_56G_TEXTURE_OWNER_BOUNDARY.md"))
+                .expect("Phase 56G 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56G - Texture Owner Boundary",
+            "Texture Owner Boundary",
+            "texture_created = false",
+            "renderer_called = false",
+            "frame_callback_done_sent = false",
+            "Texture Owner Boundary Blocker Taxonomy",
+            "texture_owner_boundary_available",
+            "texture_owner_boundary_blocked",
+            "texture_creation_request_owner_defined",
+            "future_texture_handle_owner_defined",
+            "future_texture_cleanup_owner_defined",
+            "missing_renderer_backend_instance",
+            "missing_texture_import_route",
+            "missing_future_texture_cleanup_policy",
+            "ImportAll::import_buffer",
+            "TextureId",
+            "Phase 56H",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56G 文档缺少 texture owner boundary 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitTextureOwnerBoundaryOperation",
+            "ObserveTextureCreationNoopReport",
+            "DefineTextureCreationRequestOwner",
+            "DefineFutureTextureHandleOwner",
+            "DefineTextureCleanupOwner",
+            "BuildTextureOwnerBoundaryReport",
+            "pub enum RuntimeSurfaceCommitTextureOwnerBoundaryBlocker",
+            "TextureCreationNoopOnly",
+            "MissingFutureTextureHandlePolicy",
+            "MissingFutureTextureLifetimePolicy",
+            "MissingFutureTextureCleanupPolicy",
+            "MissingFutureTextureReleasePolicy",
+            "MissingFutureTextureInvalidationPolicy",
+            "MissingRendererBackendInstance",
+            "MissingTextureImportRoute",
+            "RuntimeEvidenceWithoutTextureOwnership",
+            "OwnerBoundaryWithoutTextureCreation",
+            "pub struct RuntimeSurfaceCommitFutureTextureOwnershipPolicy",
+            "pub struct RuntimeSurfaceCommitTextureOwnerBoundaryChecklist",
+            "pub struct RuntimeSurfaceCommitTextureOwnerBoundaryReport",
+            "pub fn texture_owner_boundary_report_from_noop_report",
+            "texture_owner_boundary_available: true",
+            "texture_owner_boundary_blocked: true",
+            "texture_creation_request_owner_defined: true",
+            "future_texture_handle_owner_defined: false",
+            "future_texture_lifetime_owner_defined: false",
+            "future_texture_cleanup_owner_defined: false",
+            "future_texture_release_owner_defined: false",
+            "future_texture_invalidation_owner_defined: false",
+            "renderer_backend_instance_available: false",
+            "texture_import_route_available: false",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56G adapter production source 缺少 texture owner boundary: {required}"
+            );
+        }
+
+        for required in [
+            "pub texture_owner_boundary_invocations: usize",
+            "pub texture_owner_boundary_reports:",
+            "Vec<RuntimeSurfaceCommitTextureOwnerBoundaryReport>",
+            "pub texture_owner_boundary_available: bool",
+            "pub texture_owner_boundary_blocked: bool",
+            "pub texture_owner_missing_renderer_backend_instance: bool",
+            "pub texture_owner_missing_texture_import_route: bool",
+            "pub texture_owner_missing_future_texture_cleanup_policy: bool",
+            "from_texture_owner_boundary_report",
+            "report.texture_owner_boundary_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56G loop 缺少 texture owner boundary 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "texture_owner_boundary_invocations",
+            "texture_owner_boundary_reports",
+            "texture_owner_boundary_available",
+            "texture_owner_boundary_blocked",
+            "texture_owner_missing_renderer_backend_instance",
+            "texture_owner_missing_texture_import_route",
+            "texture_owner_missing_future_texture_cleanup_policy",
+            "texture_owner_texture_created",
+            "texture_owner_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56G orchestrator test/report 缺少 texture owner boundary 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+            "ImportAll::import_buffer",
+            "TextureId",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56G source 包含禁止的真实执行/后端 token: {forbidden}"
             );
         }
     }
