@@ -626,6 +626,18 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitTextureCreationNoopReport {
         texture_creation_noop_report_from_precondition_audit(report)
     }
+
+    /// 从 Phase 56F texture creation no-op report 派生 Phase 56G texture owner boundary report。
+    ///
+    /// 该 owner 方法只定义 future texture ownership seam；owner boundary 不等于
+    /// texture created，future handle/id ownership 不等于真实 graphics resource，
+    /// owner request 不等于 renderer call。
+    pub fn texture_owner_boundary_report_from_noop_report(
+        &mut self,
+        report: &RuntimeSurfaceCommitTextureCreationNoopReport,
+    ) -> RuntimeSurfaceCommitTextureOwnerBoundaryReport {
+        texture_owner_boundary_report_from_noop_report(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -1410,14 +1422,384 @@ pub fn texture_creation_noop_report_from_precondition_audit(
     }
 }
 
+/// Phase 56G texture owner boundary 的纯数据步骤。
+///
+/// 这些步骤只消费 Phase 56F no-op / blocked report，定义谁拥有 future texture
+/// creation request 和 future handle lifecycle seam；本阶段不创建 texture、不调用
+/// renderer、不提交 damage、不发送 frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureOwnerBoundaryOperation {
+    /// 观察 Phase 56F texture creation no-op report。
+    ObserveTextureCreationNoopReport,
+    /// 定义 future texture creation request 的 owner。
+    DefineTextureCreationRequestOwner,
+    /// 定义 future texture handle/id lifecycle seam 的 owner。
+    DefineFutureTextureHandleOwner,
+    /// 定义 future texture lifetime policy owner。
+    DefineFutureTextureLifetimeOwner,
+    /// 定义 future texture cleanup policy owner。
+    DefineTextureCleanupOwner,
+    /// 定义 future texture release policy owner。
+    DefineTextureReleaseOwner,
+    /// 定义 future texture invalidation policy owner。
+    DefineTextureInvalidationOwner,
+    /// 检查 renderer backend instance 是否真实可用。
+    CheckRendererBackendInstance,
+    /// 检查 texture import route 是否真实可用。
+    CheckTextureImportRoute,
+    /// 构建 texture owner boundary report。
+    BuildTextureOwnerBoundaryReport,
+}
+
+/// Phase 56G texture owner boundary blocker taxonomy。
+///
+/// 每个 blocker 都说明当前只能停在 owner boundary report，不能把 request owner、
+/// future handle owner 或 cleanup owner 误报为真实 texture、renderer call、damage
+/// submit 或 frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureOwnerBoundaryBlocker {
+    /// 上游仍只是 texture creation no-op / blocked report。
+    TextureCreationNoopOnly,
+    /// 缺少完整 texture owner boundary policy。
+    MissingTextureOwnerBoundary,
+    /// 缺少 future texture handle ownership policy。
+    MissingFutureTextureHandlePolicy,
+    /// 缺少 future texture lifetime ownership policy。
+    MissingFutureTextureLifetimePolicy,
+    /// 缺少 future texture cleanup ownership policy。
+    MissingFutureTextureCleanupPolicy,
+    /// 缺少 future texture release ownership policy。
+    MissingFutureTextureReleasePolicy,
+    /// 缺少 future texture invalidation ownership policy。
+    MissingFutureTextureInvalidationPolicy,
+    /// 缺少真实 renderer backend instance。
+    MissingRendererBackendInstance,
+    /// 缺少真实 texture import route。
+    MissingTextureImportRoute,
+    /// runtime 只有 evidence，没有 texture ownership execution。
+    RuntimeEvidenceWithoutTextureOwnership,
+    /// owner boundary 存在，但没有真实 texture creation。
+    OwnerBoundaryWithoutTextureCreation,
+}
+
+/// Phase 56G future texture ownership policy。
+///
+/// policy 只描述 future owner seam。它不保存真实 texture handle/id，不引用 renderer
+/// 类型，也不让 core 感知 Smithay / Wayland / buffer / texture resource。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitFutureTextureOwnershipPolicy {
+    /// future texture creation request owner 是否已定义。
+    pub texture_creation_request_owner_defined: bool,
+
+    /// future texture creation request 的 owner 名称。
+    pub texture_creation_request_owner: &'static str,
+
+    /// future texture handle/id owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_handle_owner_defined: bool,
+
+    /// future texture handle/id owner 名称；未定义时为 blocked。
+    pub future_texture_handle_owner: &'static str,
+
+    /// future texture lifetime owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_lifetime_owner_defined: bool,
+
+    /// future texture lifetime owner 名称；未定义时为 blocked。
+    pub future_texture_lifetime_owner: &'static str,
+
+    /// future texture cleanup owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_cleanup_owner_defined: bool,
+
+    /// future texture cleanup owner 名称；未定义时为 blocked。
+    pub future_texture_cleanup_owner: &'static str,
+
+    /// future texture release owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_release_owner_defined: bool,
+
+    /// future texture release owner 名称；未定义时为 blocked。
+    pub future_texture_release_owner: &'static str,
+
+    /// future texture invalidation owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_invalidation_owner_defined: bool,
+
+    /// future texture invalidation owner 名称；未定义时为 blocked。
+    pub future_texture_invalidation_owner: &'static str,
+}
+
+/// Phase 56G texture owner boundary checklist。
+///
+/// checklist 说明 owner seam 哪些部分已定义、哪些仍 blocked。它是安全边界：
+/// owner boundary 不等于 texture created，owner request 不等于 renderer call。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureOwnerBoundaryChecklist {
+    /// texture owner boundary seam 是否可用。
+    pub texture_owner_boundary_available: bool,
+
+    /// owner boundary 是否仍 blocked。
+    pub texture_owner_boundary_blocked: bool,
+
+    /// future texture creation request owner 是否已定义。
+    pub texture_creation_request_owner_defined: bool,
+
+    /// future texture handle/id owner 是否已定义。
+    pub future_texture_handle_owner_defined: bool,
+
+    /// future texture lifetime owner 是否已定义。
+    pub future_texture_lifetime_owner_defined: bool,
+
+    /// future texture cleanup owner 是否已定义。
+    pub future_texture_cleanup_owner_defined: bool,
+
+    /// future texture release owner 是否已定义。
+    pub future_texture_release_owner_defined: bool,
+
+    /// future texture invalidation owner 是否已定义。
+    pub future_texture_invalidation_owner_defined: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56G 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// 真实 texture import route 是否可用；Phase 56G 固定 false。
+    pub texture_import_route_available: bool,
+}
+
+/// Phase 56G texture owner boundary report。
+///
+/// 该 report 从 Phase 56F no-op report 派生，只定义 future ownership seam。
+/// 它不 import buffer、不创建 texture、不创建真实 graphics handle、不调用 renderer、
+/// 不提交 damage、不发送 frame callback done、不接 input、不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureOwnerBoundaryReport {
+    /// texture owner boundary seam 是否可用。
+    pub texture_owner_boundary_available: bool,
+
+    /// 是否观察到 Phase 56F no-op report。
+    pub source_noop_report_observed: bool,
+
+    /// 被消费的 Phase 56F no-op report。
+    pub source_noop_report: RuntimeSurfaceCommitTextureCreationNoopReport,
+
+    /// future texture ownership policy。
+    pub ownership_policy: RuntimeSurfaceCommitFutureTextureOwnershipPolicy,
+
+    /// owner boundary checklist。
+    pub checklist: RuntimeSurfaceCommitTextureOwnerBoundaryChecklist,
+
+    /// texture owner boundary 是否仍 blocked。
+    pub texture_owner_boundary_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub texture_owner_boundary_blocker_reason: &'static str,
+
+    /// future texture creation request owner 是否已定义。
+    pub texture_creation_request_owner_defined: bool,
+
+    /// future texture creation request owner 名称。
+    pub texture_creation_request_owner: &'static str,
+
+    /// future texture handle/id owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_handle_owner_defined: bool,
+
+    /// future texture handle/id owner 名称。
+    pub future_texture_handle_owner: &'static str,
+
+    /// future texture lifetime owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_lifetime_owner_defined: bool,
+
+    /// future texture lifetime owner 名称。
+    pub future_texture_lifetime_owner: &'static str,
+
+    /// future texture cleanup owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_cleanup_owner_defined: bool,
+
+    /// future texture cleanup owner 名称。
+    pub future_texture_cleanup_owner: &'static str,
+
+    /// future texture release owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_release_owner_defined: bool,
+
+    /// future texture release owner 名称。
+    pub future_texture_release_owner: &'static str,
+
+    /// future texture invalidation owner 是否已定义；Phase 56G 保持 false。
+    pub future_texture_invalidation_owner_defined: bool,
+
+    /// future texture invalidation owner 名称。
+    pub future_texture_invalidation_owner: &'static str,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56G 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// 真实 texture import route 是否可用；Phase 56G 固定 false。
+    pub texture_import_route_available: bool,
+
+    /// Phase 56G 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56G 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56G 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56G 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56G 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56G 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56G 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56G 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// owner boundary 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitTextureOwnerBoundaryOperation>,
+
+    /// 阻止真实 texture ownership/execution 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitTextureOwnerBoundaryBlocker>,
+}
+
+/// 从 Phase 56F no-op report 派生 Phase 56G texture owner boundary report。
+///
+/// 这是 Phase 56G 的唯一执行入口：它只生成 pure-data owner boundary report。
+/// 本函数不创建 texture、不调用 renderer、不提交 damage、不发送 frame callback done。
+#[must_use = "texture owner boundary report is not texture creation"]
+pub fn texture_owner_boundary_report_from_noop_report(
+    report: &RuntimeSurfaceCommitTextureCreationNoopReport,
+) -> RuntimeSurfaceCommitTextureOwnerBoundaryReport {
+    let ownership_policy = RuntimeSurfaceCommitFutureTextureOwnershipPolicy {
+        texture_creation_request_owner_defined: true,
+        texture_creation_request_owner: "linux_shm_first_buffer_import_adapter",
+        future_texture_handle_owner_defined: false,
+        future_texture_handle_owner: "blocked_until_future_texture_owner_policy",
+        future_texture_lifetime_owner_defined: false,
+        future_texture_lifetime_owner: "blocked_until_future_texture_lifetime_policy",
+        future_texture_cleanup_owner_defined: false,
+        future_texture_cleanup_owner: "blocked_until_future_texture_cleanup_policy",
+        future_texture_release_owner_defined: false,
+        future_texture_release_owner: "blocked_until_future_texture_release_policy",
+        future_texture_invalidation_owner_defined: false,
+        future_texture_invalidation_owner: "blocked_until_future_texture_invalidation_policy",
+    };
+
+    let checklist = RuntimeSurfaceCommitTextureOwnerBoundaryChecklist {
+        texture_owner_boundary_available: true,
+        texture_owner_boundary_blocked: true,
+        texture_creation_request_owner_defined: ownership_policy
+            .texture_creation_request_owner_defined,
+        future_texture_handle_owner_defined: ownership_policy.future_texture_handle_owner_defined,
+        future_texture_lifetime_owner_defined: ownership_policy
+            .future_texture_lifetime_owner_defined,
+        future_texture_cleanup_owner_defined: ownership_policy.future_texture_cleanup_owner_defined,
+        future_texture_release_owner_defined: ownership_policy.future_texture_release_owner_defined,
+        future_texture_invalidation_owner_defined: ownership_policy
+            .future_texture_invalidation_owner_defined,
+        renderer_backend_instance_available: report.renderer_backend_instance_available,
+        texture_import_route_available: report.texture_import_route_available,
+    };
+
+    let mut blockers =
+        vec![RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::TextureCreationNoopOnly];
+    if !checklist.future_texture_handle_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureHandlePolicy,
+        );
+    }
+    if !checklist.future_texture_lifetime_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureLifetimePolicy,
+        );
+    }
+    if !checklist.future_texture_cleanup_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureCleanupPolicy,
+        );
+    }
+    if !checklist.future_texture_release_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureReleasePolicy,
+        );
+    }
+    if !checklist.future_texture_invalidation_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureInvalidationPolicy,
+        );
+    }
+    if !checklist.renderer_backend_instance_available {
+        blockers
+            .push(RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingRendererBackendInstance);
+    }
+    if !checklist.texture_import_route_available {
+        blockers.push(RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingTextureImportRoute);
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingTextureOwnerBoundary,
+        RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::RuntimeEvidenceWithoutTextureOwnership,
+        RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::OwnerBoundaryWithoutTextureCreation,
+    ]);
+
+    RuntimeSurfaceCommitTextureOwnerBoundaryReport {
+        texture_owner_boundary_available: true,
+        source_noop_report_observed: report.texture_creation_noop_available,
+        source_noop_report: report.clone(),
+        ownership_policy: ownership_policy.clone(),
+        checklist,
+        texture_owner_boundary_blocked: true,
+        texture_owner_boundary_blocker_reason: "texture owner boundary only: missing future handle/lifetime/cleanup/release/invalidation policies, renderer backend instance, and texture import route",
+        texture_creation_request_owner_defined: ownership_policy
+            .texture_creation_request_owner_defined,
+        texture_creation_request_owner: ownership_policy.texture_creation_request_owner,
+        future_texture_handle_owner_defined: ownership_policy.future_texture_handle_owner_defined,
+        future_texture_handle_owner: ownership_policy.future_texture_handle_owner,
+        future_texture_lifetime_owner_defined: ownership_policy
+            .future_texture_lifetime_owner_defined,
+        future_texture_lifetime_owner: ownership_policy.future_texture_lifetime_owner,
+        future_texture_cleanup_owner_defined: ownership_policy.future_texture_cleanup_owner_defined,
+        future_texture_cleanup_owner: ownership_policy.future_texture_cleanup_owner,
+        future_texture_release_owner_defined: ownership_policy.future_texture_release_owner_defined,
+        future_texture_release_owner: ownership_policy.future_texture_release_owner,
+        future_texture_invalidation_owner_defined: ownership_policy
+            .future_texture_invalidation_owner_defined,
+        future_texture_invalidation_owner: ownership_policy.future_texture_invalidation_owner,
+        renderer_backend_instance_available: false,
+        texture_import_route_available: false,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::ObserveTextureCreationNoopReport,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::DefineTextureCreationRequestOwner,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::DefineFutureTextureHandleOwner,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::DefineFutureTextureLifetimeOwner,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::DefineTextureCleanupOwner,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::DefineTextureReleaseOwner,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::DefineTextureInvalidationOwner,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::CheckRendererBackendInstance,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::CheckTextureImportRoute,
+            RuntimeSurfaceCommitTextureOwnerBoundaryOperation::BuildTextureOwnerBoundaryReport,
+        ],
+        blockers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         RuntimeSurfaceCommitTextureCreationBlocker,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
+        RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
         texture_creation_noop_report_from_precondition_audit,
         texture_creation_precondition_audit_from_validation_harness_report,
-        validate_shm_metadata_harness_paths,
+        texture_owner_boundary_report_from_noop_report, validate_shm_metadata_harness_paths,
     };
 
     /// Phase 56E 从 Phase 56D validation harness report 派生 texture precondition audit。
@@ -1518,6 +1900,62 @@ mod tests {
                 &RuntimeSurfaceCommitTextureCreationBlocker::RendererCallExplicitlyDisabled
             )
         );
+        assert!(!report.buffer_import_attempted);
+        assert!(!report.buffer_imported);
+        assert!(!report.texture_created);
+        assert!(!report.renderer_called);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_done_sent);
+        assert!(!report.input_support);
+        assert!(!report.core_mutation_invoked);
+    }
+
+    /// Phase 56G 从 Phase 56F no-op report 派生 texture owner boundary report。
+    ///
+    /// 该测试固定：owner boundary 只是 future ownership seam，不代表 texture created、
+    /// renderer called、damage submitted 或 frame callback done。
+    #[test]
+    fn derives_blocked_texture_owner_boundary_report_from_noop_report() {
+        let validation_harness = validate_shm_metadata_harness_paths();
+        let audit =
+            texture_creation_precondition_audit_from_validation_harness_report(&validation_harness);
+        let noop_report = texture_creation_noop_report_from_precondition_audit(&audit);
+        let report = texture_owner_boundary_report_from_noop_report(&noop_report);
+
+        assert!(report.texture_owner_boundary_available);
+        assert!(report.source_noop_report_observed);
+        assert!(report.texture_owner_boundary_blocked);
+        assert!(report.texture_creation_request_owner_defined);
+        assert_eq!(
+            report.texture_creation_request_owner,
+            "linux_shm_first_buffer_import_adapter"
+        );
+        assert!(!report.future_texture_handle_owner_defined);
+        assert!(!report.future_texture_lifetime_owner_defined);
+        assert!(!report.future_texture_cleanup_owner_defined);
+        assert!(!report.future_texture_release_owner_defined);
+        assert!(!report.future_texture_invalidation_owner_defined);
+        assert!(!report.renderer_backend_instance_available);
+        assert!(!report.texture_import_route_available);
+        assert!(
+            report.blockers.contains(
+                &RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::TextureCreationNoopOnly
+            )
+        );
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingRendererBackendInstance
+        ));
+        assert!(
+            report.blockers.contains(
+                &RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingTextureImportRoute
+            )
+        );
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::MissingFutureTextureCleanupPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::OwnerBoundaryWithoutTextureCreation
+        ));
         assert!(!report.buffer_import_attempted);
         assert!(!report.buffer_imported);
         assert!(!report.texture_created);

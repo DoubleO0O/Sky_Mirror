@@ -3820,6 +3820,86 @@ mod tests {
         );
         assert!(!report.surface_commit.texture_creation_input_support);
         assert!(!report.surface_commit.texture_creation_core_mutation_invoked);
+        assert_eq!(report.surface_commit.texture_owner_boundary_invocations, 3);
+        assert_eq!(
+            report.surface_commit.texture_owner_boundary_reports.len(),
+            3
+        );
+        assert!(report.surface_commit.texture_owner_boundary_available);
+        assert!(report.surface_commit.texture_owner_boundary_blocked);
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_texture_creation_request_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_handle_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_lifetime_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_cleanup_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_release_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_future_texture_invalidation_owner_defined
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_renderer_backend_instance_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_owner_texture_import_route_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_texture_creation_noop_only
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_missing_renderer_backend_instance
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_missing_texture_import_route
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_missing_future_texture_cleanup_policy
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_owner_boundary_without_texture_creation
+        );
+        assert!(!report.surface_commit.texture_owner_buffer_import_attempted);
+        assert!(!report.surface_commit.texture_owner_buffer_imported);
+        assert!(!report.surface_commit.texture_owner_texture_created);
+        assert!(!report.surface_commit.texture_owner_renderer_called);
+        assert!(!report.surface_commit.texture_owner_damage_submitted);
+        assert!(!report.surface_commit.texture_owner_frame_callback_done_sent);
+        assert!(!report.surface_commit.texture_owner_input_support);
+        assert!(!report.surface_commit.texture_owner_core_mutation_invoked);
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);
