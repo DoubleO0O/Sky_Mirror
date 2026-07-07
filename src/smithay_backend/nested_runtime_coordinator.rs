@@ -19,7 +19,9 @@ use crate::{
             LiveToplevelAdmissionOwnerReport, enqueue_live_toplevel_admission_from_observation,
         },
         linux_shm_buffer_import_adapter::{
-            LinuxShmFirstBufferImportAdapterSkeleton, RuntimeSurfaceCommitShmBufferMetadataReport,
+            LinuxShmFirstBufferImportAdapterSkeleton,
+            RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
+            RuntimeSurfaceCommitShmBufferMetadataReport,
             RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
             RuntimeSurfaceCommitTextureCreationNoopReport,
             RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
@@ -4515,6 +4517,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
 
     /// Phase 56G texture owner boundary report。
     pub texture_owner_boundary_report: RuntimeSurfaceCommitTextureOwnerBoundaryReport,
+
+    /// Phase 56H renderer backend instance audit report。
+    pub renderer_backend_instance_audit_report:
+        RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -4894,6 +4900,11 @@ impl NestedRuntimeCoordinator {
         let texture_owner_boundary_report = self
             .shm_first_buffer_import_adapter
             .texture_owner_boundary_report_from_noop_report(&texture_creation_noop_report);
+        let renderer_backend_instance_audit_report = self
+            .shm_first_buffer_import_adapter
+            .renderer_backend_instance_audit_from_texture_owner_boundary_report(
+                &texture_owner_boundary_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -4928,6 +4939,7 @@ impl NestedRuntimeCoordinator {
             texture_creation_precondition_audit_report,
             texture_creation_noop_report,
             texture_owner_boundary_report,
+            renderer_backend_instance_audit_report,
         }
     }
 

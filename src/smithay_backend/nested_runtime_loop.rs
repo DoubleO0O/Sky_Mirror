@@ -17,6 +17,8 @@ use crate::{
     core::state::State,
     smithay_backend::RuntimeToplevelAdmissionDrainTick,
     smithay_backend::linux_shm_buffer_import_adapter::{
+        RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
+        RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
         RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataReport,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
@@ -2241,6 +2243,82 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// Phase 56G 是否触发 core mutation；固定保持 false。
     pub texture_owner_core_mutation_invoked: bool,
 
+    /// Phase 56H renderer backend instance audit seam 被调用的次数。
+    pub renderer_backend_instance_audit_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 renderer backend instance audit reports。
+    pub renderer_backend_instance_audit_reports:
+        Vec<RuntimeSurfaceCommitRendererBackendInstanceAuditReport>,
+
+    /// Phase 56H renderer backend instance audit 是否可用。
+    pub renderer_backend_instance_audit_available: bool,
+
+    /// Phase 56H renderer backend instance audit 是否 blocked。
+    pub renderer_backend_instance_audit_blocked: bool,
+
+    /// Phase 56H 是否观察到 texture owner boundary report。
+    pub renderer_backend_instance_texture_owner_boundary_report_observed: bool,
+
+    /// Phase 56H texture owner boundary 是否仍 blocked。
+    pub renderer_backend_instance_texture_owner_boundary_still_blocked: bool,
+
+    /// Phase 56H renderer backend instance 是否真实可用；固定保持 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// Phase 56H renderer backend instance owner 是否已定义；固定保持 false。
+    pub renderer_backend_instance_owner_defined: bool,
+
+    /// Phase 56H renderer backend instance lifecycle owner 是否已定义；固定保持 false。
+    pub renderer_backend_instance_lifecycle_owner_defined: bool,
+
+    /// Phase 56H renderer backend instance cleanup owner 是否已定义；固定保持 false。
+    pub renderer_backend_instance_cleanup_owner_defined: bool,
+
+    /// Phase 56H renderer backend instance availability owner 是否已定义；固定保持 false。
+    pub renderer_backend_instance_availability_owner_defined: bool,
+
+    /// Phase 56H 是否缺少真实 renderer backend instance。
+    pub renderer_backend_instance_missing_renderer_backend_instance: bool,
+
+    /// Phase 56H 是否缺少 renderer backend instance owner policy。
+    pub renderer_backend_instance_missing_owner_policy: bool,
+
+    /// Phase 56H 是否缺少 renderer backend instance lifecycle policy。
+    pub renderer_backend_instance_missing_lifecycle_policy: bool,
+
+    /// Phase 56H 是否缺少 renderer backend instance cleanup policy。
+    pub renderer_backend_instance_missing_cleanup_policy: bool,
+
+    /// Phase 56H 是否缺少 renderer backend instance availability policy。
+    pub renderer_backend_instance_missing_availability_policy: bool,
+
+    /// Phase 56H 是否只有 renderer backend instance audit、没有 texture creation。
+    pub renderer_backend_instance_without_texture_creation: bool,
+
+    /// Phase 56H 是否尝试 import buffer；固定保持 false。
+    pub renderer_backend_instance_buffer_import_attempted: bool,
+
+    /// Phase 56H 是否 import buffer；固定保持 false。
+    pub renderer_backend_instance_buffer_imported: bool,
+
+    /// Phase 56H 是否创建 texture；固定保持 false。
+    pub renderer_backend_instance_texture_created: bool,
+
+    /// Phase 56H 是否调用 renderer；固定保持 false。
+    pub renderer_backend_instance_renderer_called: bool,
+
+    /// Phase 56H 是否提交 damage；固定保持 false。
+    pub renderer_backend_instance_damage_submitted: bool,
+
+    /// Phase 56H 是否发送 frame callback done；固定保持 false。
+    pub renderer_backend_instance_frame_callback_done_sent: bool,
+
+    /// Phase 56H 是否接入 input；固定保持 false。
+    pub renderer_backend_instance_input_support: bool,
+
+    /// Phase 56H 是否触发 core mutation；固定保持 false。
+    pub renderer_backend_instance_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -2847,6 +2925,31 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             texture_owner_frame_callback_done_sent: false,
             texture_owner_input_support: false,
             texture_owner_core_mutation_invoked: false,
+            renderer_backend_instance_audit_invocations: 0,
+            renderer_backend_instance_audit_reports: Vec::new(),
+            renderer_backend_instance_audit_available: false,
+            renderer_backend_instance_audit_blocked: false,
+            renderer_backend_instance_texture_owner_boundary_report_observed: false,
+            renderer_backend_instance_texture_owner_boundary_still_blocked: false,
+            renderer_backend_instance_available: false,
+            renderer_backend_instance_owner_defined: false,
+            renderer_backend_instance_lifecycle_owner_defined: false,
+            renderer_backend_instance_cleanup_owner_defined: false,
+            renderer_backend_instance_availability_owner_defined: false,
+            renderer_backend_instance_missing_renderer_backend_instance: false,
+            renderer_backend_instance_missing_owner_policy: false,
+            renderer_backend_instance_missing_lifecycle_policy: false,
+            renderer_backend_instance_missing_cleanup_policy: false,
+            renderer_backend_instance_missing_availability_policy: false,
+            renderer_backend_instance_without_texture_creation: false,
+            renderer_backend_instance_buffer_import_attempted: false,
+            renderer_backend_instance_buffer_imported: false,
+            renderer_backend_instance_texture_created: false,
+            renderer_backend_instance_renderer_called: false,
+            renderer_backend_instance_damage_submitted: false,
+            renderer_backend_instance_frame_callback_done_sent: false,
+            renderer_backend_instance_input_support: false,
+            renderer_backend_instance_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -4214,6 +4317,62 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_renderer_backend_instance_audit_report(
+        report: &RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            renderer_backend_instance_audit_invocations: usize::from(
+                report.renderer_backend_instance_audit_available,
+            ),
+            renderer_backend_instance_audit_reports: vec![report.clone()],
+            renderer_backend_instance_audit_available: report
+                .renderer_backend_instance_audit_available,
+            renderer_backend_instance_audit_blocked: report
+                .renderer_backend_instance_audit_blocked,
+            renderer_backend_instance_texture_owner_boundary_report_observed: report
+                .source_texture_owner_boundary_report_observed,
+            renderer_backend_instance_texture_owner_boundary_still_blocked: report
+                .texture_owner_boundary_still_blocked,
+            renderer_backend_instance_available: report.renderer_backend_instance_available,
+            renderer_backend_instance_owner_defined: report
+                .renderer_backend_instance_owner_defined,
+            renderer_backend_instance_lifecycle_owner_defined: report
+                .renderer_backend_instance_lifecycle_owner_defined,
+            renderer_backend_instance_cleanup_owner_defined: report
+                .renderer_backend_instance_cleanup_owner_defined,
+            renderer_backend_instance_availability_owner_defined: report
+                .renderer_backend_instance_availability_owner_defined,
+            renderer_backend_instance_missing_renderer_backend_instance: has_blocker(
+                RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstance,
+            ),
+            renderer_backend_instance_missing_owner_policy: has_blocker(
+                RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceOwnerPolicy,
+            ),
+            renderer_backend_instance_missing_lifecycle_policy: has_blocker(
+                RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceLifecyclePolicy,
+            ),
+            renderer_backend_instance_missing_cleanup_policy: has_blocker(
+                RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceCleanupPolicy,
+            ),
+            renderer_backend_instance_missing_availability_policy: has_blocker(
+                RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceAvailabilityPolicy,
+            ),
+            renderer_backend_instance_without_texture_creation: has_blocker(
+                RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::RendererBackendInstanceWithoutTextureCreation,
+            ),
+            renderer_backend_instance_buffer_import_attempted: report.buffer_import_attempted,
+            renderer_backend_instance_buffer_imported: report.buffer_imported,
+            renderer_backend_instance_texture_created: report.texture_created,
+            renderer_backend_instance_renderer_called: report.renderer_called,
+            renderer_backend_instance_damage_submitted: report.damage_submitted,
+            renderer_backend_instance_frame_callback_done_sent: report.frame_callback_done_sent,
+            renderer_backend_instance_input_support: report.input_support,
+            renderer_backend_instance_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -5371,6 +5530,56 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.texture_owner_frame_callback_done_sent |= delta.texture_owner_frame_callback_done_sent;
         self.texture_owner_input_support |= delta.texture_owner_input_support;
         self.texture_owner_core_mutation_invoked |= delta.texture_owner_core_mutation_invoked;
+        self.renderer_backend_instance_audit_invocations = self
+            .renderer_backend_instance_audit_invocations
+            .saturating_add(delta.renderer_backend_instance_audit_invocations);
+        self.renderer_backend_instance_audit_reports
+            .extend(delta.renderer_backend_instance_audit_reports);
+        self.renderer_backend_instance_audit_available |=
+            delta.renderer_backend_instance_audit_available;
+        self.renderer_backend_instance_audit_blocked |=
+            delta.renderer_backend_instance_audit_blocked;
+        self.renderer_backend_instance_texture_owner_boundary_report_observed |=
+            delta.renderer_backend_instance_texture_owner_boundary_report_observed;
+        self.renderer_backend_instance_texture_owner_boundary_still_blocked |=
+            delta.renderer_backend_instance_texture_owner_boundary_still_blocked;
+        self.renderer_backend_instance_available |= delta.renderer_backend_instance_available;
+        self.renderer_backend_instance_owner_defined |=
+            delta.renderer_backend_instance_owner_defined;
+        self.renderer_backend_instance_lifecycle_owner_defined |=
+            delta.renderer_backend_instance_lifecycle_owner_defined;
+        self.renderer_backend_instance_cleanup_owner_defined |=
+            delta.renderer_backend_instance_cleanup_owner_defined;
+        self.renderer_backend_instance_availability_owner_defined |=
+            delta.renderer_backend_instance_availability_owner_defined;
+        self.renderer_backend_instance_missing_renderer_backend_instance |=
+            delta.renderer_backend_instance_missing_renderer_backend_instance;
+        self.renderer_backend_instance_missing_owner_policy |=
+            delta.renderer_backend_instance_missing_owner_policy;
+        self.renderer_backend_instance_missing_lifecycle_policy |=
+            delta.renderer_backend_instance_missing_lifecycle_policy;
+        self.renderer_backend_instance_missing_cleanup_policy |=
+            delta.renderer_backend_instance_missing_cleanup_policy;
+        self.renderer_backend_instance_missing_availability_policy |=
+            delta.renderer_backend_instance_missing_availability_policy;
+        self.renderer_backend_instance_without_texture_creation |=
+            delta.renderer_backend_instance_without_texture_creation;
+        self.renderer_backend_instance_buffer_import_attempted |=
+            delta.renderer_backend_instance_buffer_import_attempted;
+        self.renderer_backend_instance_buffer_imported |=
+            delta.renderer_backend_instance_buffer_imported;
+        self.renderer_backend_instance_texture_created |=
+            delta.renderer_backend_instance_texture_created;
+        self.renderer_backend_instance_renderer_called |=
+            delta.renderer_backend_instance_renderer_called;
+        self.renderer_backend_instance_damage_submitted |=
+            delta.renderer_backend_instance_damage_submitted;
+        self.renderer_backend_instance_frame_callback_done_sent |=
+            delta.renderer_backend_instance_frame_callback_done_sent;
+        self.renderer_backend_instance_input_support |=
+            delta.renderer_backend_instance_input_support;
+        self.renderer_backend_instance_core_mutation_invoked |=
+            delta.renderer_backend_instance_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -5648,6 +5857,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_texture_owner_boundary_report(
                 &report.texture_owner_boundary_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_renderer_backend_instance_audit_report(
+                &report.renderer_backend_instance_audit_report,
             ),
         );
 
