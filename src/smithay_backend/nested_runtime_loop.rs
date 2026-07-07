@@ -19,6 +19,8 @@ use crate::{
     smithay_backend::linux_shm_buffer_import_adapter::{
         RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker,
         RuntimeSurfaceCommitDamageToTextureMappingAuditReport,
+        RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker,
+        RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
         RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
         RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
         RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataReport,
@@ -2523,6 +2525,88 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// Phase 56J 是否触发 core mutation；固定保持 false。
     pub damage_mapping_core_mutation_invoked: bool,
 
+    /// Phase 56K frame callback completion policy seam 被调用的次数。
+    pub frame_callback_completion_policy_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 frame callback completion policy reports。
+    pub frame_callback_completion_policy_reports:
+        Vec<RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport>,
+
+    /// Phase 56K frame callback completion policy 是否可用。
+    pub frame_callback_completion_policy_available: bool,
+
+    /// Phase 56K frame callback completion policy 是否 blocked。
+    pub frame_callback_completion_policy_blocked: bool,
+
+    /// Phase 56K 是否观察到 damage-to-texture mapping audit report。
+    pub frame_callback_policy_damage_mapping_audit_observed: bool,
+
+    /// Phase 56K damage-to-texture mapping audit 是否仍 blocked。
+    pub frame_callback_policy_damage_mapping_audit_still_blocked: bool,
+
+    /// Phase 56K frame callback completion owner 是否已定义。
+    pub frame_callback_completion_owner_defined: bool,
+
+    /// Phase 56K frame callback done 是否必须等待真实 render success。
+    pub frame_callback_policy_render_success_required_before_done: bool,
+
+    /// Phase 56K 真实 texture 是否可用；固定保持 false。
+    pub frame_callback_policy_real_texture_available: bool,
+
+    /// Phase 56K renderer backend instance 是否可用；固定保持 false。
+    pub frame_callback_policy_renderer_backend_instance_available: bool,
+
+    /// Phase 56K damage submission 是否可用；固定保持 false。
+    pub frame_callback_policy_damage_submission_available: bool,
+
+    /// Phase 56K render success evidence 是否可用；固定保持 false。
+    pub frame_callback_policy_render_success_evidence_available: bool,
+
+    /// Phase 56K frame callback done 是否允许；固定保持 false。
+    pub frame_callback_done_allowed: bool,
+
+    /// Phase 56K 是否缺少真实 texture。
+    pub frame_callback_policy_missing_real_texture: bool,
+
+    /// Phase 56K 是否缺少真实 renderer backend instance。
+    pub frame_callback_policy_missing_renderer_backend_instance: bool,
+
+    /// Phase 56K 是否缺少真实 damage submission。
+    pub frame_callback_policy_missing_damage_submission: bool,
+
+    /// Phase 56K 是否缺少 render success evidence。
+    pub frame_callback_policy_missing_render_success_evidence: bool,
+
+    /// Phase 56K 是否明确禁用 frame callback done。
+    pub frame_callback_policy_done_explicitly_disabled: bool,
+
+    /// Phase 56K 是否只有 completion policy、没有真实 render。
+    pub frame_callback_policy_without_render: bool,
+
+    /// Phase 56K 是否尝试 import buffer；固定保持 false。
+    pub frame_callback_policy_buffer_import_attempted: bool,
+
+    /// Phase 56K 是否 import buffer；固定保持 false。
+    pub frame_callback_policy_buffer_imported: bool,
+
+    /// Phase 56K 是否创建 texture；固定保持 false。
+    pub frame_callback_policy_texture_created: bool,
+
+    /// Phase 56K 是否调用 renderer；固定保持 false。
+    pub frame_callback_policy_renderer_called: bool,
+
+    /// Phase 56K 是否提交 damage；固定保持 false。
+    pub frame_callback_policy_damage_submitted: bool,
+
+    /// Phase 56K 是否发送 frame callback done；固定保持 false。
+    pub frame_callback_policy_frame_callback_done_sent: bool,
+
+    /// Phase 56K 是否接入 input；固定保持 false。
+    pub frame_callback_policy_input_support: bool,
+
+    /// Phase 56K 是否触发 core mutation；固定保持 false。
+    pub frame_callback_policy_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -3220,6 +3304,33 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             damage_mapping_frame_callback_done_sent: false,
             damage_mapping_input_support: false,
             damage_mapping_core_mutation_invoked: false,
+            frame_callback_completion_policy_invocations: 0,
+            frame_callback_completion_policy_reports: Vec::new(),
+            frame_callback_completion_policy_available: false,
+            frame_callback_completion_policy_blocked: false,
+            frame_callback_policy_damage_mapping_audit_observed: false,
+            frame_callback_policy_damage_mapping_audit_still_blocked: false,
+            frame_callback_completion_owner_defined: false,
+            frame_callback_policy_render_success_required_before_done: false,
+            frame_callback_policy_real_texture_available: false,
+            frame_callback_policy_renderer_backend_instance_available: false,
+            frame_callback_policy_damage_submission_available: false,
+            frame_callback_policy_render_success_evidence_available: false,
+            frame_callback_done_allowed: false,
+            frame_callback_policy_missing_real_texture: false,
+            frame_callback_policy_missing_renderer_backend_instance: false,
+            frame_callback_policy_missing_damage_submission: false,
+            frame_callback_policy_missing_render_success_evidence: false,
+            frame_callback_policy_done_explicitly_disabled: false,
+            frame_callback_policy_without_render: false,
+            frame_callback_policy_buffer_import_attempted: false,
+            frame_callback_policy_buffer_imported: false,
+            frame_callback_policy_texture_created: false,
+            frame_callback_policy_renderer_called: false,
+            frame_callback_policy_damage_submitted: false,
+            frame_callback_policy_frame_callback_done_sent: false,
+            frame_callback_policy_input_support: false,
+            frame_callback_policy_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -4788,6 +4899,64 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_frame_callback_completion_policy_report(
+        report: &RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            frame_callback_completion_policy_invocations: usize::from(
+                report.frame_callback_completion_policy_available,
+            ),
+            frame_callback_completion_policy_reports: vec![report.clone()],
+            frame_callback_completion_policy_available: report
+                .frame_callback_completion_policy_available,
+            frame_callback_completion_policy_blocked: report
+                .frame_callback_completion_policy_blocked,
+            frame_callback_policy_damage_mapping_audit_observed: report
+                .source_damage_to_texture_mapping_audit_observed,
+            frame_callback_policy_damage_mapping_audit_still_blocked: report
+                .damage_to_texture_mapping_audit_still_blocked,
+            frame_callback_completion_owner_defined: report
+                .frame_callback_completion_owner_defined,
+            frame_callback_policy_render_success_required_before_done: report
+                .render_success_required_before_done,
+            frame_callback_policy_real_texture_available: report.real_texture_available,
+            frame_callback_policy_renderer_backend_instance_available: report
+                .renderer_backend_instance_available,
+            frame_callback_policy_damage_submission_available: report.damage_submission_available,
+            frame_callback_policy_render_success_evidence_available: report
+                .render_success_evidence_available,
+            frame_callback_done_allowed: report.frame_callback_done_allowed,
+            frame_callback_policy_missing_real_texture: has_blocker(
+                RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRealTexture,
+            ),
+            frame_callback_policy_missing_renderer_backend_instance: has_blocker(
+                RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRendererBackendInstance,
+            ),
+            frame_callback_policy_missing_damage_submission: has_blocker(
+                RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingDamageSubmission,
+            ),
+            frame_callback_policy_missing_render_success_evidence: has_blocker(
+                RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRenderSuccessEvidence,
+            ),
+            frame_callback_policy_done_explicitly_disabled: has_blocker(
+                RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::FrameCallbackDoneExplicitlyDisabled,
+            ),
+            frame_callback_policy_without_render: has_blocker(
+                RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::FrameCallbackCompletionWithoutRender,
+            ),
+            frame_callback_policy_buffer_import_attempted: report.buffer_import_attempted,
+            frame_callback_policy_buffer_imported: report.buffer_imported,
+            frame_callback_policy_texture_created: report.texture_created,
+            frame_callback_policy_renderer_called: report.renderer_called,
+            frame_callback_policy_damage_submitted: report.damage_submitted,
+            frame_callback_policy_frame_callback_done_sent: report.frame_callback_done_sent,
+            frame_callback_policy_input_support: report.input_support,
+            frame_callback_policy_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -6111,6 +6280,54 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.damage_mapping_frame_callback_done_sent;
         self.damage_mapping_input_support |= delta.damage_mapping_input_support;
         self.damage_mapping_core_mutation_invoked |= delta.damage_mapping_core_mutation_invoked;
+        self.frame_callback_completion_policy_invocations = self
+            .frame_callback_completion_policy_invocations
+            .saturating_add(delta.frame_callback_completion_policy_invocations);
+        self.frame_callback_completion_policy_reports
+            .extend(delta.frame_callback_completion_policy_reports);
+        self.frame_callback_completion_policy_available |=
+            delta.frame_callback_completion_policy_available;
+        self.frame_callback_completion_policy_blocked |=
+            delta.frame_callback_completion_policy_blocked;
+        self.frame_callback_policy_damage_mapping_audit_observed |=
+            delta.frame_callback_policy_damage_mapping_audit_observed;
+        self.frame_callback_policy_damage_mapping_audit_still_blocked |=
+            delta.frame_callback_policy_damage_mapping_audit_still_blocked;
+        self.frame_callback_completion_owner_defined |=
+            delta.frame_callback_completion_owner_defined;
+        self.frame_callback_policy_render_success_required_before_done |=
+            delta.frame_callback_policy_render_success_required_before_done;
+        self.frame_callback_policy_real_texture_available |=
+            delta.frame_callback_policy_real_texture_available;
+        self.frame_callback_policy_renderer_backend_instance_available |=
+            delta.frame_callback_policy_renderer_backend_instance_available;
+        self.frame_callback_policy_damage_submission_available |=
+            delta.frame_callback_policy_damage_submission_available;
+        self.frame_callback_policy_render_success_evidence_available |=
+            delta.frame_callback_policy_render_success_evidence_available;
+        self.frame_callback_done_allowed |= delta.frame_callback_done_allowed;
+        self.frame_callback_policy_missing_real_texture |=
+            delta.frame_callback_policy_missing_real_texture;
+        self.frame_callback_policy_missing_renderer_backend_instance |=
+            delta.frame_callback_policy_missing_renderer_backend_instance;
+        self.frame_callback_policy_missing_damage_submission |=
+            delta.frame_callback_policy_missing_damage_submission;
+        self.frame_callback_policy_missing_render_success_evidence |=
+            delta.frame_callback_policy_missing_render_success_evidence;
+        self.frame_callback_policy_done_explicitly_disabled |=
+            delta.frame_callback_policy_done_explicitly_disabled;
+        self.frame_callback_policy_without_render |= delta.frame_callback_policy_without_render;
+        self.frame_callback_policy_buffer_import_attempted |=
+            delta.frame_callback_policy_buffer_import_attempted;
+        self.frame_callback_policy_buffer_imported |= delta.frame_callback_policy_buffer_imported;
+        self.frame_callback_policy_texture_created |= delta.frame_callback_policy_texture_created;
+        self.frame_callback_policy_renderer_called |= delta.frame_callback_policy_renderer_called;
+        self.frame_callback_policy_damage_submitted |= delta.frame_callback_policy_damage_submitted;
+        self.frame_callback_policy_frame_callback_done_sent |=
+            delta.frame_callback_policy_frame_callback_done_sent;
+        self.frame_callback_policy_input_support |= delta.frame_callback_policy_input_support;
+        self.frame_callback_policy_core_mutation_invoked |=
+            delta.frame_callback_policy_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -6403,6 +6620,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_damage_to_texture_mapping_audit_report(
                 &report.damage_to_texture_mapping_audit_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_frame_callback_completion_policy_report(
+                &report.frame_callback_completion_policy_report,
             ),
         );
 
