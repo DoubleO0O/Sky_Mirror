@@ -17,6 +17,8 @@ use crate::{
     core::state::State,
     smithay_backend::RuntimeToplevelAdmissionDrainTick,
     smithay_backend::linux_shm_buffer_import_adapter::{
+        RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker,
+        RuntimeSurfaceCommitDamageToTextureMappingAuditReport,
         RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
         RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
         RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataReport,
@@ -2418,6 +2420,109 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// Phase 56I 是否触发 core mutation；固定保持 false。
     pub texture_import_route_core_mutation_invoked: bool,
 
+    /// Phase 56J damage-to-texture mapping audit seam 被调用的次数。
+    pub damage_to_texture_mapping_audit_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 damage-to-texture mapping audit reports。
+    pub damage_to_texture_mapping_audit_reports:
+        Vec<RuntimeSurfaceCommitDamageToTextureMappingAuditReport>,
+
+    /// Phase 56J damage-to-texture mapping audit 是否可用。
+    pub damage_to_texture_mapping_audit_available: bool,
+
+    /// Phase 56J damage-to-texture mapping audit 是否 blocked。
+    pub damage_to_texture_mapping_audit_blocked: bool,
+
+    /// Phase 56J 是否观察到 texture import route decision report。
+    pub damage_mapping_texture_import_route_decision_report_observed: bool,
+
+    /// Phase 56J texture import route decision 是否仍 blocked。
+    pub damage_mapping_texture_import_route_decision_still_blocked: bool,
+
+    /// Phase 56J texture import route 是否真实可用；固定保持 false。
+    pub damage_mapping_texture_import_route_available: bool,
+
+    /// Phase 56J future texture handle owner 是否已定义；固定保持 false。
+    pub damage_mapping_future_texture_handle_owner_defined: bool,
+
+    /// Phase 56J damage mapping owner 是否已定义。
+    pub damage_mapping_owner_defined: bool,
+
+    /// Phase 56J future texture region policy 是否已定义；固定保持 false。
+    pub damage_mapping_texture_region_policy_defined: bool,
+
+    /// Phase 56J surface damage mapping policy 是否已定义；固定保持 false。
+    pub damage_mapping_surface_damage_mapping_policy_defined: bool,
+
+    /// Phase 56J buffer damage mapping policy 是否已定义；固定保持 false。
+    pub damage_mapping_buffer_damage_mapping_policy_defined: bool,
+
+    /// Phase 56J damage coordinate-space policy 是否已定义；固定保持 false。
+    pub damage_mapping_coordinate_space_policy_defined: bool,
+
+    /// Phase 56J renderer damage submission policy 是否已定义；固定保持 false。
+    pub damage_mapping_renderer_damage_submission_policy_defined: bool,
+
+    /// Phase 56J frame callback completion policy 是否已定义；固定保持 false。
+    pub damage_mapping_frame_callback_completion_policy_defined: bool,
+
+    /// Phase 56J damage submission 是否允许；固定保持 false。
+    pub damage_submission_allowed: bool,
+
+    /// Phase 56J 是否缺少真实 texture import route。
+    pub damage_mapping_missing_texture_import_route: bool,
+
+    /// Phase 56J 是否缺少 future texture handle ownership policy。
+    pub damage_mapping_missing_future_texture_handle_ownership_policy: bool,
+
+    /// Phase 56J 是否缺少 future texture region policy。
+    pub damage_mapping_missing_texture_region_policy: bool,
+
+    /// Phase 56J 是否缺少 surface damage mapping policy。
+    pub damage_mapping_missing_surface_damage_mapping_policy: bool,
+
+    /// Phase 56J 是否缺少 buffer damage mapping policy。
+    pub damage_mapping_missing_buffer_damage_mapping_policy: bool,
+
+    /// Phase 56J 是否缺少 damage coordinate-space policy。
+    pub damage_mapping_missing_coordinate_space_policy: bool,
+
+    /// Phase 56J 是否缺少 renderer damage submission policy。
+    pub damage_mapping_missing_renderer_damage_submission_policy: bool,
+
+    /// Phase 56J 是否缺少 frame callback completion policy。
+    pub damage_mapping_missing_frame_callback_completion_policy: bool,
+
+    /// Phase 56J 是否明确禁用 damage submission。
+    pub damage_mapping_damage_submission_explicitly_disabled: bool,
+
+    /// Phase 56J 是否只有 mapping audit、没有真实 texture。
+    pub damage_mapping_without_texture: bool,
+
+    /// Phase 56J 是否尝试 import buffer；固定保持 false。
+    pub damage_mapping_buffer_import_attempted: bool,
+
+    /// Phase 56J 是否 import buffer；固定保持 false。
+    pub damage_mapping_buffer_imported: bool,
+
+    /// Phase 56J 是否创建 texture；固定保持 false。
+    pub damage_mapping_texture_created: bool,
+
+    /// Phase 56J 是否调用 renderer；固定保持 false。
+    pub damage_mapping_renderer_called: bool,
+
+    /// Phase 56J 是否提交 damage；固定保持 false。
+    pub damage_mapping_damage_submitted: bool,
+
+    /// Phase 56J 是否发送 frame callback done；固定保持 false。
+    pub damage_mapping_frame_callback_done_sent: bool,
+
+    /// Phase 56J 是否接入 input；固定保持 false。
+    pub damage_mapping_input_support: bool,
+
+    /// Phase 56J 是否触发 core mutation；固定保持 false。
+    pub damage_mapping_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -3081,6 +3186,40 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             texture_import_route_frame_callback_done_sent: false,
             texture_import_route_input_support: false,
             texture_import_route_core_mutation_invoked: false,
+            damage_to_texture_mapping_audit_invocations: 0,
+            damage_to_texture_mapping_audit_reports: Vec::new(),
+            damage_to_texture_mapping_audit_available: false,
+            damage_to_texture_mapping_audit_blocked: false,
+            damage_mapping_texture_import_route_decision_report_observed: false,
+            damage_mapping_texture_import_route_decision_still_blocked: false,
+            damage_mapping_texture_import_route_available: false,
+            damage_mapping_future_texture_handle_owner_defined: false,
+            damage_mapping_owner_defined: false,
+            damage_mapping_texture_region_policy_defined: false,
+            damage_mapping_surface_damage_mapping_policy_defined: false,
+            damage_mapping_buffer_damage_mapping_policy_defined: false,
+            damage_mapping_coordinate_space_policy_defined: false,
+            damage_mapping_renderer_damage_submission_policy_defined: false,
+            damage_mapping_frame_callback_completion_policy_defined: false,
+            damage_submission_allowed: false,
+            damage_mapping_missing_texture_import_route: false,
+            damage_mapping_missing_future_texture_handle_ownership_policy: false,
+            damage_mapping_missing_texture_region_policy: false,
+            damage_mapping_missing_surface_damage_mapping_policy: false,
+            damage_mapping_missing_buffer_damage_mapping_policy: false,
+            damage_mapping_missing_coordinate_space_policy: false,
+            damage_mapping_missing_renderer_damage_submission_policy: false,
+            damage_mapping_missing_frame_callback_completion_policy: false,
+            damage_mapping_damage_submission_explicitly_disabled: false,
+            damage_mapping_without_texture: false,
+            damage_mapping_buffer_import_attempted: false,
+            damage_mapping_buffer_imported: false,
+            damage_mapping_texture_created: false,
+            damage_mapping_renderer_called: false,
+            damage_mapping_damage_submitted: false,
+            damage_mapping_frame_callback_done_sent: false,
+            damage_mapping_input_support: false,
+            damage_mapping_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -4574,6 +4713,81 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_damage_to_texture_mapping_audit_report(
+        report: &RuntimeSurfaceCommitDamageToTextureMappingAuditReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            damage_to_texture_mapping_audit_invocations: usize::from(
+                report.damage_to_texture_mapping_audit_available,
+            ),
+            damage_to_texture_mapping_audit_reports: vec![report.clone()],
+            damage_to_texture_mapping_audit_available: report
+                .damage_to_texture_mapping_audit_available,
+            damage_to_texture_mapping_audit_blocked: report
+                .damage_to_texture_mapping_audit_blocked,
+            damage_mapping_texture_import_route_decision_report_observed: report
+                .source_texture_import_route_decision_report_observed,
+            damage_mapping_texture_import_route_decision_still_blocked: report
+                .texture_import_route_decision_still_blocked,
+            damage_mapping_texture_import_route_available: report.texture_import_route_available,
+            damage_mapping_future_texture_handle_owner_defined: report
+                .future_texture_handle_owner_defined,
+            damage_mapping_owner_defined: report.damage_mapping_owner_defined,
+            damage_mapping_texture_region_policy_defined: report.texture_region_policy_defined,
+            damage_mapping_surface_damage_mapping_policy_defined: report
+                .surface_damage_mapping_policy_defined,
+            damage_mapping_buffer_damage_mapping_policy_defined: report
+                .buffer_damage_mapping_policy_defined,
+            damage_mapping_coordinate_space_policy_defined: report
+                .damage_coordinate_space_policy_defined,
+            damage_mapping_renderer_damage_submission_policy_defined: report
+                .renderer_damage_submission_policy_defined,
+            damage_mapping_frame_callback_completion_policy_defined: report
+                .frame_callback_completion_policy_defined,
+            damage_submission_allowed: report.damage_submission_allowed,
+            damage_mapping_missing_texture_import_route: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::MissingTextureImportRoute,
+            ),
+            damage_mapping_missing_future_texture_handle_ownership_policy: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::MissingFutureTextureHandleOwnershipPolicy,
+            ),
+            damage_mapping_missing_texture_region_policy: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::MissingTextureRegionPolicy,
+            ),
+            damage_mapping_missing_surface_damage_mapping_policy: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::MissingSurfaceDamageMappingPolicy,
+            ),
+            damage_mapping_missing_buffer_damage_mapping_policy: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::MissingBufferDamageMappingPolicy,
+            ),
+            damage_mapping_missing_coordinate_space_policy: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::MissingDamageCoordinateSpacePolicy,
+            ),
+            damage_mapping_missing_renderer_damage_submission_policy: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::MissingRendererDamageSubmissionPolicy,
+            ),
+            damage_mapping_missing_frame_callback_completion_policy: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::MissingFrameCallbackCompletionPolicy,
+            ),
+            damage_mapping_damage_submission_explicitly_disabled: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::DamageSubmissionExplicitlyDisabled,
+            ),
+            damage_mapping_without_texture: has_blocker(
+                RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::DamageMappingWithoutTexture,
+            ),
+            damage_mapping_buffer_import_attempted: report.buffer_import_attempted,
+            damage_mapping_buffer_imported: report.buffer_imported,
+            damage_mapping_texture_created: report.texture_created,
+            damage_mapping_renderer_called: report.renderer_called,
+            damage_mapping_damage_submitted: report.damage_submitted,
+            damage_mapping_frame_callback_done_sent: report.frame_callback_done_sent,
+            damage_mapping_input_support: report.input_support,
+            damage_mapping_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -5838,6 +6052,65 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.texture_import_route_input_support |= delta.texture_import_route_input_support;
         self.texture_import_route_core_mutation_invoked |=
             delta.texture_import_route_core_mutation_invoked;
+        self.damage_to_texture_mapping_audit_invocations = self
+            .damage_to_texture_mapping_audit_invocations
+            .saturating_add(delta.damage_to_texture_mapping_audit_invocations);
+        self.damage_to_texture_mapping_audit_reports
+            .extend(delta.damage_to_texture_mapping_audit_reports);
+        self.damage_to_texture_mapping_audit_available |=
+            delta.damage_to_texture_mapping_audit_available;
+        self.damage_to_texture_mapping_audit_blocked |=
+            delta.damage_to_texture_mapping_audit_blocked;
+        self.damage_mapping_texture_import_route_decision_report_observed |=
+            delta.damage_mapping_texture_import_route_decision_report_observed;
+        self.damage_mapping_texture_import_route_decision_still_blocked |=
+            delta.damage_mapping_texture_import_route_decision_still_blocked;
+        self.damage_mapping_texture_import_route_available |=
+            delta.damage_mapping_texture_import_route_available;
+        self.damage_mapping_future_texture_handle_owner_defined |=
+            delta.damage_mapping_future_texture_handle_owner_defined;
+        self.damage_mapping_owner_defined |= delta.damage_mapping_owner_defined;
+        self.damage_mapping_texture_region_policy_defined |=
+            delta.damage_mapping_texture_region_policy_defined;
+        self.damage_mapping_surface_damage_mapping_policy_defined |=
+            delta.damage_mapping_surface_damage_mapping_policy_defined;
+        self.damage_mapping_buffer_damage_mapping_policy_defined |=
+            delta.damage_mapping_buffer_damage_mapping_policy_defined;
+        self.damage_mapping_coordinate_space_policy_defined |=
+            delta.damage_mapping_coordinate_space_policy_defined;
+        self.damage_mapping_renderer_damage_submission_policy_defined |=
+            delta.damage_mapping_renderer_damage_submission_policy_defined;
+        self.damage_mapping_frame_callback_completion_policy_defined |=
+            delta.damage_mapping_frame_callback_completion_policy_defined;
+        self.damage_submission_allowed |= delta.damage_submission_allowed;
+        self.damage_mapping_missing_texture_import_route |=
+            delta.damage_mapping_missing_texture_import_route;
+        self.damage_mapping_missing_future_texture_handle_ownership_policy |=
+            delta.damage_mapping_missing_future_texture_handle_ownership_policy;
+        self.damage_mapping_missing_texture_region_policy |=
+            delta.damage_mapping_missing_texture_region_policy;
+        self.damage_mapping_missing_surface_damage_mapping_policy |=
+            delta.damage_mapping_missing_surface_damage_mapping_policy;
+        self.damage_mapping_missing_buffer_damage_mapping_policy |=
+            delta.damage_mapping_missing_buffer_damage_mapping_policy;
+        self.damage_mapping_missing_coordinate_space_policy |=
+            delta.damage_mapping_missing_coordinate_space_policy;
+        self.damage_mapping_missing_renderer_damage_submission_policy |=
+            delta.damage_mapping_missing_renderer_damage_submission_policy;
+        self.damage_mapping_missing_frame_callback_completion_policy |=
+            delta.damage_mapping_missing_frame_callback_completion_policy;
+        self.damage_mapping_damage_submission_explicitly_disabled |=
+            delta.damage_mapping_damage_submission_explicitly_disabled;
+        self.damage_mapping_without_texture |= delta.damage_mapping_without_texture;
+        self.damage_mapping_buffer_import_attempted |= delta.damage_mapping_buffer_import_attempted;
+        self.damage_mapping_buffer_imported |= delta.damage_mapping_buffer_imported;
+        self.damage_mapping_texture_created |= delta.damage_mapping_texture_created;
+        self.damage_mapping_renderer_called |= delta.damage_mapping_renderer_called;
+        self.damage_mapping_damage_submitted |= delta.damage_mapping_damage_submitted;
+        self.damage_mapping_frame_callback_done_sent |=
+            delta.damage_mapping_frame_callback_done_sent;
+        self.damage_mapping_input_support |= delta.damage_mapping_input_support;
+        self.damage_mapping_core_mutation_invoked |= delta.damage_mapping_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -6125,6 +6398,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_texture_import_route_decision_report(
                 &report.texture_import_route_decision_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_damage_to_texture_mapping_audit_report(
+                &report.damage_to_texture_mapping_audit_report,
             ),
         );
 

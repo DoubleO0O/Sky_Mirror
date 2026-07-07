@@ -377,7 +377,13 @@ pub use linux_runtime::SmithayLinuxRuntimeProbe;
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub use linux_shm_buffer_import_adapter::{
     LinuxShmBufferMetadataEvidence, LinuxShmBufferMetadataKind, LinuxShmBufferTypeBoundaryEvidence,
-    LinuxShmFirstBufferImportAdapterSkeleton, RuntimeSurfaceCommitFutureTextureOwnershipPolicy,
+    LinuxShmFirstBufferImportAdapterSkeleton,
+    RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker,
+    RuntimeSurfaceCommitDamageToTextureMappingAuditOperation,
+    RuntimeSurfaceCommitDamageToTextureMappingAuditReport,
+    RuntimeSurfaceCommitDamageToTextureMappingChecklist,
+    RuntimeSurfaceCommitDamageToTextureMappingPolicy,
+    RuntimeSurfaceCommitFutureTextureOwnershipPolicy,
     RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
     RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist,
     RuntimeSurfaceCommitRendererBackendInstanceAuditOperation,
@@ -404,8 +410,9 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitTextureImportRoutePolicy, RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
     RuntimeSurfaceCommitTextureOwnerBoundaryChecklist,
     RuntimeSurfaceCommitTextureOwnerBoundaryOperation,
-    RuntimeSurfaceCommitTextureOwnerBoundaryReport, extract_shm_buffer_metadata_evidence,
-    observe_wl_buffer_type_boundary,
+    RuntimeSurfaceCommitTextureOwnerBoundaryReport,
+    damage_to_texture_mapping_audit_from_texture_import_route_decision,
+    extract_shm_buffer_metadata_evidence, observe_wl_buffer_type_boundary,
     renderer_backend_instance_audit_from_texture_owner_boundary_report,
     shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
@@ -7795,6 +7802,163 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56I source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56J 必须建立 damage-to-texture mapping audit seam。
+    ///
+    /// 这个 source-contract 只允许从 Phase 56I texture import route decision report
+    /// 派生 pure-data damage mapping audit；它不提交真实 damage，不调用 renderer，
+    /// 不发送 frame callback done。
+    #[test]
+    fn damage_to_texture_mapping_audit_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56J SHM adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56J coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56J loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56J orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56J_DAMAGE_TO_TEXTURE_MAPPING_AUDIT.md"),
+        )
+        .expect("Phase 56J 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56J - Damage-to-Texture Mapping Audit",
+            "No-Brake Goal Mode",
+            "damage_to_texture_mapping_audit_available = true",
+            "damage_to_texture_mapping_audit_blocked = true",
+            "damage_mapping_owner_defined = true",
+            "texture_import_route_available = false",
+            "damage_submission_allowed = false",
+            "damage_submitted = false",
+            "frame_callback_done_sent = false",
+            "Phase 56K",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56J 文档缺少 damage mapping audit 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitDamageToTextureMappingAuditOperation",
+            "ObserveTextureImportRouteDecisionReport",
+            "DefineDamageMappingOwner",
+            "CheckTextureRegionPolicy",
+            "CheckSurfaceDamageMappingPolicy",
+            "CheckBufferDamageMappingPolicy",
+            "CheckDamageCoordinateSpacePolicy",
+            "CheckRendererDamageSubmissionPolicy",
+            "BuildDamageToTextureMappingAuditReport",
+            "pub enum RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker",
+            "TextureImportRouteDecisionStillBlocked",
+            "MissingTextureImportRoute",
+            "MissingFutureTextureHandleOwnershipPolicy",
+            "MissingTextureRegionPolicy",
+            "MissingSurfaceDamageMappingPolicy",
+            "MissingBufferDamageMappingPolicy",
+            "DamageSubmissionExplicitlyDisabled",
+            "pub struct RuntimeSurfaceCommitDamageToTextureMappingPolicy",
+            "pub struct RuntimeSurfaceCommitDamageToTextureMappingChecklist",
+            "pub struct RuntimeSurfaceCommitDamageToTextureMappingAuditReport",
+            "pub fn damage_to_texture_mapping_audit_from_texture_import_route_decision",
+            "damage_to_texture_mapping_audit_available: true",
+            "damage_to_texture_mapping_audit_blocked: true",
+            "damage_mapping_owner_defined: true",
+            "texture_import_route_available: false",
+            "damage_submission_allowed: false",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56J adapter production source 缺少 damage mapping audit: {required}"
+            );
+        }
+
+        for required in [
+            "pub damage_to_texture_mapping_audit_report:",
+            "RuntimeSurfaceCommitDamageToTextureMappingAuditReport",
+            "damage_to_texture_mapping_audit_from_texture_import_route_decision",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56J coordinator 缺少 damage mapping audit 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub damage_to_texture_mapping_audit_invocations: usize",
+            "pub damage_to_texture_mapping_audit_reports:",
+            "Vec<RuntimeSurfaceCommitDamageToTextureMappingAuditReport>",
+            "pub damage_to_texture_mapping_audit_available: bool",
+            "pub damage_to_texture_mapping_audit_blocked: bool",
+            "pub damage_mapping_owner_defined: bool",
+            "pub damage_submission_allowed: bool",
+            "from_damage_to_texture_mapping_audit_report",
+            "report.damage_to_texture_mapping_audit_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56J loop 缺少 damage mapping audit 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "damage_to_texture_mapping_audit_invocations",
+            "damage_to_texture_mapping_audit_reports",
+            "damage_to_texture_mapping_audit_available",
+            "damage_to_texture_mapping_audit_blocked",
+            "damage_mapping_owner_defined",
+            "damage_submission_allowed",
+            "damage_mapping_damage_submitted",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56J orchestrator test/report 缺少 damage mapping audit 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "damage_submission_allowed: true",
+            "render_invoked: true",
+            ".damage(",
+            ".done(",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56J source 包含禁止的真实 damage/render/frame token: {forbidden}"
             );
         }
     }
