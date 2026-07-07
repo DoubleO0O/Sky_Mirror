@@ -685,6 +685,18 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport {
         frame_callback_completion_policy_from_damage_to_texture_mapping_audit(report)
     }
+
+    /// 从 Phase 56K frame callback completion policy 派生 Phase 56L real texture creation readiness decision。
+    ///
+    /// 该 owner 方法只汇总 Phase 56H-56K 的前置条件和最小 renderability checklist；
+    /// readiness decision 不等于 texture created、renderer called、damage submitted 或
+    /// frame callback done。
+    pub fn real_texture_creation_readiness_decision_from_frame_callback_completion_policy(
+        &mut self,
+        report: &RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
+    ) -> RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport {
+        real_texture_creation_readiness_decision_from_frame_callback_completion_policy(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -3226,11 +3238,322 @@ pub fn frame_callback_completion_policy_from_damage_to_texture_mapping_audit(
     }
 }
 
+/// Phase 56L real texture creation readiness decision 中可定位的纯数据操作阶段。
+///
+/// 这些步骤只汇总 Phase 56H-56K 的 blocked evidence 与最小 SHM-first
+/// renderability checklist。它们不会创建 texture，不会调用 renderer，也不会发送
+/// frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation {
+    /// 观察 Phase 56K frame callback completion policy report。
+    ObserveFrameCallbackCompletionPolicyReport,
+    /// 汇总 renderer backend instance readiness。
+    SummarizeRendererBackendInstanceReadiness,
+    /// 汇总 texture import route readiness。
+    SummarizeTextureImportRouteReadiness,
+    /// 汇总 future texture handle / cleanup readiness。
+    SummarizeTextureOwnershipReadiness,
+    /// 汇总 damage submission readiness。
+    SummarizeDamageSubmissionReadiness,
+    /// 汇总 frame callback completion readiness。
+    SummarizeFrameCallbackCompletionReadiness,
+    /// 构建真实 texture creation readiness decision report。
+    BuildRealTextureCreationReadinessDecisionReport,
+}
+
+/// Phase 56L real texture creation readiness blocker taxonomy。
+///
+/// blocker 明确说明：readiness decision 只是判断真实 texture creation 是否可进入的
+/// 门槛汇总。缺少 renderer、import route、handle/cleanup、damage、render success 或
+/// frame done permission 时必须继续 blocked。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker {
+    /// 上游 frame callback completion policy 仍处于 blocked 状态。
+    FrameCallbackCompletionPolicyStillBlocked,
+    /// 缺少真实 renderer backend instance。
+    MissingRendererBackendInstance,
+    /// 缺少真实 texture import route。
+    MissingTextureImportRoute,
+    /// 缺少 future texture handle ownership policy。
+    MissingFutureTextureHandleOwnershipPolicy,
+    /// 缺少 future texture cleanup policy。
+    MissingTextureCleanupPolicy,
+    /// 缺少真实 damage submission。
+    MissingDamageSubmission,
+    /// 缺少真实 render success evidence。
+    MissingRenderSuccessEvidence,
+    /// frame callback done 仍明确禁用。
+    FrameCallbackDoneDisabled,
+    /// 真实 texture creation 在本阶段仍明确禁用。
+    RealTextureCreationExplicitlyDisabled,
+    /// readiness decision 存在，但没有真实 texture。
+    RealTextureCreationReadinessWithoutTexture,
+}
+
+/// Phase 56L 最小 SHM-first renderability checklist。
+///
+/// checklist 只说明进入真实 texture creation 前必须满足的 pure-data 条件。当前所有
+/// 真实资源条件仍为 false，因此 core 不会看到 Smithay / renderer / texture 类型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRealTextureCreationReadinessChecklist {
+    /// readiness decision seam 是否可用。
+    pub real_texture_creation_readiness_decision_available: bool,
+
+    /// readiness decision 是否仍 blocked。
+    pub real_texture_creation_readiness_blocked: bool,
+
+    /// 是否定义了最小 SHM-first renderability checklist。
+    pub minimum_renderability_checklist_defined: bool,
+
+    /// 是否观察到 Phase 56K frame callback completion policy report。
+    pub frame_callback_completion_policy_report_observed: bool,
+
+    /// 上游 frame callback completion policy 是否仍 blocked。
+    pub frame_callback_completion_policy_still_blocked: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56L 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// 真实 texture import route 是否可用；Phase 56L 固定 false。
+    pub texture_import_route_available: bool,
+
+    /// future texture handle owner 是否已定义；Phase 56L 从上游缺口得出 false。
+    pub future_texture_handle_owner_defined: bool,
+
+    /// future texture cleanup policy 是否已定义；Phase 56L 从上游缺口得出 false。
+    pub texture_cleanup_policy_defined: bool,
+
+    /// damage submission 是否真实可用；Phase 56L 固定 false。
+    pub damage_submission_available: bool,
+
+    /// render success evidence 是否可用；Phase 56L 固定 false。
+    pub render_success_evidence_available: bool,
+
+    /// frame callback done 是否允许；Phase 56L 固定 false。
+    pub frame_callback_done_allowed: bool,
+
+    /// 真实 texture creation 是否 ready；Phase 56L 固定 false。
+    pub real_texture_creation_ready: bool,
+
+    /// 真实 texture creation 是否允许执行；Phase 56L 固定 false。
+    pub real_texture_creation_allowed: bool,
+}
+
+/// Phase 56L real texture creation readiness decision report。
+///
+/// 该 report 从 Phase 56K policy 派生，只汇总真实 texture creation 的前置条件是否
+/// 已满足。它不 import buffer、不创建真实 texture handle、不创建 texture、不调用 renderer、
+/// 不提交 damage、不发送 frame callback done、不接 input、不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport {
+    /// readiness decision seam 是否可用。
+    pub real_texture_creation_readiness_decision_available: bool,
+
+    /// 是否观察到 Phase 56K frame callback completion policy report。
+    pub source_frame_callback_completion_policy_report_observed: bool,
+
+    /// 被消费的 Phase 56K frame callback completion policy report。
+    pub source_frame_callback_completion_policy_report:
+        RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
+
+    /// 最小 SHM-first renderability checklist。
+    pub checklist: RuntimeSurfaceCommitRealTextureCreationReadinessChecklist,
+
+    /// readiness decision 是否仍 blocked。
+    pub real_texture_creation_readiness_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub real_texture_creation_readiness_blocker_reason: &'static str,
+
+    /// 是否定义了最小 SHM-first renderability checklist。
+    pub minimum_renderability_checklist_defined: bool,
+
+    /// 上游 frame callback completion policy 是否仍 blocked。
+    pub frame_callback_completion_policy_still_blocked: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56L 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// 真实 texture import route 是否可用；Phase 56L 固定 false。
+    pub texture_import_route_available: bool,
+
+    /// future texture handle owner 是否已定义；Phase 56L 固定 false。
+    pub future_texture_handle_owner_defined: bool,
+
+    /// future texture cleanup policy 是否已定义；Phase 56L 固定 false。
+    pub texture_cleanup_policy_defined: bool,
+
+    /// damage submission 是否真实可用；Phase 56L 固定 false。
+    pub damage_submission_available: bool,
+
+    /// render success evidence 是否可用；Phase 56L 固定 false。
+    pub render_success_evidence_available: bool,
+
+    /// frame callback done 是否允许；Phase 56L 固定 false。
+    pub frame_callback_done_allowed: bool,
+
+    /// 真实 texture creation 是否 ready；Phase 56L 固定 false。
+    pub real_texture_creation_ready: bool,
+
+    /// 真实 texture creation 是否允许执行；Phase 56L 固定 false。
+    pub real_texture_creation_allowed: bool,
+
+    /// Phase 56L 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56L 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56L 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56L 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56L 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56L 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56L 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56L 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// readiness decision 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation>,
+
+    /// 阻止真实 texture creation 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker>,
+}
+
+/// 从 Phase 56K frame callback completion policy 派生 Phase 56L texture creation readiness decision。
+///
+/// 这是 Phase 56L 的唯一执行入口：它只生成 pure-data decision report。本函数不创建
+/// texture，不创建真实 texture handle，不调用 renderer，不提交 damage，也不发送 frame callback done。
+#[must_use = "real texture creation readiness decision is not texture creation"]
+pub fn real_texture_creation_readiness_decision_from_frame_callback_completion_policy(
+    report: &RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
+) -> RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport {
+    let source_route = &report
+        .source_damage_to_texture_mapping_audit_report
+        .source_texture_import_route_decision_report;
+
+    let checklist = RuntimeSurfaceCommitRealTextureCreationReadinessChecklist {
+        real_texture_creation_readiness_decision_available: true,
+        real_texture_creation_readiness_blocked: true,
+        minimum_renderability_checklist_defined: true,
+        frame_callback_completion_policy_report_observed: report
+            .frame_callback_completion_policy_available,
+        frame_callback_completion_policy_still_blocked: report
+            .frame_callback_completion_policy_blocked,
+        renderer_backend_instance_available: report.renderer_backend_instance_available,
+        texture_import_route_available: source_route.texture_import_route_available,
+        future_texture_handle_owner_defined: source_route.future_texture_handle_owner_defined,
+        texture_cleanup_policy_defined: source_route.texture_cleanup_policy_defined,
+        damage_submission_available: report.damage_submission_available,
+        render_success_evidence_available: report.render_success_evidence_available,
+        frame_callback_done_allowed: report.frame_callback_done_allowed,
+        real_texture_creation_ready: false,
+        real_texture_creation_allowed: false,
+    };
+
+    let mut blockers = Vec::new();
+    if checklist.frame_callback_completion_policy_still_blocked {
+        blockers.push(
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::FrameCallbackCompletionPolicyStillBlocked,
+        );
+    }
+    if !checklist.renderer_backend_instance_available {
+        blockers.push(
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingRendererBackendInstance,
+        );
+    }
+    if !checklist.texture_import_route_available {
+        blockers.push(
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingTextureImportRoute,
+        );
+    }
+    if !checklist.future_texture_handle_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingFutureTextureHandleOwnershipPolicy,
+        );
+    }
+    if !checklist.texture_cleanup_policy_defined {
+        blockers.push(
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingTextureCleanupPolicy,
+        );
+    }
+    if !checklist.damage_submission_available {
+        blockers.push(
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingDamageSubmission,
+        );
+    }
+    if !checklist.render_success_evidence_available {
+        blockers.push(
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingRenderSuccessEvidence,
+        );
+    }
+    if !checklist.frame_callback_done_allowed {
+        blockers.push(
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::FrameCallbackDoneDisabled,
+        );
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::RealTextureCreationExplicitlyDisabled,
+        RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::RealTextureCreationReadinessWithoutTexture,
+    ]);
+
+    RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport {
+        real_texture_creation_readiness_decision_available: true,
+        source_frame_callback_completion_policy_report_observed: report
+            .frame_callback_completion_policy_available,
+        source_frame_callback_completion_policy_report: report.clone(),
+        checklist,
+        real_texture_creation_readiness_blocked: true,
+        real_texture_creation_readiness_blocker_reason:
+            "real texture creation readiness decision only: missing renderer backend instance, texture import route, future texture handle ownership, cleanup, damage submission, render success evidence, and frame callback done permission",
+        minimum_renderability_checklist_defined: true,
+        frame_callback_completion_policy_still_blocked: report
+            .frame_callback_completion_policy_blocked,
+        renderer_backend_instance_available: false,
+        texture_import_route_available: false,
+        future_texture_handle_owner_defined: false,
+        texture_cleanup_policy_defined: false,
+        damage_submission_available: false,
+        render_success_evidence_available: false,
+        frame_callback_done_allowed: false,
+        real_texture_creation_ready: false,
+        real_texture_creation_allowed: false,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation::ObserveFrameCallbackCompletionPolicyReport,
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation::SummarizeRendererBackendInstanceReadiness,
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation::SummarizeTextureImportRouteReadiness,
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation::SummarizeTextureOwnershipReadiness,
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation::SummarizeDamageSubmissionReadiness,
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation::SummarizeFrameCallbackCompletionReadiness,
+            RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation::BuildRealTextureCreationReadinessDecisionReport,
+        ],
+        blockers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker,
         RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker,
+        RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker,
         RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
         RuntimeSurfaceCommitTextureCreationBlocker,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
@@ -3238,6 +3561,7 @@ mod tests {
         RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
         damage_to_texture_mapping_audit_from_texture_import_route_decision,
         frame_callback_completion_policy_from_damage_to_texture_mapping_audit,
+        real_texture_creation_readiness_decision_from_frame_callback_completion_policy,
         renderer_backend_instance_audit_from_texture_owner_boundary_report,
         texture_creation_noop_report_from_precondition_audit,
         texture_creation_precondition_audit_from_validation_harness_report,
@@ -3649,6 +3973,84 @@ mod tests {
         ));
         assert!(report.blockers.contains(
             &RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::FrameCallbackDoneExplicitlyDisabled
+        ));
+        assert!(!report.buffer_import_attempted);
+        assert!(!report.buffer_imported);
+        assert!(!report.texture_created);
+        assert!(!report.renderer_called);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_done_sent);
+        assert!(!report.input_support);
+        assert!(!report.core_mutation_invoked);
+    }
+
+    /// Phase 56L 从 Phase 56K frame callback completion policy 派生真实 texture creation readiness decision。
+    ///
+    /// 该测试固定：readiness decision 只汇总 Phase 56H-56K 的 blocker 和最小
+    /// SHM-first renderability checklist；它不得创建 texture、调用 renderer、提交
+    /// damage 或发送 frame callback done。
+    #[test]
+    fn derives_blocked_real_texture_creation_readiness_decision_from_frame_callback_policy() {
+        let validation_harness = validate_shm_metadata_harness_paths();
+        let audit =
+            texture_creation_precondition_audit_from_validation_harness_report(&validation_harness);
+        let noop_report = texture_creation_noop_report_from_precondition_audit(&audit);
+        let owner_report = texture_owner_boundary_report_from_noop_report(&noop_report);
+        let renderer_backend_audit =
+            renderer_backend_instance_audit_from_texture_owner_boundary_report(&owner_report);
+        let route_decision = texture_import_route_decision_from_renderer_backend_instance_audit(
+            &renderer_backend_audit,
+        );
+        let damage_mapping_audit =
+            damage_to_texture_mapping_audit_from_texture_import_route_decision(&route_decision);
+        let frame_callback_policy =
+            frame_callback_completion_policy_from_damage_to_texture_mapping_audit(
+                &damage_mapping_audit,
+            );
+        let report = real_texture_creation_readiness_decision_from_frame_callback_completion_policy(
+            &frame_callback_policy,
+        );
+
+        assert!(report.real_texture_creation_readiness_decision_available);
+        assert!(report.source_frame_callback_completion_policy_report_observed);
+        assert!(report.real_texture_creation_readiness_blocked);
+        assert!(report.frame_callback_completion_policy_still_blocked);
+        assert!(!report.real_texture_creation_ready);
+        assert!(!report.real_texture_creation_allowed);
+        assert!(!report.renderer_backend_instance_available);
+        assert!(!report.texture_import_route_available);
+        assert!(!report.future_texture_handle_owner_defined);
+        assert!(!report.texture_cleanup_policy_defined);
+        assert!(!report.damage_submission_available);
+        assert!(!report.render_success_evidence_available);
+        assert!(!report.frame_callback_done_allowed);
+        assert!(report.minimum_renderability_checklist_defined);
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::FrameCallbackCompletionPolicyStillBlocked
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingRendererBackendInstance
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingTextureImportRoute
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingFutureTextureHandleOwnershipPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingTextureCleanupPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingDamageSubmission
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::MissingRenderSuccessEvidence
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::FrameCallbackDoneDisabled
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::RealTextureCreationExplicitlyDisabled
         ));
         assert!(!report.buffer_import_attempted);
         assert!(!report.buffer_imported);
