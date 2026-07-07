@@ -378,6 +378,11 @@ pub use linux_runtime::SmithayLinuxRuntimeProbe;
 pub use linux_shm_buffer_import_adapter::{
     LinuxShmBufferMetadataEvidence, LinuxShmBufferMetadataKind, LinuxShmBufferTypeBoundaryEvidence,
     LinuxShmFirstBufferImportAdapterSkeleton, RuntimeSurfaceCommitFutureTextureOwnershipPolicy,
+    RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
+    RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist,
+    RuntimeSurfaceCommitRendererBackendInstanceAuditOperation,
+    RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
+    RuntimeSurfaceCommitRendererBackendInstancePolicy,
     RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataOperation,
     RuntimeSurfaceCommitShmBufferMetadataReport,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
@@ -396,7 +401,9 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitTextureOwnerBoundaryChecklist,
     RuntimeSurfaceCommitTextureOwnerBoundaryOperation,
     RuntimeSurfaceCommitTextureOwnerBoundaryReport, extract_shm_buffer_metadata_evidence,
-    observe_wl_buffer_type_boundary, shm_buffer_metadata_report_from_adapter_report,
+    observe_wl_buffer_type_boundary,
+    renderer_backend_instance_audit_from_texture_owner_boundary_report,
+    shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
     texture_creation_noop_report_from_precondition_audit,
     texture_creation_precondition_audit_from_metadata_report,
@@ -7454,6 +7461,171 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56G source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56H 建立 renderer backend instance audit。
+    ///
+    /// 这个 source-contract 只允许从 Phase 56G texture owner boundary report 派生
+    /// pure-data renderer backend instance audit；它不创建 renderer backend，不创建
+    /// texture，不调用 renderer，也不执行 `ImportAll::import_buffer`。
+    #[test]
+    fn renderer_backend_instance_audit_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56H SHM metadata adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56H coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56H loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56H orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56H_RENDERER_BACKEND_INSTANCE_AUDIT.md"),
+        )
+        .expect("Phase 56H 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56H - Renderer Backend Instance Audit",
+            "No-Brake Goal Mode",
+            "renderer_backend_instance_audit_available = true",
+            "renderer_backend_instance_available = false",
+            "renderer_backend_instance_owner_defined = false",
+            "renderer_backend_instance_lifecycle_owner_defined = false",
+            "renderer_backend_instance_cleanup_owner_defined = false",
+            "renderer_backend_instance_availability_owner_defined = false",
+            "texture_owner_boundary_still_blocked = true",
+            "buffer_import_attempted = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "ImportAll::import_buffer",
+            "TextureId",
+            "Phase 56I",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56H 文档缺少 renderer backend instance audit 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitRendererBackendInstanceAuditOperation",
+            "ObserveTextureOwnerBoundaryReport",
+            "CheckRendererBackendInstanceAvailability",
+            "AuditRendererBackendInstanceOwner",
+            "BuildRendererBackendInstanceAuditReport",
+            "pub enum RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker",
+            "TextureOwnerBoundaryStillBlocked",
+            "MissingRendererBackendInstance",
+            "MissingRendererBackendInstanceOwnerPolicy",
+            "MissingRendererBackendInstanceLifecyclePolicy",
+            "MissingRendererBackendInstanceCleanupPolicy",
+            "MissingRendererBackendInstanceAvailabilityPolicy",
+            "RendererBackendInstanceWithoutTextureCreation",
+            "pub struct RuntimeSurfaceCommitRendererBackendInstancePolicy",
+            "pub struct RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist",
+            "pub struct RuntimeSurfaceCommitRendererBackendInstanceAuditReport",
+            "pub fn renderer_backend_instance_audit_from_texture_owner_boundary_report",
+            "renderer_backend_instance_audit_available: true",
+            "renderer_backend_instance_audit_blocked: true",
+            "renderer_backend_instance_available: false",
+            "renderer_backend_instance_owner_defined: false",
+            "renderer_backend_instance_lifecycle_owner_defined: false",
+            "renderer_backend_instance_cleanup_owner_defined: false",
+            "renderer_backend_instance_availability_owner_defined: false",
+            "texture_owner_boundary_still_blocked: true",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56H adapter production source 缺少 renderer backend instance audit: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_backend_instance_audit_report:",
+            "RuntimeSurfaceCommitRendererBackendInstanceAuditReport",
+            "renderer_backend_instance_audit_from_texture_owner_boundary_report",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56H coordinator 缺少 renderer backend instance audit 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_backend_instance_audit_invocations: usize",
+            "pub renderer_backend_instance_audit_reports:",
+            "Vec<RuntimeSurfaceCommitRendererBackendInstanceAuditReport>",
+            "pub renderer_backend_instance_audit_available: bool",
+            "pub renderer_backend_instance_audit_blocked: bool",
+            "pub renderer_backend_instance_missing_renderer_backend_instance: bool",
+            "pub renderer_backend_instance_texture_owner_boundary_still_blocked: bool",
+            "from_renderer_backend_instance_audit_report",
+            "report.renderer_backend_instance_audit_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56H loop 缺少 renderer backend instance audit 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "renderer_backend_instance_audit_invocations",
+            "renderer_backend_instance_audit_reports",
+            "renderer_backend_instance_audit_available",
+            "renderer_backend_instance_audit_blocked",
+            "renderer_backend_instance_missing_renderer_backend_instance",
+            "renderer_backend_instance_texture_owner_boundary_still_blocked",
+            "renderer_backend_instance_texture_created",
+            "renderer_backend_instance_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56H orchestrator test/report 缺少 renderer backend instance audit 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+            "ImportAll::import_buffer",
+            "TextureId",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56H source 包含禁止的真实执行/后端 token: {forbidden}"
             );
         }
     }

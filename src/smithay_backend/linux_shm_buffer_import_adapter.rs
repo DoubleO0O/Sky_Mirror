@@ -638,6 +638,18 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitTextureOwnerBoundaryReport {
         texture_owner_boundary_report_from_noop_report(report)
     }
+
+    /// 从 Phase 56G texture owner boundary report 派生 Phase 56H renderer backend instance audit。
+    ///
+    /// 该 owner 方法只定义 renderer backend instance 的 future owner / lifecycle /
+    /// cleanup / availability seam；它不创建 renderer backend instance，也不调用
+    /// renderer 或 texture import。
+    pub fn renderer_backend_instance_audit_from_texture_owner_boundary_report(
+        &mut self,
+        report: &RuntimeSurfaceCommitTextureOwnerBoundaryReport,
+    ) -> RuntimeSurfaceCommitRendererBackendInstanceAuditReport {
+        renderer_backend_instance_audit_from_texture_owner_boundary_report(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -1791,12 +1803,332 @@ pub fn texture_owner_boundary_report_from_noop_report(
     }
 }
 
+/// Phase 56H renderer backend instance audit 的纯数据步骤。
+///
+/// 这些步骤只消费 Phase 56G texture owner boundary report，审计 future renderer
+/// backend instance 的 owner / lifecycle / cleanup / availability seam。本阶段不创建
+/// renderer backend instance，不创建 texture，也不调用 renderer。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendInstanceAuditOperation {
+    /// 观察 Phase 56G texture owner boundary report。
+    ObserveTextureOwnerBoundaryReport,
+    /// 检查 renderer backend instance 是否真实可用。
+    CheckRendererBackendInstanceAvailability,
+    /// 审计 future renderer backend instance owner policy。
+    AuditRendererBackendInstanceOwner,
+    /// 审计 future renderer backend instance lifecycle policy。
+    AuditRendererBackendInstanceLifecycle,
+    /// 审计 future renderer backend instance cleanup policy。
+    AuditRendererBackendInstanceCleanup,
+    /// 审计 future renderer backend instance availability policy。
+    AuditRendererBackendInstanceAvailability,
+    /// 构建 renderer backend instance audit report。
+    BuildRendererBackendInstanceAuditReport,
+}
+
+/// Phase 56H renderer backend instance audit blocker taxonomy。
+///
+/// 每个 blocker 都说明当前只能停在 renderer backend instance audit report，不能把
+/// owner seam 误报为真实 renderer backend、renderer call、texture creation 或
+/// buffer import。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker {
+    /// 上游 texture owner boundary 仍处于 blocked 状态。
+    TextureOwnerBoundaryStillBlocked,
+    /// 缺少真实 renderer backend instance。
+    MissingRendererBackendInstance,
+    /// 缺少 renderer backend instance owner policy。
+    MissingRendererBackendInstanceOwnerPolicy,
+    /// 缺少 renderer backend instance lifecycle policy。
+    MissingRendererBackendInstanceLifecyclePolicy,
+    /// 缺少 renderer backend instance cleanup policy。
+    MissingRendererBackendInstanceCleanupPolicy,
+    /// 缺少 renderer backend instance availability policy。
+    MissingRendererBackendInstanceAvailabilityPolicy,
+    /// renderer backend instance audit 存在，但没有 texture creation。
+    RendererBackendInstanceWithoutTextureCreation,
+}
+
+/// Phase 56H renderer backend instance policy。
+///
+/// policy 只描述 future renderer backend instance seam。它不保存 renderer backend
+/// 对象，不引用 Smithay renderer 类型，也不让 core 感知真实图形资源。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererBackendInstancePolicy {
+    /// renderer backend instance owner 是否已定义；Phase 56H 保持 false。
+    pub renderer_backend_instance_owner_defined: bool,
+
+    /// renderer backend instance owner 名称；未定义时为 blocked。
+    pub renderer_backend_instance_owner: &'static str,
+
+    /// renderer backend instance lifecycle owner 是否已定义；Phase 56H 保持 false。
+    pub renderer_backend_instance_lifecycle_owner_defined: bool,
+
+    /// renderer backend instance lifecycle owner 名称；未定义时为 blocked。
+    pub renderer_backend_instance_lifecycle_owner: &'static str,
+
+    /// renderer backend instance cleanup owner 是否已定义；Phase 56H 保持 false。
+    pub renderer_backend_instance_cleanup_owner_defined: bool,
+
+    /// renderer backend instance cleanup owner 名称；未定义时为 blocked。
+    pub renderer_backend_instance_cleanup_owner: &'static str,
+
+    /// renderer backend instance availability owner 是否已定义；Phase 56H 保持 false。
+    pub renderer_backend_instance_availability_owner_defined: bool,
+
+    /// renderer backend instance availability owner 名称；未定义时为 blocked。
+    pub renderer_backend_instance_availability_owner: &'static str,
+}
+
+/// Phase 56H renderer backend instance audit checklist。
+///
+/// checklist 说明 renderer backend instance audit seam 哪些部分仍 blocked。它是安全
+/// 边界：audit report 不等于真实 renderer backend instance，也不等于 renderer call。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist {
+    /// renderer backend instance audit seam 是否可用。
+    pub renderer_backend_instance_audit_available: bool,
+
+    /// renderer backend instance audit 是否仍 blocked。
+    pub renderer_backend_instance_audit_blocked: bool,
+
+    /// 是否观察到上游 texture owner boundary report。
+    pub texture_owner_boundary_report_observed: bool,
+
+    /// 上游 texture owner boundary 是否仍 blocked。
+    pub texture_owner_boundary_still_blocked: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56H 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// renderer backend instance owner 是否已定义。
+    pub renderer_backend_instance_owner_defined: bool,
+
+    /// renderer backend instance lifecycle owner 是否已定义。
+    pub renderer_backend_instance_lifecycle_owner_defined: bool,
+
+    /// renderer backend instance cleanup owner 是否已定义。
+    pub renderer_backend_instance_cleanup_owner_defined: bool,
+
+    /// renderer backend instance availability owner 是否已定义。
+    pub renderer_backend_instance_availability_owner_defined: bool,
+}
+
+/// Phase 56H renderer backend instance audit report。
+///
+/// 该 report 从 Phase 56G owner boundary report 派生，只审计 future renderer backend
+/// instance seam。它不 import buffer、不创建 texture、不创建 renderer backend instance、
+/// 不调用 renderer、不提交 damage、不发送 frame callback done、不接 input、不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererBackendInstanceAuditReport {
+    /// renderer backend instance audit seam 是否可用。
+    pub renderer_backend_instance_audit_available: bool,
+
+    /// 是否观察到 Phase 56G texture owner boundary report。
+    pub source_texture_owner_boundary_report_observed: bool,
+
+    /// 被消费的 Phase 56G texture owner boundary report。
+    pub source_texture_owner_boundary_report: RuntimeSurfaceCommitTextureOwnerBoundaryReport,
+
+    /// future renderer backend instance policy。
+    pub renderer_backend_instance_policy: RuntimeSurfaceCommitRendererBackendInstancePolicy,
+
+    /// renderer backend instance audit checklist。
+    pub checklist: RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist,
+
+    /// renderer backend instance audit 是否仍 blocked。
+    pub renderer_backend_instance_audit_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub renderer_backend_instance_audit_blocker_reason: &'static str,
+
+    /// 上游 texture owner boundary 是否仍 blocked。
+    pub texture_owner_boundary_still_blocked: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56H 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// renderer backend instance owner 是否已定义；Phase 56H 保持 false。
+    pub renderer_backend_instance_owner_defined: bool,
+
+    /// renderer backend instance owner 名称。
+    pub renderer_backend_instance_owner: &'static str,
+
+    /// renderer backend instance lifecycle owner 是否已定义；Phase 56H 保持 false。
+    pub renderer_backend_instance_lifecycle_owner_defined: bool,
+
+    /// renderer backend instance lifecycle owner 名称。
+    pub renderer_backend_instance_lifecycle_owner: &'static str,
+
+    /// renderer backend instance cleanup owner 是否已定义；Phase 56H 保持 false。
+    pub renderer_backend_instance_cleanup_owner_defined: bool,
+
+    /// renderer backend instance cleanup owner 名称。
+    pub renderer_backend_instance_cleanup_owner: &'static str,
+
+    /// renderer backend instance availability owner 是否已定义；Phase 56H 保持 false。
+    pub renderer_backend_instance_availability_owner_defined: bool,
+
+    /// renderer backend instance availability owner 名称。
+    pub renderer_backend_instance_availability_owner: &'static str,
+
+    /// Phase 56H 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56H 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56H 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56H 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56H 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56H 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56H 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56H 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// renderer backend instance audit 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitRendererBackendInstanceAuditOperation>,
+
+    /// 阻止真实 renderer backend instance / texture execution 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker>,
+}
+
+/// 从 Phase 56G owner boundary report 派生 Phase 56H renderer backend instance audit。
+///
+/// 这是 Phase 56H 的唯一执行入口：它只生成 pure-data audit report。本函数不创建
+/// renderer backend instance、不创建 texture、不调用 renderer、不执行 buffer import。
+#[must_use = "renderer backend instance audit report is not renderer creation"]
+pub fn renderer_backend_instance_audit_from_texture_owner_boundary_report(
+    report: &RuntimeSurfaceCommitTextureOwnerBoundaryReport,
+) -> RuntimeSurfaceCommitRendererBackendInstanceAuditReport {
+    let renderer_backend_instance_policy = RuntimeSurfaceCommitRendererBackendInstancePolicy {
+        renderer_backend_instance_owner_defined: false,
+        renderer_backend_instance_owner: "blocked_until_renderer_backend_instance_owner_policy",
+        renderer_backend_instance_lifecycle_owner_defined: false,
+        renderer_backend_instance_lifecycle_owner: "blocked_until_renderer_backend_instance_lifecycle_policy",
+        renderer_backend_instance_cleanup_owner_defined: false,
+        renderer_backend_instance_cleanup_owner: "blocked_until_renderer_backend_instance_cleanup_policy",
+        renderer_backend_instance_availability_owner_defined: false,
+        renderer_backend_instance_availability_owner: "blocked_until_renderer_backend_instance_availability_policy",
+    };
+
+    let checklist = RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist {
+        renderer_backend_instance_audit_available: true,
+        renderer_backend_instance_audit_blocked: true,
+        texture_owner_boundary_report_observed: report.texture_owner_boundary_available,
+        texture_owner_boundary_still_blocked: report.texture_owner_boundary_blocked,
+        renderer_backend_instance_available: false,
+        renderer_backend_instance_owner_defined: renderer_backend_instance_policy
+            .renderer_backend_instance_owner_defined,
+        renderer_backend_instance_lifecycle_owner_defined: renderer_backend_instance_policy
+            .renderer_backend_instance_lifecycle_owner_defined,
+        renderer_backend_instance_cleanup_owner_defined: renderer_backend_instance_policy
+            .renderer_backend_instance_cleanup_owner_defined,
+        renderer_backend_instance_availability_owner_defined: renderer_backend_instance_policy
+            .renderer_backend_instance_availability_owner_defined,
+    };
+
+    let mut blockers = Vec::new();
+    if checklist.texture_owner_boundary_still_blocked {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::TextureOwnerBoundaryStillBlocked,
+        );
+    }
+    if !checklist.renderer_backend_instance_available {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstance,
+        );
+    }
+    if !checklist.renderer_backend_instance_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceOwnerPolicy,
+        );
+    }
+    if !checklist.renderer_backend_instance_lifecycle_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceLifecyclePolicy,
+        );
+    }
+    if !checklist.renderer_backend_instance_cleanup_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceCleanupPolicy,
+        );
+    }
+    if !checklist.renderer_backend_instance_availability_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceAvailabilityPolicy,
+        );
+    }
+    blockers.push(
+        RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::RendererBackendInstanceWithoutTextureCreation,
+    );
+
+    RuntimeSurfaceCommitRendererBackendInstanceAuditReport {
+        renderer_backend_instance_audit_available: true,
+        source_texture_owner_boundary_report_observed: report.texture_owner_boundary_available,
+        source_texture_owner_boundary_report: report.clone(),
+        renderer_backend_instance_policy: renderer_backend_instance_policy.clone(),
+        checklist,
+        renderer_backend_instance_audit_blocked: true,
+        renderer_backend_instance_audit_blocker_reason:
+            "renderer backend instance audit only: missing real renderer backend instance, owner, lifecycle, cleanup, and availability policies",
+        texture_owner_boundary_still_blocked: true,
+        renderer_backend_instance_available: false,
+        renderer_backend_instance_owner_defined: renderer_backend_instance_policy
+            .renderer_backend_instance_owner_defined,
+        renderer_backend_instance_owner: renderer_backend_instance_policy
+            .renderer_backend_instance_owner,
+        renderer_backend_instance_lifecycle_owner_defined: renderer_backend_instance_policy
+            .renderer_backend_instance_lifecycle_owner_defined,
+        renderer_backend_instance_lifecycle_owner: renderer_backend_instance_policy
+            .renderer_backend_instance_lifecycle_owner,
+        renderer_backend_instance_cleanup_owner_defined: renderer_backend_instance_policy
+            .renderer_backend_instance_cleanup_owner_defined,
+        renderer_backend_instance_cleanup_owner: renderer_backend_instance_policy
+            .renderer_backend_instance_cleanup_owner,
+        renderer_backend_instance_availability_owner_defined: renderer_backend_instance_policy
+            .renderer_backend_instance_availability_owner_defined,
+        renderer_backend_instance_availability_owner: renderer_backend_instance_policy
+            .renderer_backend_instance_availability_owner,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitRendererBackendInstanceAuditOperation::ObserveTextureOwnerBoundaryReport,
+            RuntimeSurfaceCommitRendererBackendInstanceAuditOperation::CheckRendererBackendInstanceAvailability,
+            RuntimeSurfaceCommitRendererBackendInstanceAuditOperation::AuditRendererBackendInstanceOwner,
+            RuntimeSurfaceCommitRendererBackendInstanceAuditOperation::AuditRendererBackendInstanceLifecycle,
+            RuntimeSurfaceCommitRendererBackendInstanceAuditOperation::AuditRendererBackendInstanceCleanup,
+            RuntimeSurfaceCommitRendererBackendInstanceAuditOperation::AuditRendererBackendInstanceAvailability,
+            RuntimeSurfaceCommitRendererBackendInstanceAuditOperation::BuildRendererBackendInstanceAuditReport,
+        ],
+        blockers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
+        RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
         RuntimeSurfaceCommitTextureCreationBlocker,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
         RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
+        renderer_backend_instance_audit_from_texture_owner_boundary_report,
         texture_creation_noop_report_from_precondition_audit,
         texture_creation_precondition_audit_from_validation_harness_report,
         texture_owner_boundary_report_from_noop_report, validate_shm_metadata_harness_paths,
@@ -1955,6 +2287,58 @@ mod tests {
         ));
         assert!(report.blockers.contains(
             &RuntimeSurfaceCommitTextureOwnerBoundaryBlocker::OwnerBoundaryWithoutTextureCreation
+        ));
+        assert!(!report.buffer_import_attempted);
+        assert!(!report.buffer_imported);
+        assert!(!report.texture_created);
+        assert!(!report.renderer_called);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_done_sent);
+        assert!(!report.input_support);
+        assert!(!report.core_mutation_invoked);
+    }
+
+    /// Phase 56H 从 Phase 56G owner boundary report 派生 renderer backend instance audit。
+    ///
+    /// 该测试固定：renderer backend instance audit 只是 future owner/lifecycle/cleanup
+    /// seam，不代表 renderer backend instance 可用、texture created、renderer called、
+    /// damage submitted 或 frame callback done。
+    #[test]
+    fn derives_blocked_renderer_backend_instance_audit_from_texture_owner_boundary_report() {
+        let validation_harness = validate_shm_metadata_harness_paths();
+        let audit =
+            texture_creation_precondition_audit_from_validation_harness_report(&validation_harness);
+        let noop_report = texture_creation_noop_report_from_precondition_audit(&audit);
+        let owner_report = texture_owner_boundary_report_from_noop_report(&noop_report);
+        let report =
+            renderer_backend_instance_audit_from_texture_owner_boundary_report(&owner_report);
+
+        assert!(report.renderer_backend_instance_audit_available);
+        assert!(report.source_texture_owner_boundary_report_observed);
+        assert!(report.renderer_backend_instance_audit_blocked);
+        assert!(report.texture_owner_boundary_still_blocked);
+        assert!(!report.renderer_backend_instance_available);
+        assert!(!report.renderer_backend_instance_owner_defined);
+        assert!(!report.renderer_backend_instance_lifecycle_owner_defined);
+        assert!(!report.renderer_backend_instance_cleanup_owner_defined);
+        assert!(!report.renderer_backend_instance_availability_owner_defined);
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::TextureOwnerBoundaryStillBlocked
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstance
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceOwnerPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceLifecyclePolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceCleanupPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceAvailabilityPolicy
         ));
         assert!(!report.buffer_import_attempted);
         assert!(!report.buffer_imported);
