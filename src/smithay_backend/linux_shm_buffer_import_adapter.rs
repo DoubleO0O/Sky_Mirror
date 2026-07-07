@@ -674,6 +674,17 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitDamageToTextureMappingAuditReport {
         damage_to_texture_mapping_audit_from_texture_import_route_decision(report)
     }
+
+    /// 从 Phase 56J damage-to-texture mapping audit 派生 Phase 56K frame callback completion policy。
+    ///
+    /// 该 owner 方法只定义 future frame callback completion owner 与 render-success
+    /// gate；它不发送 frame callback done，不调用 renderer，也不提交 damage。
+    pub fn frame_callback_completion_policy_from_damage_to_texture_mapping_audit(
+        &mut self,
+        report: &RuntimeSurfaceCommitDamageToTextureMappingAuditReport,
+    ) -> RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport {
+        frame_callback_completion_policy_from_damage_to_texture_mapping_audit(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -2902,16 +2913,331 @@ pub fn damage_to_texture_mapping_audit_from_texture_import_route_decision(
     }
 }
 
+/// Phase 56K frame callback completion policy 中可定位的纯数据操作阶段。
+///
+/// 这些步骤只审计 future frame callback done 的 owner 和 release gate。它们不会
+/// 调用 renderer，不会提交 damage，也不会发送 frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation {
+    /// 观察 Phase 56J damage-to-texture mapping audit report。
+    ObserveDamageToTextureMappingAuditReport,
+    /// 定义 future frame callback completion owner。
+    DefineFrameCallbackCompletionOwner,
+    /// 检查真实 texture 是否存在。
+    CheckRealTextureAvailability,
+    /// 检查 renderer backend instance 是否真实可用。
+    CheckRendererBackendInstanceAvailability,
+    /// 检查 damage submission 是否真实可用。
+    CheckDamageSubmissionAvailability,
+    /// 检查 render success evidence 是否存在。
+    CheckRenderSuccessEvidence,
+    /// 检查是否允许发送 frame callback done。
+    CheckFrameCallbackDonePermission,
+    /// 构建 frame callback completion policy report。
+    BuildFrameCallbackCompletionPolicyReport,
+}
+
+/// Phase 56K frame callback completion policy blocker taxonomy。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker {
+    /// 上游 damage-to-texture mapping audit 仍处于 blocked 状态。
+    DamageToTextureMappingAuditStillBlocked,
+    /// 缺少真实 texture。
+    MissingRealTexture,
+    /// 缺少真实 renderer backend instance。
+    MissingRendererBackendInstance,
+    /// 缺少真实 damage submission。
+    MissingDamageSubmission,
+    /// 缺少真实 render success evidence。
+    MissingRenderSuccessEvidence,
+    /// frame callback done 在本阶段明确禁用。
+    FrameCallbackDoneExplicitlyDisabled,
+    /// completion policy 只有 pure-data owner，没有真实 completion path。
+    FrameCallbackCompletionWithoutRender,
+}
+
+/// Phase 56K frame callback completion policy。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitFrameCallbackCompletionPolicy {
+    /// future frame callback completion owner 是否已定义。
+    pub frame_callback_completion_owner_defined: bool,
+
+    /// future frame callback completion owner 名称。
+    pub frame_callback_completion_owner: &'static str,
+
+    /// frame callback done 是否必须等待真实 render success。
+    pub render_success_required_before_done: bool,
+
+    /// 真实 texture 是否可用；Phase 56K 固定 false。
+    pub real_texture_available: bool,
+
+    /// renderer backend instance 是否真实可用；Phase 56K 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// damage submission 是否真实可用；Phase 56K 固定 false。
+    pub damage_submission_available: bool,
+
+    /// render success evidence 是否可用；Phase 56K 固定 false。
+    pub render_success_evidence_available: bool,
+
+    /// frame callback done 是否允许；Phase 56K 固定 false。
+    pub frame_callback_done_allowed: bool,
+}
+
+/// Phase 56K frame callback completion checklist。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitFrameCallbackCompletionChecklist {
+    /// frame callback completion policy seam 是否可用。
+    pub frame_callback_completion_policy_available: bool,
+
+    /// frame callback completion policy 是否仍 blocked。
+    pub frame_callback_completion_policy_blocked: bool,
+
+    /// 是否观察到 Phase 56J damage-to-texture mapping audit report。
+    pub damage_to_texture_mapping_audit_observed: bool,
+
+    /// 上游 damage-to-texture mapping audit 是否仍 blocked。
+    pub damage_to_texture_mapping_audit_still_blocked: bool,
+
+    /// future frame callback completion owner 是否已定义。
+    pub frame_callback_completion_owner_defined: bool,
+
+    /// frame callback done 是否必须等待真实 render success。
+    pub render_success_required_before_done: bool,
+
+    /// 真实 texture 是否可用；Phase 56K 固定 false。
+    pub real_texture_available: bool,
+
+    /// renderer backend instance 是否真实可用；Phase 56K 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// damage submission 是否真实可用；Phase 56K 固定 false。
+    pub damage_submission_available: bool,
+
+    /// render success evidence 是否可用；Phase 56K 固定 false。
+    pub render_success_evidence_available: bool,
+
+    /// frame callback done 是否允许；Phase 56K 固定 false。
+    pub frame_callback_done_allowed: bool,
+}
+
+/// Phase 56K frame callback completion policy report。
+///
+/// 该 report 从 Phase 56J damage mapping audit 派生，只定义 future frame callback
+/// completion owner 和 render-success gate。它不 import buffer、不创建 texture、不调用
+/// renderer、不提交 damage、不发送 frame callback done、不接 input、不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport {
+    /// frame callback completion policy seam 是否可用。
+    pub frame_callback_completion_policy_available: bool,
+
+    /// 是否观察到 Phase 56J damage mapping audit report。
+    pub source_damage_to_texture_mapping_audit_observed: bool,
+
+    /// 被消费的 Phase 56J damage mapping audit report。
+    pub source_damage_to_texture_mapping_audit_report:
+        RuntimeSurfaceCommitDamageToTextureMappingAuditReport,
+
+    /// future frame callback completion policy。
+    pub frame_callback_completion_policy: RuntimeSurfaceCommitFrameCallbackCompletionPolicy,
+
+    /// frame callback completion checklist。
+    pub checklist: RuntimeSurfaceCommitFrameCallbackCompletionChecklist,
+
+    /// frame callback completion policy 是否仍 blocked。
+    pub frame_callback_completion_policy_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub frame_callback_completion_policy_blocker_reason: &'static str,
+
+    /// 上游 damage-to-texture mapping audit 是否仍 blocked。
+    pub damage_to_texture_mapping_audit_still_blocked: bool,
+
+    /// future frame callback completion owner 是否已定义。
+    pub frame_callback_completion_owner_defined: bool,
+
+    /// future frame callback completion owner 名称。
+    pub frame_callback_completion_owner: &'static str,
+
+    /// frame callback done 是否必须等待真实 render success。
+    pub render_success_required_before_done: bool,
+
+    /// 真实 texture 是否可用；Phase 56K 固定 false。
+    pub real_texture_available: bool,
+
+    /// renderer backend instance 是否真实可用；Phase 56K 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// damage submission 是否真实可用；Phase 56K 固定 false。
+    pub damage_submission_available: bool,
+
+    /// render success evidence 是否可用；Phase 56K 固定 false。
+    pub render_success_evidence_available: bool,
+
+    /// frame callback done 是否允许；Phase 56K 固定 false。
+    pub frame_callback_done_allowed: bool,
+
+    /// Phase 56K 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56K 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56K 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56K 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56K 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56K 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56K 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56K 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// frame callback completion policy 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation>,
+
+    /// 阻止真实 frame callback done 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker>,
+}
+
+/// 从 Phase 56J damage mapping audit 派生 Phase 56K frame callback completion policy。
+///
+/// 这是 Phase 56K 的唯一执行入口：它只生成 pure-data policy report。本函数不发送
+/// frame callback done，不提交 damage，不调用 renderer，也不创建任何真实 texture。
+#[must_use = "frame callback completion policy report is not frame callback done"]
+pub fn frame_callback_completion_policy_from_damage_to_texture_mapping_audit(
+    report: &RuntimeSurfaceCommitDamageToTextureMappingAuditReport,
+) -> RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport {
+    let frame_callback_completion_policy = RuntimeSurfaceCommitFrameCallbackCompletionPolicy {
+        frame_callback_completion_owner_defined: true,
+        frame_callback_completion_owner: "linux_shm_first_buffer_import_adapter",
+        render_success_required_before_done: true,
+        real_texture_available: false,
+        renderer_backend_instance_available: false,
+        damage_submission_available: false,
+        render_success_evidence_available: false,
+        frame_callback_done_allowed: false,
+    };
+
+    let checklist = RuntimeSurfaceCommitFrameCallbackCompletionChecklist {
+        frame_callback_completion_policy_available: true,
+        frame_callback_completion_policy_blocked: true,
+        damage_to_texture_mapping_audit_observed: report.damage_to_texture_mapping_audit_available,
+        damage_to_texture_mapping_audit_still_blocked: report
+            .damage_to_texture_mapping_audit_blocked,
+        frame_callback_completion_owner_defined: frame_callback_completion_policy
+            .frame_callback_completion_owner_defined,
+        render_success_required_before_done: frame_callback_completion_policy
+            .render_success_required_before_done,
+        real_texture_available: frame_callback_completion_policy.real_texture_available,
+        renderer_backend_instance_available: frame_callback_completion_policy
+            .renderer_backend_instance_available,
+        damage_submission_available: frame_callback_completion_policy.damage_submission_available,
+        render_success_evidence_available: frame_callback_completion_policy
+            .render_success_evidence_available,
+        frame_callback_done_allowed: frame_callback_completion_policy.frame_callback_done_allowed,
+    };
+
+    let mut blockers = Vec::new();
+    if checklist.damage_to_texture_mapping_audit_still_blocked {
+        blockers.push(
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::DamageToTextureMappingAuditStillBlocked,
+        );
+    }
+    if !checklist.real_texture_available {
+        blockers.push(RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRealTexture);
+    }
+    if !checklist.renderer_backend_instance_available {
+        blockers.push(
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRendererBackendInstance,
+        );
+    }
+    if !checklist.damage_submission_available {
+        blockers.push(
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingDamageSubmission,
+        );
+    }
+    if !checklist.render_success_evidence_available {
+        blockers.push(
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRenderSuccessEvidence,
+        );
+    }
+    if !checklist.frame_callback_done_allowed {
+        blockers.push(
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::FrameCallbackDoneExplicitlyDisabled,
+        );
+    }
+    blockers.push(
+        RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::FrameCallbackCompletionWithoutRender,
+    );
+
+    RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport {
+        frame_callback_completion_policy_available: true,
+        source_damage_to_texture_mapping_audit_observed: report
+            .damage_to_texture_mapping_audit_available,
+        source_damage_to_texture_mapping_audit_report: report.clone(),
+        frame_callback_completion_policy: frame_callback_completion_policy.clone(),
+        checklist,
+        frame_callback_completion_policy_blocked: true,
+        frame_callback_completion_policy_blocker_reason:
+            "frame callback completion policy only: missing real texture, renderer backend instance, damage submission, render success evidence, and frame callback done permission",
+        damage_to_texture_mapping_audit_still_blocked: report
+            .damage_to_texture_mapping_audit_blocked,
+        frame_callback_completion_owner_defined: frame_callback_completion_policy
+            .frame_callback_completion_owner_defined,
+        frame_callback_completion_owner: frame_callback_completion_policy
+            .frame_callback_completion_owner,
+        render_success_required_before_done: frame_callback_completion_policy
+            .render_success_required_before_done,
+        real_texture_available: frame_callback_completion_policy.real_texture_available,
+        renderer_backend_instance_available: frame_callback_completion_policy
+            .renderer_backend_instance_available,
+        damage_submission_available: frame_callback_completion_policy.damage_submission_available,
+        render_success_evidence_available: frame_callback_completion_policy
+            .render_success_evidence_available,
+        frame_callback_done_allowed: frame_callback_completion_policy.frame_callback_done_allowed,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation::ObserveDamageToTextureMappingAuditReport,
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation::DefineFrameCallbackCompletionOwner,
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation::CheckRealTextureAvailability,
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation::CheckRendererBackendInstanceAvailability,
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation::CheckDamageSubmissionAvailability,
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation::CheckRenderSuccessEvidence,
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation::CheckFrameCallbackDonePermission,
+            RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation::BuildFrameCallbackCompletionPolicyReport,
+        ],
+        blockers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker,
+        RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker,
         RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
         RuntimeSurfaceCommitTextureCreationBlocker,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
         RuntimeSurfaceCommitTextureImportRouteDecisionBlocker,
         RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
         damage_to_texture_mapping_audit_from_texture_import_route_decision,
+        frame_callback_completion_policy_from_damage_to_texture_mapping_audit,
         renderer_backend_instance_audit_from_texture_owner_boundary_report,
         texture_creation_noop_report_from_precondition_audit,
         texture_creation_precondition_audit_from_validation_harness_report,
@@ -3259,6 +3585,70 @@ mod tests {
         ));
         assert!(report.blockers.contains(
             &RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker::DamageSubmissionExplicitlyDisabled
+        ));
+        assert!(!report.buffer_import_attempted);
+        assert!(!report.buffer_imported);
+        assert!(!report.texture_created);
+        assert!(!report.renderer_called);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_done_sent);
+        assert!(!report.input_support);
+        assert!(!report.core_mutation_invoked);
+    }
+
+    /// Phase 56K 从 Phase 56J damage mapping audit 派生 frame callback completion policy。
+    ///
+    /// 该测试固定：policy 只定义 future completion owner 和 render-success gate；
+    /// 在缺少真实 texture、renderer、damage submission 时不得发送 frame callback done。
+    #[test]
+    fn derives_blocked_frame_callback_completion_policy_from_damage_mapping_audit() {
+        let validation_harness = validate_shm_metadata_harness_paths();
+        let audit =
+            texture_creation_precondition_audit_from_validation_harness_report(&validation_harness);
+        let noop_report = texture_creation_noop_report_from_precondition_audit(&audit);
+        let owner_report = texture_owner_boundary_report_from_noop_report(&noop_report);
+        let renderer_backend_audit =
+            renderer_backend_instance_audit_from_texture_owner_boundary_report(&owner_report);
+        let route_decision = texture_import_route_decision_from_renderer_backend_instance_audit(
+            &renderer_backend_audit,
+        );
+        let damage_mapping_audit =
+            damage_to_texture_mapping_audit_from_texture_import_route_decision(&route_decision);
+        let report = frame_callback_completion_policy_from_damage_to_texture_mapping_audit(
+            &damage_mapping_audit,
+        );
+
+        assert!(report.frame_callback_completion_policy_available);
+        assert!(report.source_damage_to_texture_mapping_audit_observed);
+        assert!(report.frame_callback_completion_policy_blocked);
+        assert!(report.damage_to_texture_mapping_audit_still_blocked);
+        assert!(report.frame_callback_completion_owner_defined);
+        assert_eq!(
+            report.frame_callback_completion_owner,
+            "linux_shm_first_buffer_import_adapter"
+        );
+        assert!(report.render_success_required_before_done);
+        assert!(!report.real_texture_available);
+        assert!(!report.renderer_backend_instance_available);
+        assert!(!report.damage_submission_available);
+        assert!(!report.frame_callback_done_allowed);
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::DamageToTextureMappingAuditStillBlocked
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRealTexture
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRendererBackendInstance
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingDamageSubmission
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::MissingRenderSuccessEvidence
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker::FrameCallbackDoneExplicitlyDisabled
         ));
         assert!(!report.buffer_import_attempted);
         assert!(!report.buffer_imported);
