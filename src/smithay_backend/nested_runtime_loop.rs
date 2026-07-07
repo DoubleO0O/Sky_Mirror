@@ -20,6 +20,7 @@ use crate::{
         RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataReport,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
+        RuntimeSurfaceCommitTextureCreationBlocker, RuntimeSurfaceCommitTextureCreationNoopReport,
         RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
     },
@@ -2055,6 +2056,96 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// Phase 56E 是否触发 core mutation；固定保持 false。
     pub texture_precondition_core_mutation_invoked: bool,
 
+    /// Phase 56F texture creation no-op skeleton seam 被调用的次数。
+    pub texture_creation_noop_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 texture creation no-op reports。
+    pub texture_creation_noop_reports: Vec<RuntimeSurfaceCommitTextureCreationNoopReport>,
+
+    /// Phase 56F no-op skeleton 是否可用。
+    pub texture_creation_noop_available: bool,
+
+    /// Phase 56F 是否尝试 texture creation；固定保持 false。
+    pub texture_creation_attempted: bool,
+
+    /// Phase 56F 是否 blocked；固定保持 true。
+    pub texture_creation_blocked: bool,
+
+    /// Phase 56E texture precondition 是否允许继续；Phase 56F 保持 false。
+    pub texture_creation_texture_precondition_allowed: bool,
+
+    /// Phase 56F metadata 是否足以进入 texture precondition；保持 false。
+    pub texture_creation_metadata_sufficient_for_texture: bool,
+
+    /// Phase 56F texture owner boundary 是否可用；固定保持 false。
+    pub texture_creation_texture_owner_boundary_available: bool,
+
+    /// Phase 56F renderer backend instance 是否可用；固定保持 false。
+    pub texture_creation_renderer_backend_instance_available: bool,
+
+    /// Phase 56F texture import route 是否可用；固定保持 false。
+    pub texture_creation_texture_import_route_available: bool,
+
+    /// Phase 56F damage-to-texture mapping 是否可用；固定保持 false。
+    pub texture_creation_damage_to_texture_mapping_available: bool,
+
+    /// Phase 56F frame callback completion policy 是否可用；固定保持 false。
+    pub texture_creation_frame_callback_completion_policy_available: bool,
+
+    /// Phase 56F 是否因 texture precondition 不允许而 blocked。
+    pub texture_creation_texture_precondition_not_allowed: bool,
+
+    /// Phase 56F 是否因 metadata 不足以创建 texture 而 blocked。
+    pub texture_creation_metadata_insufficient_for_texture: bool,
+
+    /// Phase 56F 是否缺少 renderer backend instance。
+    pub texture_creation_missing_renderer_backend_instance: bool,
+
+    /// Phase 56F 是否缺少 texture import route。
+    pub texture_creation_missing_texture_import_route: bool,
+
+    /// Phase 56F 是否缺少 damage-to-texture mapping。
+    pub texture_creation_missing_damage_to_texture_mapping: bool,
+
+    /// Phase 56F 是否缺少 frame callback completion policy。
+    pub texture_creation_missing_frame_callback_completion_policy: bool,
+
+    /// Phase 56F 是否缺少 texture owner boundary。
+    pub texture_creation_missing_texture_owner_boundary: bool,
+
+    /// Phase 56F 是否只有 runtime evidence、没有 texture creation execution。
+    pub texture_creation_runtime_evidence_without_texture_creation: bool,
+
+    /// Phase 56F 是否显式禁用 texture creation。
+    pub texture_creation_explicitly_disabled: bool,
+
+    /// Phase 56F 是否显式禁用 renderer call。
+    pub texture_creation_renderer_call_explicitly_disabled: bool,
+
+    /// Phase 56F 是否尝试 import buffer；固定保持 false。
+    pub texture_creation_buffer_import_attempted: bool,
+
+    /// Phase 56F 是否 import buffer；固定保持 false。
+    pub texture_creation_buffer_imported: bool,
+
+    /// Phase 56F 是否创建 texture；固定保持 false。
+    pub texture_creation_texture_created: bool,
+
+    /// Phase 56F 是否调用 renderer；固定保持 false。
+    pub texture_creation_renderer_called: bool,
+
+    /// Phase 56F 是否提交 damage；固定保持 false。
+    pub texture_creation_damage_submitted: bool,
+
+    /// Phase 56F 是否发送 frame callback done；固定保持 false。
+    pub texture_creation_frame_callback_done_sent: bool,
+
+    /// Phase 56F 是否接入 input；固定保持 false。
+    pub texture_creation_input_support: bool,
+
+    /// Phase 56F 是否触发 core mutation；固定保持 false。
+    pub texture_creation_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -2600,6 +2691,36 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             texture_precondition_frame_callback_done_sent: false,
             texture_precondition_input_support: false,
             texture_precondition_core_mutation_invoked: false,
+            texture_creation_noop_invocations: 0,
+            texture_creation_noop_reports: Vec::new(),
+            texture_creation_noop_available: false,
+            texture_creation_attempted: false,
+            texture_creation_blocked: false,
+            texture_creation_texture_precondition_allowed: false,
+            texture_creation_metadata_sufficient_for_texture: false,
+            texture_creation_texture_owner_boundary_available: false,
+            texture_creation_renderer_backend_instance_available: false,
+            texture_creation_texture_import_route_available: false,
+            texture_creation_damage_to_texture_mapping_available: false,
+            texture_creation_frame_callback_completion_policy_available: false,
+            texture_creation_texture_precondition_not_allowed: false,
+            texture_creation_metadata_insufficient_for_texture: false,
+            texture_creation_missing_renderer_backend_instance: false,
+            texture_creation_missing_texture_import_route: false,
+            texture_creation_missing_damage_to_texture_mapping: false,
+            texture_creation_missing_frame_callback_completion_policy: false,
+            texture_creation_missing_texture_owner_boundary: false,
+            texture_creation_runtime_evidence_without_texture_creation: false,
+            texture_creation_explicitly_disabled: false,
+            texture_creation_renderer_call_explicitly_disabled: false,
+            texture_creation_buffer_import_attempted: false,
+            texture_creation_buffer_imported: false,
+            texture_creation_texture_created: false,
+            texture_creation_renderer_called: false,
+            texture_creation_damage_submitted: false,
+            texture_creation_frame_callback_done_sent: false,
+            texture_creation_input_support: false,
+            texture_creation_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -3832,6 +3953,70 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_texture_creation_noop_report(
+        report: &RuntimeSurfaceCommitTextureCreationNoopReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            texture_creation_noop_invocations: usize::from(report.texture_creation_noop_available),
+            texture_creation_noop_reports: vec![report.clone()],
+            texture_creation_noop_available: report.texture_creation_noop_available,
+            texture_creation_attempted: report.texture_creation_attempted,
+            texture_creation_blocked: report.texture_creation_blocked,
+            texture_creation_texture_precondition_allowed: report.texture_precondition_allowed,
+            texture_creation_metadata_sufficient_for_texture: report
+                .metadata_sufficient_for_texture_precondition,
+            texture_creation_texture_owner_boundary_available: report
+                .texture_owner_boundary_available,
+            texture_creation_renderer_backend_instance_available: report
+                .renderer_backend_instance_available,
+            texture_creation_texture_import_route_available: report.texture_import_route_available,
+            texture_creation_damage_to_texture_mapping_available: report
+                .damage_to_texture_mapping_available,
+            texture_creation_frame_callback_completion_policy_available: report
+                .frame_callback_completion_policy_available,
+            texture_creation_texture_precondition_not_allowed: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::TexturePreconditionNotAllowed,
+            ),
+            texture_creation_metadata_insufficient_for_texture: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::MetadataInsufficientForTexture,
+            ),
+            texture_creation_missing_renderer_backend_instance: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::MissingRendererBackendInstance,
+            ),
+            texture_creation_missing_texture_import_route: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::MissingTextureImportRoute,
+            ),
+            texture_creation_missing_damage_to_texture_mapping: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::MissingDamageToTextureMapping,
+            ),
+            texture_creation_missing_frame_callback_completion_policy: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::MissingFrameCallbackCompletionPolicy,
+            ),
+            texture_creation_missing_texture_owner_boundary: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::MissingTextureOwnerBoundary,
+            ),
+            texture_creation_runtime_evidence_without_texture_creation: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::RuntimeEvidenceWithoutTextureCreation,
+            ),
+            texture_creation_explicitly_disabled: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::TextureCreationExplicitlyDisabled,
+            ),
+            texture_creation_renderer_call_explicitly_disabled: has_blocker(
+                RuntimeSurfaceCommitTextureCreationBlocker::RendererCallExplicitlyDisabled,
+            ),
+            texture_creation_buffer_import_attempted: report.buffer_import_attempted,
+            texture_creation_buffer_imported: report.buffer_imported,
+            texture_creation_texture_created: report.texture_created,
+            texture_creation_renderer_called: report.renderer_called,
+            texture_creation_damage_submitted: report.damage_submitted,
+            texture_creation_frame_callback_done_sent: report.frame_callback_done_sent,
+            texture_creation_input_support: report.input_support,
+            texture_creation_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -4885,6 +5070,57 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.texture_precondition_input_support |= delta.texture_precondition_input_support;
         self.texture_precondition_core_mutation_invoked |=
             delta.texture_precondition_core_mutation_invoked;
+        self.texture_creation_noop_invocations = self
+            .texture_creation_noop_invocations
+            .saturating_add(delta.texture_creation_noop_invocations);
+        self.texture_creation_noop_reports
+            .extend(delta.texture_creation_noop_reports);
+        self.texture_creation_noop_available |= delta.texture_creation_noop_available;
+        self.texture_creation_attempted |= delta.texture_creation_attempted;
+        self.texture_creation_blocked |= delta.texture_creation_blocked;
+        self.texture_creation_texture_precondition_allowed |=
+            delta.texture_creation_texture_precondition_allowed;
+        self.texture_creation_metadata_sufficient_for_texture |=
+            delta.texture_creation_metadata_sufficient_for_texture;
+        self.texture_creation_texture_owner_boundary_available |=
+            delta.texture_creation_texture_owner_boundary_available;
+        self.texture_creation_renderer_backend_instance_available |=
+            delta.texture_creation_renderer_backend_instance_available;
+        self.texture_creation_texture_import_route_available |=
+            delta.texture_creation_texture_import_route_available;
+        self.texture_creation_damage_to_texture_mapping_available |=
+            delta.texture_creation_damage_to_texture_mapping_available;
+        self.texture_creation_frame_callback_completion_policy_available |=
+            delta.texture_creation_frame_callback_completion_policy_available;
+        self.texture_creation_texture_precondition_not_allowed |=
+            delta.texture_creation_texture_precondition_not_allowed;
+        self.texture_creation_metadata_insufficient_for_texture |=
+            delta.texture_creation_metadata_insufficient_for_texture;
+        self.texture_creation_missing_renderer_backend_instance |=
+            delta.texture_creation_missing_renderer_backend_instance;
+        self.texture_creation_missing_texture_import_route |=
+            delta.texture_creation_missing_texture_import_route;
+        self.texture_creation_missing_damage_to_texture_mapping |=
+            delta.texture_creation_missing_damage_to_texture_mapping;
+        self.texture_creation_missing_frame_callback_completion_policy |=
+            delta.texture_creation_missing_frame_callback_completion_policy;
+        self.texture_creation_missing_texture_owner_boundary |=
+            delta.texture_creation_missing_texture_owner_boundary;
+        self.texture_creation_runtime_evidence_without_texture_creation |=
+            delta.texture_creation_runtime_evidence_without_texture_creation;
+        self.texture_creation_explicitly_disabled |= delta.texture_creation_explicitly_disabled;
+        self.texture_creation_renderer_call_explicitly_disabled |=
+            delta.texture_creation_renderer_call_explicitly_disabled;
+        self.texture_creation_buffer_import_attempted |=
+            delta.texture_creation_buffer_import_attempted;
+        self.texture_creation_buffer_imported |= delta.texture_creation_buffer_imported;
+        self.texture_creation_texture_created |= delta.texture_creation_texture_created;
+        self.texture_creation_renderer_called |= delta.texture_creation_renderer_called;
+        self.texture_creation_damage_submitted |= delta.texture_creation_damage_submitted;
+        self.texture_creation_frame_callback_done_sent |=
+            delta.texture_creation_frame_callback_done_sent;
+        self.texture_creation_input_support |= delta.texture_creation_input_support;
+        self.texture_creation_core_mutation_invoked |= delta.texture_creation_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -5152,6 +5388,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_texture_creation_precondition_audit_report(
                 &report.texture_creation_precondition_audit_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_texture_creation_noop_report(
+                &report.texture_creation_noop_report,
             ),
         );
 
@@ -8962,6 +9203,98 @@ mod tests {
                 .surface_commit
                 .texture_precondition_core_mutation_invoked
         );
+        assert_eq!(report.surface_commit.texture_creation_noop_invocations, 3);
+        assert_eq!(report.surface_commit.texture_creation_noop_reports.len(), 3);
+        assert!(report.surface_commit.texture_creation_noop_available);
+        assert!(report.surface_commit.texture_creation_blocked);
+        assert!(!report.surface_commit.texture_creation_attempted);
+        assert!(
+            !report
+                .surface_commit
+                .texture_creation_texture_precondition_allowed
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_creation_metadata_sufficient_for_texture
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_creation_texture_owner_boundary_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_creation_renderer_backend_instance_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_creation_texture_import_route_available
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_creation_frame_callback_completion_policy_available
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_creation_texture_precondition_not_allowed
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_creation_metadata_insufficient_for_texture
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_creation_missing_renderer_backend_instance
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_creation_missing_texture_import_route
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_creation_missing_frame_callback_completion_policy
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_creation_missing_texture_owner_boundary
+        );
+        assert!(
+            report
+                .surface_commit
+                .texture_creation_runtime_evidence_without_texture_creation
+        );
+        assert!(report.surface_commit.texture_creation_explicitly_disabled);
+        assert!(
+            report
+                .surface_commit
+                .texture_creation_renderer_call_explicitly_disabled
+        );
+        assert!(
+            !report
+                .surface_commit
+                .texture_creation_buffer_import_attempted
+        );
+        assert!(!report.surface_commit.texture_creation_buffer_imported);
+        assert!(!report.surface_commit.texture_creation_texture_created);
+        assert!(!report.surface_commit.texture_creation_renderer_called);
+        assert!(!report.surface_commit.texture_creation_damage_submitted);
+        assert!(
+            !report
+                .surface_commit
+                .texture_creation_frame_callback_done_sent
+        );
+        assert!(!report.surface_commit.texture_creation_input_support);
+        assert!(!report.surface_commit.texture_creation_core_mutation_invoked);
         assert!(!report.surface_commit.renderer_owner_buffer_imported);
         assert!(!report.surface_commit.renderer_owner_texture_created);
         assert!(!report.surface_commit.renderer_owner_renderer_called);
