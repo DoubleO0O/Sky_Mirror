@@ -397,7 +397,11 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
     RuntimeSurfaceCommitTextureCreationPreconditionChecklist,
     RuntimeSurfaceCommitTextureCreationPreconditionOperation,
-    RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
+    RuntimeSurfaceCommitTextureImportRouteDecisionBlocker,
+    RuntimeSurfaceCommitTextureImportRouteDecisionChecklist,
+    RuntimeSurfaceCommitTextureImportRouteDecisionOperation,
+    RuntimeSurfaceCommitTextureImportRouteDecisionReport,
+    RuntimeSurfaceCommitTextureImportRoutePolicy, RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
     RuntimeSurfaceCommitTextureOwnerBoundaryChecklist,
     RuntimeSurfaceCommitTextureOwnerBoundaryOperation,
     RuntimeSurfaceCommitTextureOwnerBoundaryReport, extract_shm_buffer_metadata_evidence,
@@ -408,6 +412,7 @@ pub use linux_shm_buffer_import_adapter::{
     texture_creation_noop_report_from_precondition_audit,
     texture_creation_precondition_audit_from_metadata_report,
     texture_creation_precondition_audit_from_validation_harness_report,
+    texture_import_route_decision_from_renderer_backend_instance_audit,
     texture_owner_boundary_report_from_noop_report, validate_shm_metadata_harness_paths,
 };
 #[allow(unused_imports)]
@@ -7626,6 +7631,170 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56H source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56I 建立 texture import route decision。
+    ///
+    /// 这个 source-contract 只允许从 Phase 56H renderer backend instance audit report
+    /// 派生 pure-data texture import route decision；它不执行 `ImportAll::import_buffer`，
+    /// 不创建 TextureId，不创建 texture，不调用 renderer。
+    #[test]
+    fn texture_import_route_decision_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56I SHM metadata adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56I coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56I loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56I orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56I_TEXTURE_IMPORT_ROUTE_DECISION.md"),
+        )
+        .expect("Phase 56I 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56I - Texture Import Route Decision",
+            "No-Brake Goal Mode",
+            "texture_import_route_decision_available = true",
+            "texture_import_route_available = false",
+            "texture_import_route_owner_defined = true",
+            "import_buffer_call_allowed = false",
+            "texture_id_owner_defined = false",
+            "buffer_import_attempted = false",
+            "texture_created = false",
+            "renderer_called = false",
+            "ImportAll::import_buffer",
+            "TextureId",
+            "Phase 56J",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56I 文档缺少 texture import route decision 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitTextureImportRouteDecisionOperation",
+            "ObserveRendererBackendInstanceAuditReport",
+            "DefineTextureImportRouteOwner",
+            "CheckImportBufferCallPolicy",
+            "CheckFutureTextureHandleOwnershipPolicy",
+            "BuildTextureImportRouteDecisionReport",
+            "pub enum RuntimeSurfaceCommitTextureImportRouteDecisionBlocker",
+            "RendererBackendInstanceAuditStillBlocked",
+            "MissingRendererBackendInstance",
+            "MissingImportBufferCallPolicy",
+            "MissingFutureTextureHandleOwnershipPolicy",
+            "MissingTextureCleanupPolicy",
+            "MissingTextureReleasePolicy",
+            "MissingDamageMappingPolicy",
+            "MissingFrameCallbackCompletionPolicy",
+            "ImportBufferExplicitlyDisabled",
+            "pub struct RuntimeSurfaceCommitTextureImportRoutePolicy",
+            "pub struct RuntimeSurfaceCommitTextureImportRouteDecisionChecklist",
+            "pub struct RuntimeSurfaceCommitTextureImportRouteDecisionReport",
+            "pub fn texture_import_route_decision_from_renderer_backend_instance_audit",
+            "texture_import_route_decision_available: true",
+            "texture_import_route_decision_blocked: true",
+            "texture_import_route_available: false",
+            "texture_import_route_owner_defined: true",
+            "import_buffer_call_allowed: false",
+            "future_texture_handle_owner_defined: false",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56I adapter production source 缺少 texture import route decision: {required}"
+            );
+        }
+
+        for required in [
+            "pub texture_import_route_decision_report:",
+            "RuntimeSurfaceCommitTextureImportRouteDecisionReport",
+            "texture_import_route_decision_from_renderer_backend_instance_audit",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56I coordinator 缺少 texture import route decision 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub texture_import_route_decision_invocations: usize",
+            "pub texture_import_route_decision_reports:",
+            "Vec<RuntimeSurfaceCommitTextureImportRouteDecisionReport>",
+            "pub texture_import_route_decision_available: bool",
+            "pub texture_import_route_decision_blocked: bool",
+            "pub texture_import_route_available: bool",
+            "pub texture_import_route_owner_defined: bool",
+            "from_texture_import_route_decision_report",
+            "report.texture_import_route_decision_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56I loop 缺少 texture import route decision 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "texture_import_route_decision_invocations",
+            "texture_import_route_decision_reports",
+            "texture_import_route_decision_available",
+            "texture_import_route_decision_blocked",
+            "texture_import_route_available",
+            "texture_import_route_owner_defined",
+            "texture_import_route_buffer_import_attempted",
+            "texture_import_route_texture_created",
+            "texture_import_route_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56I orchestrator test/report 缺少 texture import route decision 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "import_buffer_call_allowed: true",
+            "texture_import_route_available: true",
+            "real_compositor_runtime_ready: true",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56I source 包含禁止的真实执行/后端 token: {forbidden}"
             );
         }
     }
