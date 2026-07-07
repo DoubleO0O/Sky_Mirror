@@ -383,13 +383,17 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitShmFirstBufferImportAdapterOperation,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
     RuntimeSurfaceCommitShmMetadataValidationHarnessReport,
-    RuntimeSurfaceCommitShmMetadataValidationPath,
+    RuntimeSurfaceCommitShmMetadataValidationPath, RuntimeSurfaceCommitTextureCreationBlocker,
+    RuntimeSurfaceCommitTextureCreationNoopChecklist,
+    RuntimeSurfaceCommitTextureCreationNoopOperation,
+    RuntimeSurfaceCommitTextureCreationNoopReport,
     RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
     RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
     RuntimeSurfaceCommitTextureCreationPreconditionChecklist,
     RuntimeSurfaceCommitTextureCreationPreconditionOperation, extract_shm_buffer_metadata_evidence,
     observe_wl_buffer_type_boundary, shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
+    texture_creation_noop_report_from_precondition_audit,
     texture_creation_precondition_audit_from_metadata_report,
     texture_creation_precondition_audit_from_validation_harness_report,
     validate_shm_metadata_harness_paths,
@@ -7134,6 +7138,157 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56E source 包含禁止的真实执行/后端 token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56F 建立 texture creation blocker / no-op skeleton。
+    ///
+    /// 这个 source-contract 只允许 pure-data no-op / blocked report；
+    /// no-op skeleton 不等于 texture created，blocked report 不等于 renderer call，
+    /// 真实 buffer/texture/renderer 类型不得进入 core。
+    #[test]
+    fn texture_creation_noop_skeleton_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56F SHM metadata adapter module 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56F loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56F orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56F_TEXTURE_CREATION_NOOP_SKELETON.md"),
+        )
+        .expect("Phase 56F 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56F - Texture Creation Blocker / No-op Skeleton",
+            "Texture Creation Blocker / No-op Skeleton",
+            "texture_created = false",
+            "renderer_called = false",
+            "frame_callback_done_sent = false",
+            "Texture Creation Blocker Taxonomy",
+            "texture_creation_noop_available",
+            "texture_creation_attempted = false",
+            "texture_creation_blocked = true",
+            "texture_precondition_allowed = false",
+            "missing_renderer_backend_instance",
+            "missing_texture_import_route",
+            "missing_frame_callback_completion_policy",
+            "Phase 56G",
+            "requires separate",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56F 文档缺少 texture creation no-op skeleton 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitTextureCreationBlocker",
+            "TexturePreconditionNotAllowed",
+            "MetadataInsufficientForTexture",
+            "MissingRendererBackendInstance",
+            "MissingTextureImportRoute",
+            "MissingDamageToTextureMapping",
+            "MissingFrameCallbackCompletionPolicy",
+            "MissingTextureOwnerBoundary",
+            "RuntimeEvidenceWithoutTextureCreation",
+            "TextureCreationExplicitlyDisabled",
+            "RendererCallExplicitlyDisabled",
+            "pub struct RuntimeSurfaceCommitTextureCreationNoopChecklist",
+            "pub struct RuntimeSurfaceCommitTextureCreationNoopReport",
+            "pub fn texture_creation_noop_report_from_precondition_audit",
+            "texture_creation_noop_available: true",
+            "texture_creation_attempted: false",
+            "texture_creation_blocked: true",
+            "texture_precondition_allowed: false",
+            "texture_owner_boundary_available: false",
+            "renderer_backend_instance_available: false",
+            "texture_import_route_available: false",
+            "damage_to_texture_mapping_available: false",
+            "frame_callback_completion_policy_available: false",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56F adapter production source 缺少 texture creation no-op skeleton: {required}"
+            );
+        }
+
+        for required in [
+            "pub texture_creation_noop_invocations: usize",
+            "pub texture_creation_noop_reports:",
+            "Vec<RuntimeSurfaceCommitTextureCreationNoopReport>",
+            "pub texture_creation_attempted: bool",
+            "pub texture_creation_blocked: bool",
+            "pub texture_creation_missing_renderer_backend_instance: bool",
+            "pub texture_creation_missing_texture_import_route: bool",
+            "pub texture_creation_missing_frame_callback_completion_policy: bool",
+            "from_texture_creation_noop_report",
+            "report.texture_creation_noop_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56F loop 缺少 texture creation no-op 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "texture_creation_noop_invocations",
+            "texture_creation_noop_reports",
+            "texture_creation_attempted",
+            "texture_creation_blocked",
+            "texture_creation_missing_renderer_backend_instance",
+            "texture_creation_missing_texture_import_route",
+            "texture_creation_missing_frame_callback_completion_policy",
+            "texture_creation_texture_created",
+            "texture_creation_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56F orchestrator test/report 缺少 texture creation no-op 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderable_buffer: true",
+            "real_compositor_runtime_ready: true",
+            "ImportAll::import_buffer",
+            "TextureId",
+            "Gles",
+            "EGL",
+            "WGPU",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56F source 包含禁止的真实执行/后端 token: {forbidden}"
             );
         }
     }

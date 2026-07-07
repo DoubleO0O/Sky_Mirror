@@ -615,6 +615,17 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitTextureCreationPreconditionAuditReport {
         texture_creation_precondition_audit_from_metadata_report(report)
     }
+
+    /// 从 Phase 56E texture precondition audit 派生 Phase 56F texture creation no-op report。
+    ///
+    /// 该 owner 方法只记录 no-op / blocked evidence。它不 import buffer、不创建 texture、
+    /// 不调用 renderer、不提交 damage、不发送 frame callback done。
+    pub fn texture_creation_noop_report_from_precondition_audit(
+        &mut self,
+        report: &RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
+    ) -> RuntimeSurfaceCommitTextureCreationNoopReport {
+        texture_creation_noop_report_from_precondition_audit(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -1144,10 +1155,267 @@ fn texture_creation_precondition_audit_from_parts(
     }
 }
 
+/// Phase 56F texture creation no-op skeleton 的纯数据步骤。
+///
+/// 这些步骤只消费 Phase 56E precondition audit；no-op invocation 是执行边界报告，
+/// 不等于真实 texture creation、renderer call、damage submit 或 frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureCreationNoopOperation {
+    /// 观察 Phase 56E texture precondition audit。
+    ObserveTexturePreconditionAudit,
+    /// 检查 texture precondition 是否允许继续。
+    CheckTexturePreconditionAllowed,
+    /// 检查 texture owner boundary 是否存在。
+    CheckTextureOwnerBoundary,
+    /// 检查 renderer backend instance 是否真实可用。
+    CheckRendererBackendInstance,
+    /// 检查 texture import route 是否真实可用。
+    CheckTextureImportRoute,
+    /// 检查 damage 到 texture/render 的映射策略。
+    CheckDamageToTextureMapping,
+    /// 检查 frame callback completion policy。
+    CheckFrameCallbackCompletionPolicy,
+    /// 构建 no-op / blocked report。
+    BuildTextureCreationNoopReport,
+}
+
+/// Phase 56F texture creation no-op skeleton 的 blocker taxonomy。
+///
+/// 每个 blocker 都说明当前只能停在 no-op report，不能把 runtime evidence 或 shell
+/// readiness 误报为真实 texture object、renderer call、damage submit 或 frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureCreationBlocker {
+    /// Phase 56E 尚未允许 texture precondition。
+    TexturePreconditionNotAllowed,
+    /// metadata 不足以支撑 texture precondition。
+    MetadataInsufficientForTexture,
+    /// 缺少真实 renderer backend instance。
+    MissingRendererBackendInstance,
+    /// 缺少真实 texture import route。
+    MissingTextureImportRoute,
+    /// 缺少 damage 到 texture/render 的映射策略。
+    MissingDamageToTextureMapping,
+    /// 缺少 frame callback completion policy。
+    MissingFrameCallbackCompletionPolicy,
+    /// 缺少 texture resource owner boundary。
+    MissingTextureOwnerBoundary,
+    /// runtime 只有 evidence，没有 texture creation execution。
+    RuntimeEvidenceWithoutTextureCreation,
+    /// texture creation 在 Phase 56F 被显式禁用。
+    TextureCreationExplicitlyDisabled,
+    /// renderer call 在 Phase 56F 被显式禁用。
+    RendererCallExplicitlyDisabled,
+}
+
+/// Phase 56F texture creation no-op checklist。
+///
+/// checklist 只描述执行边界和缺失真实资源。真实 texture / renderer 类型不进入 core，
+/// 也不在本阶段创建或调用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureCreationNoopChecklist {
+    /// Phase 56F no-op skeleton 是否可用。
+    pub texture_creation_noop_available: bool,
+
+    /// Phase 56E 是否允许 texture precondition；Phase 56F 保持 false。
+    pub texture_precondition_allowed: bool,
+
+    /// metadata 是否足以进入 texture precondition；Phase 56F 继承 Phase 56E 的 false。
+    pub metadata_sufficient_for_texture_precondition: bool,
+
+    /// texture owner boundary 是否存在；Phase 56F 固定 false。
+    pub texture_owner_boundary_available: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56F 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// 真实 texture import route 是否可用；Phase 56F 固定 false。
+    pub texture_import_route_available: bool,
+
+    /// damage-to-texture/render mapping 是否可用；Phase 56F 固定 false。
+    pub damage_to_texture_mapping_available: bool,
+
+    /// frame callback completion policy 是否可用；Phase 56F 固定 false。
+    pub frame_callback_completion_policy_available: bool,
+
+    /// texture creation 是否被 blocked；Phase 56F 固定 true。
+    pub texture_creation_blocked: bool,
+}
+
+/// Phase 56F texture creation blocker / no-op skeleton report。
+///
+/// 该 report 从 Phase 56E precondition audit 派生。它只证明 texture creation
+/// execution boundary 已存在且保持 no-op/blocked；它不 import buffer、不创建 texture、
+/// 不调用 renderer、不提交 damage、不发送 frame callback done、不接 input、不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureCreationNoopReport {
+    /// Phase 56F texture creation no-op skeleton 是否可用。
+    pub texture_creation_noop_available: bool,
+
+    /// 是否观察到 Phase 56E texture precondition audit。
+    pub source_precondition_audit_observed: bool,
+
+    /// 被消费的 Phase 56E audit report。
+    pub precondition_audit_report: RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
+
+    /// No-op execution checklist。
+    pub checklist: RuntimeSurfaceCommitTextureCreationNoopChecklist,
+
+    /// Phase 56F 是否尝试 texture creation；固定 false。
+    pub texture_creation_attempted: bool,
+
+    /// Phase 56F 是否 blocked；固定 true。
+    pub texture_creation_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub texture_creation_blocker_reason: &'static str,
+
+    /// Phase 56E 是否允许 texture precondition；Phase 56F 仍保持 false。
+    pub texture_precondition_allowed: bool,
+
+    /// metadata 是否足以进入 texture precondition；Phase 56F 仍保持 false。
+    pub metadata_sufficient_for_texture_precondition: bool,
+
+    /// texture owner boundary 是否存在；Phase 56F 固定 false。
+    pub texture_owner_boundary_available: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56F 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// 真实 texture import route 是否可用；Phase 56F 固定 false。
+    pub texture_import_route_available: bool,
+
+    /// damage-to-texture/render mapping 是否可用；Phase 56F 固定 false。
+    pub damage_to_texture_mapping_available: bool,
+
+    /// frame callback completion policy 是否可用；Phase 56F 固定 false。
+    pub frame_callback_completion_policy_available: bool,
+
+    /// Phase 56F 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56F 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56F 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56F 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56F 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56F 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56F 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56F 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// No-op skeleton 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitTextureCreationNoopOperation>,
+
+    /// 阻止真实 texture creation 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitTextureCreationBlocker>,
+}
+
+/// 从 Phase 56E texture precondition audit 派生 Phase 56F texture creation no-op report。
+///
+/// 这是 Phase 56F 的唯一执行入口：它只生成 pure-data no-op / blocked report。即使
+/// 上游 evidence 存在，本函数也不会创建 texture、不会调用 renderer、不会提交 damage、
+/// 不会发送 frame callback done。
+#[must_use = "texture creation no-op report is not texture creation"]
+pub fn texture_creation_noop_report_from_precondition_audit(
+    report: &RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
+) -> RuntimeSurfaceCommitTextureCreationNoopReport {
+    let checklist = RuntimeSurfaceCommitTextureCreationNoopChecklist {
+        texture_creation_noop_available: true,
+        texture_precondition_allowed: report.texture_precondition_allowed,
+        metadata_sufficient_for_texture_precondition: report
+            .metadata_sufficient_for_texture_precondition,
+        texture_owner_boundary_available: false,
+        renderer_backend_instance_available: report.renderer_backend_instance_available,
+        texture_import_route_available: report.texture_import_route_available,
+        damage_to_texture_mapping_available: report.damage_to_texture_mapping_available,
+        frame_callback_completion_policy_available: report
+            .frame_callback_completion_policy_available,
+        texture_creation_blocked: true,
+    };
+
+    let mut blockers = Vec::new();
+    if !checklist.texture_precondition_allowed {
+        blockers.push(RuntimeSurfaceCommitTextureCreationBlocker::TexturePreconditionNotAllowed);
+    }
+    if !checklist.metadata_sufficient_for_texture_precondition {
+        blockers.push(RuntimeSurfaceCommitTextureCreationBlocker::MetadataInsufficientForTexture);
+    }
+    if !checklist.renderer_backend_instance_available {
+        blockers.push(RuntimeSurfaceCommitTextureCreationBlocker::MissingRendererBackendInstance);
+    }
+    if !checklist.texture_import_route_available {
+        blockers.push(RuntimeSurfaceCommitTextureCreationBlocker::MissingTextureImportRoute);
+    }
+    if !checklist.damage_to_texture_mapping_available {
+        blockers.push(RuntimeSurfaceCommitTextureCreationBlocker::MissingDamageToTextureMapping);
+    }
+    if !checklist.frame_callback_completion_policy_available {
+        blockers
+            .push(RuntimeSurfaceCommitTextureCreationBlocker::MissingFrameCallbackCompletionPolicy);
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitTextureCreationBlocker::MissingTextureOwnerBoundary,
+        RuntimeSurfaceCommitTextureCreationBlocker::RuntimeEvidenceWithoutTextureCreation,
+        RuntimeSurfaceCommitTextureCreationBlocker::TextureCreationExplicitlyDisabled,
+        RuntimeSurfaceCommitTextureCreationBlocker::RendererCallExplicitlyDisabled,
+    ]);
+
+    RuntimeSurfaceCommitTextureCreationNoopReport {
+        texture_creation_noop_available: true,
+        source_precondition_audit_observed: report.texture_precondition_audit_available,
+        precondition_audit_report: report.clone(),
+        checklist,
+        texture_creation_attempted: false,
+        texture_creation_blocked: true,
+        texture_creation_blocker_reason: "texture creation no-op: missing texture owner boundary / renderer backend instance / texture import route / damage mapping / frame callback completion policy",
+        texture_precondition_allowed: report.texture_precondition_allowed,
+        metadata_sufficient_for_texture_precondition: report
+            .metadata_sufficient_for_texture_precondition,
+        texture_owner_boundary_available: false,
+        renderer_backend_instance_available: report.renderer_backend_instance_available,
+        texture_import_route_available: report.texture_import_route_available,
+        damage_to_texture_mapping_available: report.damage_to_texture_mapping_available,
+        frame_callback_completion_policy_available: report
+            .frame_callback_completion_policy_available,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitTextureCreationNoopOperation::ObserveTexturePreconditionAudit,
+            RuntimeSurfaceCommitTextureCreationNoopOperation::CheckTexturePreconditionAllowed,
+            RuntimeSurfaceCommitTextureCreationNoopOperation::CheckTextureOwnerBoundary,
+            RuntimeSurfaceCommitTextureCreationNoopOperation::CheckRendererBackendInstance,
+            RuntimeSurfaceCommitTextureCreationNoopOperation::CheckTextureImportRoute,
+            RuntimeSurfaceCommitTextureCreationNoopOperation::CheckDamageToTextureMapping,
+            RuntimeSurfaceCommitTextureCreationNoopOperation::CheckFrameCallbackCompletionPolicy,
+            RuntimeSurfaceCommitTextureCreationNoopOperation::BuildTextureCreationNoopReport,
+        ],
+        blockers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
+        RuntimeSurfaceCommitTextureCreationBlocker,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
+        texture_creation_noop_report_from_precondition_audit,
         texture_creation_precondition_audit_from_validation_harness_report,
         validate_shm_metadata_harness_paths,
     };
@@ -1192,5 +1460,71 @@ mod tests {
         assert!(!audit.frame_callback_done_sent);
         assert!(!audit.input_support);
         assert!(!audit.core_mutation_invoked);
+    }
+
+    /// Phase 56F 从 Phase 56E precondition audit 派生 texture creation no-op report。
+    ///
+    /// 该测试固定：no-op report 是 execution boundary，不代表 texture created、
+    /// renderer called、damage submitted 或 frame callback done。
+    #[test]
+    fn derives_blocked_texture_creation_noop_report_from_precondition_audit() {
+        let validation_harness = validate_shm_metadata_harness_paths();
+        let audit =
+            texture_creation_precondition_audit_from_validation_harness_report(&validation_harness);
+        let report = texture_creation_noop_report_from_precondition_audit(&audit);
+
+        assert!(report.texture_creation_noop_available);
+        assert!(report.source_precondition_audit_observed);
+        assert!(report.texture_creation_blocked);
+        assert!(!report.texture_creation_attempted);
+        assert!(!report.texture_precondition_allowed);
+        assert!(!report.metadata_sufficient_for_texture_precondition);
+        assert!(!report.texture_owner_boundary_available);
+        assert!(!report.renderer_backend_instance_available);
+        assert!(!report.texture_import_route_available);
+        assert!(!report.damage_to_texture_mapping_available);
+        assert!(!report.frame_callback_completion_policy_available);
+        assert!(
+            report.blockers.contains(
+                &RuntimeSurfaceCommitTextureCreationBlocker::TexturePreconditionNotAllowed
+            )
+        );
+        assert!(
+            report.blockers.contains(
+                &RuntimeSurfaceCommitTextureCreationBlocker::MissingRendererBackendInstance
+            )
+        );
+        assert!(
+            report
+                .blockers
+                .contains(&RuntimeSurfaceCommitTextureCreationBlocker::MissingTextureImportRoute)
+        );
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureCreationBlocker::MissingFrameCallbackCompletionPolicy
+        ));
+        assert!(
+            report
+                .blockers
+                .contains(&RuntimeSurfaceCommitTextureCreationBlocker::MissingTextureOwnerBoundary)
+        );
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureCreationBlocker::RuntimeEvidenceWithoutTextureCreation
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureCreationBlocker::TextureCreationExplicitlyDisabled
+        ));
+        assert!(
+            report.blockers.contains(
+                &RuntimeSurfaceCommitTextureCreationBlocker::RendererCallExplicitlyDisabled
+            )
+        );
+        assert!(!report.buffer_import_attempted);
+        assert!(!report.buffer_imported);
+        assert!(!report.texture_created);
+        assert!(!report.renderer_called);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_done_sent);
+        assert!(!report.input_support);
+        assert!(!report.core_mutation_invoked);
     }
 }
