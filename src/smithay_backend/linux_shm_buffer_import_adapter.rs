@@ -650,6 +650,18 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitRendererBackendInstanceAuditReport {
         renderer_backend_instance_audit_from_texture_owner_boundary_report(report)
     }
+
+    /// 从 Phase 56H renderer backend instance audit 派生 Phase 56I texture import route decision。
+    ///
+    /// 该 owner 方法只定义 texture import route 的 future route owner / import call /
+    /// texture handle / cleanup / release / damage / frame-callback seam；它不调用
+    ///真实 import-buffer 路径，不创建 texture handle，不创建 texture，也不调用 renderer。
+    pub fn texture_import_route_decision_from_renderer_backend_instance_audit(
+        &mut self,
+        report: &RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
+    ) -> RuntimeSurfaceCommitTextureImportRouteDecisionReport {
+        texture_import_route_decision_from_renderer_backend_instance_audit(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -2121,16 +2133,392 @@ pub fn renderer_backend_instance_audit_from_texture_owner_boundary_report(
     }
 }
 
+/// Phase 56I texture import route decision 的纯数据步骤。
+///
+/// 这些步骤只消费 Phase 56H renderer backend instance audit report，定义 future
+/// texture import route owner，并审计 import-buffer / texture handle / cleanup / release /
+/// damage / frame-callback policy。本阶段不执行 import，不创建 texture，也不调用 renderer。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureImportRouteDecisionOperation {
+    /// 观察 Phase 56H renderer backend instance audit report。
+    ObserveRendererBackendInstanceAuditReport,
+    /// 定义 future texture import route owner。
+    DefineTextureImportRouteOwner,
+    /// 检查 import-buffer 调用策略。
+    CheckImportBufferCallPolicy,
+    /// 检查 future texture handle ownership policy。
+    CheckFutureTextureHandleOwnershipPolicy,
+    /// 检查 future texture cleanup policy。
+    CheckTextureCleanupPolicy,
+    /// 检查 future texture release policy。
+    CheckTextureReleasePolicy,
+    /// 检查 damage 到 texture 的映射策略。
+    CheckDamageMappingPolicy,
+    /// 检查 frame callback done 完成策略。
+    CheckFrameCallbackCompletionPolicy,
+    /// 构建 texture import route decision report。
+    BuildTextureImportRouteDecisionReport,
+}
+
+/// Phase 56I texture import route decision blocker taxonomy。
+///
+/// blocker 明确说明：route decision report 不是真实 import route，也不能执行
+/// 真实 import-buffer 调用、创建 texture handle、创建 texture 或调用 renderer。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitTextureImportRouteDecisionBlocker {
+    /// 上游 renderer backend instance audit 仍处于 blocked 状态。
+    RendererBackendInstanceAuditStillBlocked,
+    /// 缺少真实 renderer backend instance。
+    MissingRendererBackendInstance,
+    /// 缺少 import_buffer 调用策略。
+    MissingImportBufferCallPolicy,
+    /// 缺少 future texture handle ownership policy。
+    MissingFutureTextureHandleOwnershipPolicy,
+    /// 缺少 future texture cleanup policy。
+    MissingTextureCleanupPolicy,
+    /// 缺少 future texture release policy。
+    MissingTextureReleasePolicy,
+    /// 缺少 damage 到 texture 的映射策略。
+    MissingDamageMappingPolicy,
+    /// 缺少 frame callback done 完成策略。
+    MissingFrameCallbackCompletionPolicy,
+    /// import_buffer 在本阶段明确禁用。
+    ImportBufferExplicitlyDisabled,
+    /// 已定义 route owner，但没有真实 import。
+    TextureImportRouteDecisionWithoutImport,
+}
+
+/// Phase 56I texture import route policy。
+///
+/// policy 只描述 future WlBuffer 到 renderer texture 的 route seam。它不保存
+/// texture handle，不保存 renderer texture，也不引用 Smithay renderer backend instance。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureImportRoutePolicy {
+    /// texture import route owner 是否已定义；Phase 56I 定义 route owner。
+    pub texture_import_route_owner_defined: bool,
+
+    /// texture import route owner 名称。
+    pub texture_import_route_owner: &'static str,
+
+    /// import_buffer 调用是否允许；Phase 56I 固定 false。
+    pub import_buffer_call_allowed: bool,
+
+    /// import_buffer 调用 owner 名称；未允许时为 blocked。
+    pub import_buffer_call_owner: &'static str,
+
+    /// future texture handle owner 是否已定义；Phase 56I 固定 false。
+    pub future_texture_handle_owner_defined: bool,
+
+    /// future texture handle owner 名称；未定义时为 blocked。
+    pub future_texture_handle_owner: &'static str,
+
+    /// future texture cleanup policy 是否已定义；Phase 56I 固定 false。
+    pub texture_cleanup_policy_defined: bool,
+
+    /// future texture release policy 是否已定义；Phase 56I 固定 false。
+    pub texture_release_policy_defined: bool,
+
+    /// damage 到 texture 的映射 policy 是否已定义；Phase 56I 固定 false。
+    pub damage_mapping_policy_defined: bool,
+
+    /// frame callback done policy 是否已定义；Phase 56I 固定 false。
+    pub frame_callback_completion_policy_defined: bool,
+}
+
+/// Phase 56I texture import route decision checklist。
+///
+/// checklist 说明 import route 哪些部分仍 blocked。它是 safety boundary：
+/// route owner 已定义不代表 import route 可用，不代表真实 import-buffer 可调用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureImportRouteDecisionChecklist {
+    /// texture import route decision seam 是否可用。
+    pub texture_import_route_decision_available: bool,
+
+    /// texture import route decision 是否仍 blocked。
+    pub texture_import_route_decision_blocked: bool,
+
+    /// 是否观察到上游 renderer backend instance audit report。
+    pub renderer_backend_instance_audit_report_observed: bool,
+
+    /// 上游 renderer backend instance audit 是否仍 blocked。
+    pub renderer_backend_instance_audit_still_blocked: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56I 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// texture import route 是否真实可用；Phase 56I 固定 false。
+    pub texture_import_route_available: bool,
+
+    /// texture import route owner 是否已定义。
+    pub texture_import_route_owner_defined: bool,
+
+    /// import_buffer 调用是否允许；Phase 56I 固定 false。
+    pub import_buffer_call_allowed: bool,
+
+    /// future texture handle owner 是否已定义；Phase 56I 固定 false。
+    pub future_texture_handle_owner_defined: bool,
+
+    /// future texture cleanup policy 是否已定义；Phase 56I 固定 false。
+    pub texture_cleanup_policy_defined: bool,
+
+    /// future texture release policy 是否已定义；Phase 56I 固定 false。
+    pub texture_release_policy_defined: bool,
+
+    /// damage mapping policy 是否已定义；Phase 56I 固定 false。
+    pub damage_mapping_policy_defined: bool,
+
+    /// frame callback completion policy 是否已定义；Phase 56I 固定 false。
+    pub frame_callback_completion_policy_defined: bool,
+}
+
+/// Phase 56I texture import route decision report。
+///
+/// 该 report 从 Phase 56H audit report 派生，只定义 future import route owner 与
+/// blocker taxonomy。它不 import buffer、不创建 texture handle、不创建 texture、不调用
+/// renderer、不提交 damage、不发送 frame callback done、不接 input、不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitTextureImportRouteDecisionReport {
+    /// texture import route decision seam 是否可用。
+    pub texture_import_route_decision_available: bool,
+
+    /// 是否观察到 Phase 56H renderer backend instance audit report。
+    pub source_renderer_backend_instance_audit_report_observed: bool,
+
+    /// 被消费的 Phase 56H renderer backend instance audit report。
+    pub source_renderer_backend_instance_audit_report:
+        RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
+
+    /// future texture import route policy。
+    pub texture_import_route_policy: RuntimeSurfaceCommitTextureImportRoutePolicy,
+
+    /// texture import route decision checklist。
+    pub checklist: RuntimeSurfaceCommitTextureImportRouteDecisionChecklist,
+
+    /// texture import route decision 是否仍 blocked。
+    pub texture_import_route_decision_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub texture_import_route_decision_blocker_reason: &'static str,
+
+    /// 上游 renderer backend instance audit 是否仍 blocked。
+    pub renderer_backend_instance_audit_still_blocked: bool,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56I 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// texture import route 是否真实可用；Phase 56I 固定 false。
+    pub texture_import_route_available: bool,
+
+    /// texture import route owner 是否已定义；Phase 56I 定义为 true。
+    pub texture_import_route_owner_defined: bool,
+
+    /// texture import route owner 名称。
+    pub texture_import_route_owner: &'static str,
+
+    /// import_buffer 调用是否允许；Phase 56I 固定 false。
+    pub import_buffer_call_allowed: bool,
+
+    /// import_buffer 调用 owner 名称。
+    pub import_buffer_call_owner: &'static str,
+
+    /// future texture handle owner 是否已定义；Phase 56I 固定 false。
+    pub future_texture_handle_owner_defined: bool,
+
+    /// future texture handle owner 名称。
+    pub future_texture_handle_owner: &'static str,
+
+    /// future texture cleanup policy 是否已定义；Phase 56I 固定 false。
+    pub texture_cleanup_policy_defined: bool,
+
+    /// future texture release policy 是否已定义；Phase 56I 固定 false。
+    pub texture_release_policy_defined: bool,
+
+    /// damage mapping policy 是否已定义；Phase 56I 固定 false。
+    pub damage_mapping_policy_defined: bool,
+
+    /// frame callback completion policy 是否已定义；Phase 56I 固定 false。
+    pub frame_callback_completion_policy_defined: bool,
+
+    /// Phase 56I 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56I 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56I 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56I 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56I 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56I 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56I 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56I 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// texture import route decision 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitTextureImportRouteDecisionOperation>,
+
+    /// 阻止真实 import route / texture execution 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitTextureImportRouteDecisionBlocker>,
+}
+
+/// 从 Phase 56H renderer backend instance audit 派生 Phase 56I texture import route decision。
+///
+/// 这是 Phase 56I 的唯一执行入口：它只生成 pure-data decision report。本函数不调用
+/// 真实 import-buffer 路径，不创建 texture handle，不创建 texture，不调用 renderer。
+#[must_use = "texture import route decision report is not an import route"]
+pub fn texture_import_route_decision_from_renderer_backend_instance_audit(
+    report: &RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
+) -> RuntimeSurfaceCommitTextureImportRouteDecisionReport {
+    let texture_import_route_policy = RuntimeSurfaceCommitTextureImportRoutePolicy {
+        texture_import_route_owner_defined: true,
+        texture_import_route_owner: "linux_shm_first_buffer_import_adapter",
+        import_buffer_call_allowed: false,
+        import_buffer_call_owner: "blocked_until_import_buffer_call_policy",
+        future_texture_handle_owner_defined: false,
+        future_texture_handle_owner: "blocked_until_future_texture_handle_ownership_policy",
+        texture_cleanup_policy_defined: false,
+        texture_release_policy_defined: false,
+        damage_mapping_policy_defined: false,
+        frame_callback_completion_policy_defined: false,
+    };
+
+    let checklist = RuntimeSurfaceCommitTextureImportRouteDecisionChecklist {
+        texture_import_route_decision_available: true,
+        texture_import_route_decision_blocked: true,
+        renderer_backend_instance_audit_report_observed: report
+            .renderer_backend_instance_audit_available,
+        renderer_backend_instance_audit_still_blocked: report
+            .renderer_backend_instance_audit_blocked,
+        renderer_backend_instance_available: report.renderer_backend_instance_available,
+        texture_import_route_available: false,
+        texture_import_route_owner_defined: texture_import_route_policy
+            .texture_import_route_owner_defined,
+        import_buffer_call_allowed: texture_import_route_policy.import_buffer_call_allowed,
+        future_texture_handle_owner_defined: texture_import_route_policy
+            .future_texture_handle_owner_defined,
+        texture_cleanup_policy_defined: texture_import_route_policy.texture_cleanup_policy_defined,
+        texture_release_policy_defined: texture_import_route_policy.texture_release_policy_defined,
+        damage_mapping_policy_defined: texture_import_route_policy.damage_mapping_policy_defined,
+        frame_callback_completion_policy_defined: texture_import_route_policy
+            .frame_callback_completion_policy_defined,
+    };
+
+    let mut blockers = Vec::new();
+    if checklist.renderer_backend_instance_audit_still_blocked {
+        blockers.push(
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::RendererBackendInstanceAuditStillBlocked,
+        );
+    }
+    if !checklist.renderer_backend_instance_available {
+        blockers.push(
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingRendererBackendInstance,
+        );
+    }
+    if !checklist.import_buffer_call_allowed {
+        blockers.extend([
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingImportBufferCallPolicy,
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::ImportBufferExplicitlyDisabled,
+        ]);
+    }
+    if !checklist.future_texture_handle_owner_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingFutureTextureHandleOwnershipPolicy,
+        );
+    }
+    if !checklist.texture_cleanup_policy_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingTextureCleanupPolicy,
+        );
+    }
+    if !checklist.texture_release_policy_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingTextureReleasePolicy,
+        );
+    }
+    if !checklist.damage_mapping_policy_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingDamageMappingPolicy,
+        );
+    }
+    if !checklist.frame_callback_completion_policy_defined {
+        blockers.push(
+            RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingFrameCallbackCompletionPolicy,
+        );
+    }
+    blockers.push(
+        RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::TextureImportRouteDecisionWithoutImport,
+    );
+
+    RuntimeSurfaceCommitTextureImportRouteDecisionReport {
+        texture_import_route_decision_available: true,
+        source_renderer_backend_instance_audit_report_observed: report
+            .renderer_backend_instance_audit_available,
+        source_renderer_backend_instance_audit_report: report.clone(),
+        texture_import_route_policy: texture_import_route_policy.clone(),
+        checklist,
+        texture_import_route_decision_blocked: true,
+        texture_import_route_decision_blocker_reason:
+            "texture import route decision only: missing renderer backend instance, import-buffer call policy, future texture handle ownership, cleanup, release, damage mapping, and frame callback completion policy",
+        renderer_backend_instance_audit_still_blocked: true,
+        renderer_backend_instance_available: false,
+        texture_import_route_available: false,
+        texture_import_route_owner_defined: texture_import_route_policy
+            .texture_import_route_owner_defined,
+        texture_import_route_owner: texture_import_route_policy.texture_import_route_owner,
+        import_buffer_call_allowed: texture_import_route_policy.import_buffer_call_allowed,
+        import_buffer_call_owner: texture_import_route_policy.import_buffer_call_owner,
+        future_texture_handle_owner_defined: texture_import_route_policy
+            .future_texture_handle_owner_defined,
+        future_texture_handle_owner: texture_import_route_policy.future_texture_handle_owner,
+        texture_cleanup_policy_defined: texture_import_route_policy.texture_cleanup_policy_defined,
+        texture_release_policy_defined: texture_import_route_policy.texture_release_policy_defined,
+        damage_mapping_policy_defined: texture_import_route_policy.damage_mapping_policy_defined,
+        frame_callback_completion_policy_defined: texture_import_route_policy
+            .frame_callback_completion_policy_defined,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::ObserveRendererBackendInstanceAuditReport,
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::DefineTextureImportRouteOwner,
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::CheckImportBufferCallPolicy,
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::CheckFutureTextureHandleOwnershipPolicy,
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::CheckTextureCleanupPolicy,
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::CheckTextureReleasePolicy,
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::CheckDamageMappingPolicy,
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::CheckFrameCallbackCompletionPolicy,
+            RuntimeSurfaceCommitTextureImportRouteDecisionOperation::BuildTextureImportRouteDecisionReport,
+        ],
+        blockers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
         RuntimeSurfaceCommitTextureCreationBlocker,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
+        RuntimeSurfaceCommitTextureImportRouteDecisionBlocker,
         RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
         renderer_backend_instance_audit_from_texture_owner_boundary_report,
         texture_creation_noop_report_from_precondition_audit,
         texture_creation_precondition_audit_from_validation_harness_report,
+        texture_import_route_decision_from_renderer_backend_instance_audit,
         texture_owner_boundary_report_from_noop_report, validate_shm_metadata_harness_paths,
     };
 
@@ -2339,6 +2727,74 @@ mod tests {
         ));
         assert!(report.blockers.contains(
             &RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker::MissingRendererBackendInstanceAvailabilityPolicy
+        ));
+        assert!(!report.buffer_import_attempted);
+        assert!(!report.buffer_imported);
+        assert!(!report.texture_created);
+        assert!(!report.renderer_called);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_done_sent);
+        assert!(!report.input_support);
+        assert!(!report.core_mutation_invoked);
+    }
+
+    /// Phase 56I 从 Phase 56H renderer backend instance audit 派生 texture import route decision。
+    ///
+    /// 该测试固定：texture import route decision 只是 route owner / blocker seam，不代表
+    /// 真实 import-buffer 可调用、texture handle 可创建、texture created 或 renderer called。
+    #[test]
+    fn derives_blocked_texture_import_route_decision_from_renderer_backend_instance_audit() {
+        let validation_harness = validate_shm_metadata_harness_paths();
+        let audit =
+            texture_creation_precondition_audit_from_validation_harness_report(&validation_harness);
+        let noop_report = texture_creation_noop_report_from_precondition_audit(&audit);
+        let owner_report = texture_owner_boundary_report_from_noop_report(&noop_report);
+        let renderer_backend_audit =
+            renderer_backend_instance_audit_from_texture_owner_boundary_report(&owner_report);
+        let report = texture_import_route_decision_from_renderer_backend_instance_audit(
+            &renderer_backend_audit,
+        );
+
+        assert!(report.texture_import_route_decision_available);
+        assert!(report.source_renderer_backend_instance_audit_report_observed);
+        assert!(report.texture_import_route_decision_blocked);
+        assert!(report.renderer_backend_instance_audit_still_blocked);
+        assert!(!report.renderer_backend_instance_available);
+        assert!(!report.texture_import_route_available);
+        assert!(report.texture_import_route_owner_defined);
+        assert_eq!(
+            report.texture_import_route_owner,
+            "linux_shm_first_buffer_import_adapter"
+        );
+        assert!(!report.import_buffer_call_allowed);
+        assert!(!report.future_texture_handle_owner_defined);
+        assert!(!report.texture_cleanup_policy_defined);
+        assert!(!report.texture_release_policy_defined);
+        assert!(!report.damage_mapping_policy_defined);
+        assert!(!report.frame_callback_completion_policy_defined);
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::RendererBackendInstanceAuditStillBlocked
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingRendererBackendInstance
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingImportBufferCallPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingFutureTextureHandleOwnershipPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingTextureCleanupPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingDamageMappingPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingFrameCallbackCompletionPolicy
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::ImportBufferExplicitlyDisabled
         ));
         assert!(!report.buffer_import_attempted);
         assert!(!report.buffer_imported);

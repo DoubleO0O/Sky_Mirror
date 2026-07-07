@@ -25,6 +25,8 @@ use crate::{
         RuntimeSurfaceCommitTextureCreationBlocker, RuntimeSurfaceCommitTextureCreationNoopReport,
         RuntimeSurfaceCommitTextureCreationPreconditionAuditReport,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
+        RuntimeSurfaceCommitTextureImportRouteDecisionBlocker,
+        RuntimeSurfaceCommitTextureImportRouteDecisionReport,
         RuntimeSurfaceCommitTextureOwnerBoundaryBlocker,
         RuntimeSurfaceCommitTextureOwnerBoundaryReport,
     },
@@ -2319,6 +2321,103 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// Phase 56H 是否触发 core mutation；固定保持 false。
     pub renderer_backend_instance_core_mutation_invoked: bool,
 
+    /// Phase 56I texture import route decision seam 被调用的次数。
+    pub texture_import_route_decision_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 texture import route decision reports。
+    pub texture_import_route_decision_reports:
+        Vec<RuntimeSurfaceCommitTextureImportRouteDecisionReport>,
+
+    /// Phase 56I texture import route decision 是否可用。
+    pub texture_import_route_decision_available: bool,
+
+    /// Phase 56I texture import route decision 是否 blocked。
+    pub texture_import_route_decision_blocked: bool,
+
+    /// Phase 56I 是否观察到 renderer backend instance audit report。
+    pub texture_import_route_renderer_backend_instance_audit_report_observed: bool,
+
+    /// Phase 56I renderer backend instance audit 是否仍 blocked。
+    pub texture_import_route_renderer_backend_instance_audit_still_blocked: bool,
+
+    /// Phase 56I renderer backend instance 是否真实可用；固定保持 false。
+    pub texture_import_route_renderer_backend_instance_available: bool,
+
+    /// Phase 56I texture import route 是否真实可用；固定保持 false。
+    pub texture_import_route_available: bool,
+
+    /// Phase 56I texture import route owner 是否已定义。
+    pub texture_import_route_owner_defined: bool,
+
+    /// Phase 56I import_buffer call 是否允许；固定保持 false。
+    pub texture_import_route_import_buffer_call_allowed: bool,
+
+    /// Phase 56I future texture handle owner 是否已定义；固定保持 false。
+    pub texture_import_route_future_texture_handle_owner_defined: bool,
+
+    /// Phase 56I future texture cleanup policy 是否已定义；固定保持 false。
+    pub texture_import_route_texture_cleanup_policy_defined: bool,
+
+    /// Phase 56I future texture release policy 是否已定义；固定保持 false。
+    pub texture_import_route_texture_release_policy_defined: bool,
+
+    /// Phase 56I damage mapping policy 是否已定义；固定保持 false。
+    pub texture_import_route_damage_mapping_policy_defined: bool,
+
+    /// Phase 56I frame callback completion policy 是否已定义；固定保持 false。
+    pub texture_import_route_frame_callback_completion_policy_defined: bool,
+
+    /// Phase 56I 是否缺少真实 renderer backend instance。
+    pub texture_import_route_missing_renderer_backend_instance: bool,
+
+    /// Phase 56I 是否缺少 import_buffer call policy。
+    pub texture_import_route_missing_import_buffer_call_policy: bool,
+
+    /// Phase 56I 是否缺少 future texture handle ownership policy。
+    pub texture_import_route_missing_future_texture_handle_ownership_policy: bool,
+
+    /// Phase 56I 是否缺少 texture cleanup policy。
+    pub texture_import_route_missing_texture_cleanup_policy: bool,
+
+    /// Phase 56I 是否缺少 texture release policy。
+    pub texture_import_route_missing_texture_release_policy: bool,
+
+    /// Phase 56I 是否缺少 damage mapping policy。
+    pub texture_import_route_missing_damage_mapping_policy: bool,
+
+    /// Phase 56I 是否缺少 frame callback completion policy。
+    pub texture_import_route_missing_frame_callback_completion_policy: bool,
+
+    /// Phase 56I 是否明确禁用 import_buffer。
+    pub texture_import_route_import_buffer_explicitly_disabled: bool,
+
+    /// Phase 56I 是否只有 route decision、没有真实 import。
+    pub texture_import_route_decision_without_import: bool,
+
+    /// Phase 56I 是否尝试 import buffer；固定保持 false。
+    pub texture_import_route_buffer_import_attempted: bool,
+
+    /// Phase 56I 是否 import buffer；固定保持 false。
+    pub texture_import_route_buffer_imported: bool,
+
+    /// Phase 56I 是否创建 texture；固定保持 false。
+    pub texture_import_route_texture_created: bool,
+
+    /// Phase 56I 是否调用 renderer；固定保持 false。
+    pub texture_import_route_renderer_called: bool,
+
+    /// Phase 56I 是否提交 damage；固定保持 false。
+    pub texture_import_route_damage_submitted: bool,
+
+    /// Phase 56I 是否发送 frame callback done；固定保持 false。
+    pub texture_import_route_frame_callback_done_sent: bool,
+
+    /// Phase 56I 是否接入 input；固定保持 false。
+    pub texture_import_route_input_support: bool,
+
+    /// Phase 56I 是否触发 core mutation；固定保持 false。
+    pub texture_import_route_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -2950,6 +3049,38 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             renderer_backend_instance_frame_callback_done_sent: false,
             renderer_backend_instance_input_support: false,
             renderer_backend_instance_core_mutation_invoked: false,
+            texture_import_route_decision_invocations: 0,
+            texture_import_route_decision_reports: Vec::new(),
+            texture_import_route_decision_available: false,
+            texture_import_route_decision_blocked: false,
+            texture_import_route_renderer_backend_instance_audit_report_observed: false,
+            texture_import_route_renderer_backend_instance_audit_still_blocked: false,
+            texture_import_route_renderer_backend_instance_available: false,
+            texture_import_route_available: false,
+            texture_import_route_owner_defined: false,
+            texture_import_route_import_buffer_call_allowed: false,
+            texture_import_route_future_texture_handle_owner_defined: false,
+            texture_import_route_texture_cleanup_policy_defined: false,
+            texture_import_route_texture_release_policy_defined: false,
+            texture_import_route_damage_mapping_policy_defined: false,
+            texture_import_route_frame_callback_completion_policy_defined: false,
+            texture_import_route_missing_renderer_backend_instance: false,
+            texture_import_route_missing_import_buffer_call_policy: false,
+            texture_import_route_missing_future_texture_handle_ownership_policy: false,
+            texture_import_route_missing_texture_cleanup_policy: false,
+            texture_import_route_missing_texture_release_policy: false,
+            texture_import_route_missing_damage_mapping_policy: false,
+            texture_import_route_missing_frame_callback_completion_policy: false,
+            texture_import_route_import_buffer_explicitly_disabled: false,
+            texture_import_route_decision_without_import: false,
+            texture_import_route_buffer_import_attempted: false,
+            texture_import_route_buffer_imported: false,
+            texture_import_route_texture_created: false,
+            texture_import_route_renderer_called: false,
+            texture_import_route_damage_submitted: false,
+            texture_import_route_frame_callback_done_sent: false,
+            texture_import_route_input_support: false,
+            texture_import_route_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -4373,6 +4504,76 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_texture_import_route_decision_report(
+        report: &RuntimeSurfaceCommitTextureImportRouteDecisionReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+        Self {
+            texture_import_route_decision_invocations: usize::from(
+                report.texture_import_route_decision_available,
+            ),
+            texture_import_route_decision_reports: vec![report.clone()],
+            texture_import_route_decision_available: report
+                .texture_import_route_decision_available,
+            texture_import_route_decision_blocked: report.texture_import_route_decision_blocked,
+            texture_import_route_renderer_backend_instance_audit_report_observed: report
+                .source_renderer_backend_instance_audit_report_observed,
+            texture_import_route_renderer_backend_instance_audit_still_blocked: report
+                .renderer_backend_instance_audit_still_blocked,
+            texture_import_route_renderer_backend_instance_available: report
+                .renderer_backend_instance_available,
+            texture_import_route_available: report.texture_import_route_available,
+            texture_import_route_owner_defined: report.texture_import_route_owner_defined,
+            texture_import_route_import_buffer_call_allowed: report.import_buffer_call_allowed,
+            texture_import_route_future_texture_handle_owner_defined: report
+                .future_texture_handle_owner_defined,
+            texture_import_route_texture_cleanup_policy_defined: report
+                .texture_cleanup_policy_defined,
+            texture_import_route_texture_release_policy_defined: report
+                .texture_release_policy_defined,
+            texture_import_route_damage_mapping_policy_defined: report
+                .damage_mapping_policy_defined,
+            texture_import_route_frame_callback_completion_policy_defined: report
+                .frame_callback_completion_policy_defined,
+            texture_import_route_missing_renderer_backend_instance: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingRendererBackendInstance,
+            ),
+            texture_import_route_missing_import_buffer_call_policy: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingImportBufferCallPolicy,
+            ),
+            texture_import_route_missing_future_texture_handle_ownership_policy: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingFutureTextureHandleOwnershipPolicy,
+            ),
+            texture_import_route_missing_texture_cleanup_policy: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingTextureCleanupPolicy,
+            ),
+            texture_import_route_missing_texture_release_policy: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingTextureReleasePolicy,
+            ),
+            texture_import_route_missing_damage_mapping_policy: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingDamageMappingPolicy,
+            ),
+            texture_import_route_missing_frame_callback_completion_policy: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::MissingFrameCallbackCompletionPolicy,
+            ),
+            texture_import_route_import_buffer_explicitly_disabled: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::ImportBufferExplicitlyDisabled,
+            ),
+            texture_import_route_decision_without_import: has_blocker(
+                RuntimeSurfaceCommitTextureImportRouteDecisionBlocker::TextureImportRouteDecisionWithoutImport,
+            ),
+            texture_import_route_buffer_import_attempted: report.buffer_import_attempted,
+            texture_import_route_buffer_imported: report.buffer_imported,
+            texture_import_route_texture_created: report.texture_created,
+            texture_import_route_renderer_called: report.renderer_called,
+            texture_import_route_damage_submitted: report.damage_submitted,
+            texture_import_route_frame_callback_done_sent: report.frame_callback_done_sent,
+            texture_import_route_input_support: report.input_support,
+            texture_import_route_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -5580,6 +5781,63 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.renderer_backend_instance_input_support;
         self.renderer_backend_instance_core_mutation_invoked |=
             delta.renderer_backend_instance_core_mutation_invoked;
+        self.texture_import_route_decision_invocations = self
+            .texture_import_route_decision_invocations
+            .saturating_add(delta.texture_import_route_decision_invocations);
+        self.texture_import_route_decision_reports
+            .extend(delta.texture_import_route_decision_reports);
+        self.texture_import_route_decision_available |=
+            delta.texture_import_route_decision_available;
+        self.texture_import_route_decision_blocked |= delta.texture_import_route_decision_blocked;
+        self.texture_import_route_renderer_backend_instance_audit_report_observed |=
+            delta.texture_import_route_renderer_backend_instance_audit_report_observed;
+        self.texture_import_route_renderer_backend_instance_audit_still_blocked |=
+            delta.texture_import_route_renderer_backend_instance_audit_still_blocked;
+        self.texture_import_route_renderer_backend_instance_available |=
+            delta.texture_import_route_renderer_backend_instance_available;
+        self.texture_import_route_available |= delta.texture_import_route_available;
+        self.texture_import_route_owner_defined |= delta.texture_import_route_owner_defined;
+        self.texture_import_route_import_buffer_call_allowed |=
+            delta.texture_import_route_import_buffer_call_allowed;
+        self.texture_import_route_future_texture_handle_owner_defined |=
+            delta.texture_import_route_future_texture_handle_owner_defined;
+        self.texture_import_route_texture_cleanup_policy_defined |=
+            delta.texture_import_route_texture_cleanup_policy_defined;
+        self.texture_import_route_texture_release_policy_defined |=
+            delta.texture_import_route_texture_release_policy_defined;
+        self.texture_import_route_damage_mapping_policy_defined |=
+            delta.texture_import_route_damage_mapping_policy_defined;
+        self.texture_import_route_frame_callback_completion_policy_defined |=
+            delta.texture_import_route_frame_callback_completion_policy_defined;
+        self.texture_import_route_missing_renderer_backend_instance |=
+            delta.texture_import_route_missing_renderer_backend_instance;
+        self.texture_import_route_missing_import_buffer_call_policy |=
+            delta.texture_import_route_missing_import_buffer_call_policy;
+        self.texture_import_route_missing_future_texture_handle_ownership_policy |=
+            delta.texture_import_route_missing_future_texture_handle_ownership_policy;
+        self.texture_import_route_missing_texture_cleanup_policy |=
+            delta.texture_import_route_missing_texture_cleanup_policy;
+        self.texture_import_route_missing_texture_release_policy |=
+            delta.texture_import_route_missing_texture_release_policy;
+        self.texture_import_route_missing_damage_mapping_policy |=
+            delta.texture_import_route_missing_damage_mapping_policy;
+        self.texture_import_route_missing_frame_callback_completion_policy |=
+            delta.texture_import_route_missing_frame_callback_completion_policy;
+        self.texture_import_route_import_buffer_explicitly_disabled |=
+            delta.texture_import_route_import_buffer_explicitly_disabled;
+        self.texture_import_route_decision_without_import |=
+            delta.texture_import_route_decision_without_import;
+        self.texture_import_route_buffer_import_attempted |=
+            delta.texture_import_route_buffer_import_attempted;
+        self.texture_import_route_buffer_imported |= delta.texture_import_route_buffer_imported;
+        self.texture_import_route_texture_created |= delta.texture_import_route_texture_created;
+        self.texture_import_route_renderer_called |= delta.texture_import_route_renderer_called;
+        self.texture_import_route_damage_submitted |= delta.texture_import_route_damage_submitted;
+        self.texture_import_route_frame_callback_done_sent |=
+            delta.texture_import_route_frame_callback_done_sent;
+        self.texture_import_route_input_support |= delta.texture_import_route_input_support;
+        self.texture_import_route_core_mutation_invoked |=
+            delta.texture_import_route_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -5862,6 +6120,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_renderer_backend_instance_audit_report(
                 &report.renderer_backend_instance_audit_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_texture_import_route_decision_report(
+                &report.texture_import_route_decision_report,
             ),
         );
 
