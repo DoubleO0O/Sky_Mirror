@@ -389,6 +389,10 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation,
     RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
     RuntimeSurfaceCommitFutureTextureOwnershipPolicy,
+    RuntimeSurfaceCommitRealTextureCreationReadinessChecklist,
+    RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker,
+    RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation,
+    RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
     RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
     RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist,
     RuntimeSurfaceCommitRendererBackendInstanceAuditOperation,
@@ -420,6 +424,7 @@ pub use linux_shm_buffer_import_adapter::{
     extract_shm_buffer_metadata_evidence,
     frame_callback_completion_policy_from_damage_to_texture_mapping_audit,
     observe_wl_buffer_type_boundary,
+    real_texture_creation_readiness_decision_from_frame_callback_completion_policy,
     renderer_backend_instance_audit_from_texture_owner_boundary_report,
     shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
@@ -8118,6 +8123,162 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56K source 包含禁止的真实 damage/render/frame token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56L 必须建立真实 texture creation readiness decision seam。
+    ///
+    /// 这个 source-contract 只允许从 Phase 56K frame callback completion policy report
+    /// 派生 pure-data readiness decision；它不创建 texture，不调用 renderer，不提交
+    /// damage，也不发送 frame callback done。
+    #[test]
+    fn real_texture_creation_readiness_decision_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56L SHM adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56L coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56L loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56L orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56L_REAL_TEXTURE_CREATION_READINESS_DECISION.md"),
+        )
+        .expect("Phase 56L 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56L - Real Texture Creation Readiness Decision",
+            "No-Brake Goal Mode",
+            "real_texture_creation_readiness_decision_available = true",
+            "real_texture_creation_readiness_blocked = true",
+            "real_texture_creation_ready = false",
+            "real_texture_creation_allowed = false",
+            "minimum_renderability_checklist_defined = true",
+            "frame_callback_done_sent = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56L 文档缺少 real texture creation readiness decision 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation",
+            "ObserveFrameCallbackCompletionPolicyReport",
+            "SummarizeRendererBackendInstanceReadiness",
+            "SummarizeTextureImportRouteReadiness",
+            "SummarizeDamageSubmissionReadiness",
+            "SummarizeFrameCallbackCompletionReadiness",
+            "BuildRealTextureCreationReadinessDecisionReport",
+            "pub enum RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker",
+            "FrameCallbackCompletionPolicyStillBlocked",
+            "MissingRendererBackendInstance",
+            "MissingTextureImportRoute",
+            "MissingFutureTextureHandleOwnershipPolicy",
+            "MissingTextureCleanupPolicy",
+            "MissingDamageSubmission",
+            "MissingRenderSuccessEvidence",
+            "FrameCallbackDoneDisabled",
+            "RealTextureCreationExplicitlyDisabled",
+            "pub struct RuntimeSurfaceCommitRealTextureCreationReadinessChecklist",
+            "pub struct RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport",
+            "pub fn real_texture_creation_readiness_decision_from_frame_callback_completion_policy",
+            "real_texture_creation_readiness_decision_available: true",
+            "real_texture_creation_readiness_blocked: true",
+            "real_texture_creation_ready: false",
+            "real_texture_creation_allowed: false",
+            "minimum_renderability_checklist_defined: true",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56L adapter production source 缺少 real texture creation readiness decision: {required}"
+            );
+        }
+
+        for required in [
+            "pub real_texture_creation_readiness_decision_report:",
+            "RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport",
+            "real_texture_creation_readiness_decision_from_frame_callback_completion_policy",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56L coordinator 缺少 real texture creation readiness decision 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub real_texture_creation_readiness_decision_invocations: usize",
+            "pub real_texture_creation_readiness_decision_reports:",
+            "Vec<RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport>",
+            "pub real_texture_creation_readiness_decision_available: bool",
+            "pub real_texture_creation_readiness_blocked: bool",
+            "pub real_texture_creation_ready: bool",
+            "pub real_texture_creation_allowed: bool",
+            "from_real_texture_creation_readiness_decision_report",
+            "report.real_texture_creation_readiness_decision_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56L loop 缺少 real texture creation readiness decision 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "real_texture_creation_readiness_decision_invocations",
+            "real_texture_creation_readiness_decision_reports",
+            "real_texture_creation_readiness_decision_available",
+            "real_texture_creation_readiness_blocked",
+            "real_texture_creation_ready",
+            "real_texture_creation_allowed",
+            "real_texture_creation_frame_callback_done_sent",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56L orchestrator test/report 缺少 real texture creation readiness decision 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "real_texture_creation_ready: true",
+            "real_texture_creation_allowed: true",
+            "render_invoked: true",
+            "import_buffer(",
+            ".damage(",
+            ".done(",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56L source 包含禁止的真实 texture/render/frame token: {forbidden}"
             );
         }
     }
