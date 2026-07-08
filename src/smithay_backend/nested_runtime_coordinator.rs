@@ -24,6 +24,7 @@ use crate::{
             RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
             RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
             RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport,
             RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
             RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
             RuntimeSurfaceCommitShmBufferMetadataReport,
@@ -4550,6 +4551,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// Phase 56N renderer backend concrete route decision report。
     pub renderer_backend_concrete_route_decision_report:
         RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
+
+    /// Phase 56O renderer backend construction route proof report。
+    pub renderer_backend_construction_route_proof_report:
+        RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -4964,6 +4969,11 @@ impl NestedRuntimeCoordinator {
             .renderer_backend_concrete_route_decision_from_owner_boundary(
                 &renderer_backend_owner_boundary_report,
             );
+        let renderer_backend_construction_route_proof_report = self
+            .shm_first_buffer_import_adapter
+            .renderer_backend_construction_route_proof_from_concrete_route_decision(
+                &renderer_backend_concrete_route_decision_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -5005,6 +5015,7 @@ impl NestedRuntimeCoordinator {
             real_texture_creation_readiness_decision_report,
             renderer_backend_owner_boundary_report,
             renderer_backend_concrete_route_decision_report,
+            renderer_backend_construction_route_proof_report,
         }
     }
 
