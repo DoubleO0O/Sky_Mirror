@@ -393,6 +393,9 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker,
     RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation,
     RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
+    RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker,
+    RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation,
+    RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
     RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
     RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist,
     RuntimeSurfaceCommitRendererBackendInstanceAuditOperation,
@@ -429,6 +432,7 @@ pub use linux_shm_buffer_import_adapter::{
     frame_callback_completion_policy_from_damage_to_texture_mapping_audit,
     observe_wl_buffer_type_boundary,
     real_texture_creation_readiness_decision_from_frame_callback_completion_policy,
+    renderer_backend_concrete_route_decision_from_owner_boundary,
     renderer_backend_instance_audit_from_texture_owner_boundary_report,
     renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision,
     shm_buffer_metadata_report_from_adapter_report,
@@ -8446,6 +8450,163 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56M source 包含禁止的真实 renderer/texture/frame token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56N 必须建立 renderer backend concrete route decision seam。
+    ///
+    /// 这个 source-contract 只允许从 Phase 56M renderer backend owner boundary
+    /// 派生 pure-data concrete route decision；它不构造 renderer backend instance，
+    /// 不调用 renderer，不创建 texture，不提交 damage，也不发送 frame callback done。
+    #[test]
+    fn renderer_backend_concrete_route_decision_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56N SHM adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56N coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56N loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56N orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56N_RENDERER_BACKEND_CONCRETE_ROUTE_DECISION.md"),
+        )
+        .expect("Phase 56N 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56N - Renderer Backend Concrete Route Decision",
+            "No-Brake Goal Mode",
+            "renderer_backend_concrete_route_decision_available = true",
+            "renderer_backend_concrete_route_decision_blocked = true",
+            "renderer_backend_concrete_type_candidate_defined = true",
+            "renderer_backend_concrete_type_compiled = false",
+            "renderer_backend_construction_route_available = false",
+            "renderer_backend_instance_created = false",
+            "renderer_called = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56N 文档缺少 renderer backend concrete route decision 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation",
+            "ObserveRendererBackendOwnerBoundaryReport",
+            "SelectRendererBackendConcreteTypeCandidate",
+            "CheckRendererBackendConstructionRoute",
+            "CheckRendererBackendRuntimeStorage",
+            "CheckRendererBackendCleanupPolicy",
+            "CheckRenderTargetBinding",
+            "BuildRendererBackendConcreteRouteDecisionReport",
+            "pub enum RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker",
+            "RendererBackendOwnerBoundaryStillBlocked",
+            "MissingConcreteRendererBackendTypeCompileProof",
+            "MissingRendererBackendConstructionRoute",
+            "MissingRendererBackendRuntimeStorage",
+            "MissingRendererBackendCleanupPolicy",
+            "MissingRenderTargetBinding",
+            "RendererBackendConstructionExplicitlyDisabled",
+            "ConcreteRouteDecisionWithoutBackendInstance",
+            "pub struct RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport",
+            "pub fn renderer_backend_concrete_route_decision_from_owner_boundary",
+            "renderer_backend_concrete_route_decision_available: true",
+            "renderer_backend_concrete_route_decision_blocked: true",
+            "renderer_backend_concrete_type_candidate_defined: true",
+            "renderer_backend_concrete_type_compiled: false",
+            "renderer_backend_construction_route_available: false",
+            "renderer_backend_instance_created: false",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56N adapter production source 缺少 renderer backend concrete route decision: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_backend_concrete_route_decision_report:",
+            "RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport",
+            "renderer_backend_concrete_route_decision_from_owner_boundary",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56N coordinator 缺少 renderer backend concrete route decision 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_backend_concrete_route_decision_invocations: usize",
+            "pub renderer_backend_concrete_route_decision_reports:",
+            "Vec<RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport>",
+            "pub renderer_backend_concrete_route_decision_available: bool",
+            "pub renderer_backend_concrete_route_decision_blocked: bool",
+            "pub renderer_backend_concrete_type_candidate_defined: bool",
+            "pub renderer_backend_instance_created: bool",
+            "from_renderer_backend_concrete_route_decision_report",
+            "report.renderer_backend_concrete_route_decision_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56N loop 缺少 renderer backend concrete route decision 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "renderer_backend_concrete_route_decision_invocations",
+            "renderer_backend_concrete_route_decision_reports",
+            "renderer_backend_concrete_route_decision_available",
+            "renderer_backend_concrete_route_decision_blocked",
+            "renderer_backend_concrete_type_candidate_defined",
+            "renderer_backend_instance_created",
+            "renderer_backend_concrete_route_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56N orchestrator test/report 缺少 renderer backend concrete route decision 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderer_backend_instance_created: true",
+            "renderer_backend_concrete_type_compiled: true",
+            "render_invoked: true",
+            "import_buffer(",
+            ".damage(",
+            ".done(",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56N source 包含禁止的真实 renderer/texture/frame token: {forbidden}"
             );
         }
     }

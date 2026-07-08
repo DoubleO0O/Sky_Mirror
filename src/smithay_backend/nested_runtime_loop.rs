@@ -23,6 +23,8 @@ use crate::{
         RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
         RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker,
         RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker,
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
         RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
         RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
         RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker,
@@ -2817,6 +2819,94 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// Phase 56M 是否触发 core mutation；固定保持 false。
     pub renderer_backend_owner_boundary_core_mutation_invoked: bool,
 
+    /// Phase 56N renderer backend concrete route decision seam 被调用的次数。
+    pub renderer_backend_concrete_route_decision_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 renderer backend concrete route decision reports。
+    pub renderer_backend_concrete_route_decision_reports:
+        Vec<RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport>,
+
+    /// Phase 56N renderer backend concrete route decision 是否可用。
+    pub renderer_backend_concrete_route_decision_available: bool,
+
+    /// Phase 56N renderer backend concrete route decision 是否 blocked。
+    pub renderer_backend_concrete_route_decision_blocked: bool,
+
+    /// Phase 56N 是否观察到 56M owner boundary report。
+    pub renderer_backend_concrete_route_owner_boundary_observed: bool,
+
+    /// Phase 56N 上游 owner boundary 是否仍 blocked。
+    pub renderer_backend_concrete_route_owner_boundary_still_blocked: bool,
+
+    /// Phase 56N concrete type candidate 是否已定义。
+    pub renderer_backend_concrete_type_candidate_defined: bool,
+
+    /// Phase 56N concrete type 是否已有 compile proof；固定保持 false。
+    pub renderer_backend_concrete_type_compiled: bool,
+
+    /// Phase 56N construction route 是否可用；固定保持 false。
+    pub renderer_backend_concrete_route_construction_route_available: bool,
+
+    /// Phase 56N runtime storage 是否可用；固定保持 false。
+    pub renderer_backend_concrete_route_runtime_storage_available: bool,
+
+    /// Phase 56N cleanup policy 是否可用；固定保持 false。
+    pub renderer_backend_concrete_route_cleanup_policy_available: bool,
+
+    /// Phase 56N render target binding 是否可用；固定保持 false。
+    pub renderer_backend_concrete_route_render_target_binding_available: bool,
+
+    /// Phase 56N 是否允许 construction；固定保持 false。
+    pub renderer_backend_concrete_route_construction_allowed: bool,
+
+    /// Phase 56N 是否创建 renderer backend instance；固定保持 false。
+    pub renderer_backend_instance_created: bool,
+
+    /// Phase 56N 是否缺少 compile proof。
+    pub renderer_backend_concrete_route_missing_compile_proof: bool,
+
+    /// Phase 56N 是否缺少 construction route。
+    pub renderer_backend_concrete_route_missing_construction_route: bool,
+
+    /// Phase 56N 是否缺少 runtime storage。
+    pub renderer_backend_concrete_route_missing_runtime_storage: bool,
+
+    /// Phase 56N 是否缺少 cleanup policy。
+    pub renderer_backend_concrete_route_missing_cleanup_policy: bool,
+
+    /// Phase 56N 是否缺少 render target binding。
+    pub renderer_backend_concrete_route_missing_render_target_binding: bool,
+
+    /// Phase 56N 是否明确禁用 construction。
+    pub renderer_backend_concrete_route_construction_explicitly_disabled: bool,
+
+    /// Phase 56N 是否只有 route decision、没有 backend instance。
+    pub renderer_backend_concrete_route_without_backend_instance: bool,
+
+    /// Phase 56N 是否尝试 import buffer；固定保持 false。
+    pub renderer_backend_concrete_route_buffer_import_attempted: bool,
+
+    /// Phase 56N 是否 import buffer；固定保持 false。
+    pub renderer_backend_concrete_route_buffer_imported: bool,
+
+    /// Phase 56N 是否创建 texture；固定保持 false。
+    pub renderer_backend_concrete_route_texture_created: bool,
+
+    /// Phase 56N 是否调用 renderer；固定保持 false。
+    pub renderer_backend_concrete_route_renderer_called: bool,
+
+    /// Phase 56N 是否提交 damage；固定保持 false。
+    pub renderer_backend_concrete_route_damage_submitted: bool,
+
+    /// Phase 56N 是否发送 frame callback done；固定保持 false。
+    pub renderer_backend_concrete_route_frame_callback_done_sent: bool,
+
+    /// Phase 56N 是否接入 input；固定保持 false。
+    pub renderer_backend_concrete_route_input_support: bool,
+
+    /// Phase 56N 是否触发 core mutation；固定保持 false。
+    pub renderer_backend_concrete_route_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -3609,6 +3699,35 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             renderer_backend_owner_boundary_frame_callback_done_sent: false,
             renderer_backend_owner_boundary_input_support: false,
             renderer_backend_owner_boundary_core_mutation_invoked: false,
+            renderer_backend_concrete_route_decision_invocations: 0,
+            renderer_backend_concrete_route_decision_reports: Vec::new(),
+            renderer_backend_concrete_route_decision_available: false,
+            renderer_backend_concrete_route_decision_blocked: false,
+            renderer_backend_concrete_route_owner_boundary_observed: false,
+            renderer_backend_concrete_route_owner_boundary_still_blocked: false,
+            renderer_backend_concrete_type_candidate_defined: false,
+            renderer_backend_concrete_type_compiled: false,
+            renderer_backend_concrete_route_construction_route_available: false,
+            renderer_backend_concrete_route_runtime_storage_available: false,
+            renderer_backend_concrete_route_cleanup_policy_available: false,
+            renderer_backend_concrete_route_render_target_binding_available: false,
+            renderer_backend_concrete_route_construction_allowed: false,
+            renderer_backend_instance_created: false,
+            renderer_backend_concrete_route_missing_compile_proof: false,
+            renderer_backend_concrete_route_missing_construction_route: false,
+            renderer_backend_concrete_route_missing_runtime_storage: false,
+            renderer_backend_concrete_route_missing_cleanup_policy: false,
+            renderer_backend_concrete_route_missing_render_target_binding: false,
+            renderer_backend_concrete_route_construction_explicitly_disabled: false,
+            renderer_backend_concrete_route_without_backend_instance: false,
+            renderer_backend_concrete_route_buffer_import_attempted: false,
+            renderer_backend_concrete_route_buffer_imported: false,
+            renderer_backend_concrete_route_texture_created: false,
+            renderer_backend_concrete_route_renderer_called: false,
+            renderer_backend_concrete_route_damage_submitted: false,
+            renderer_backend_concrete_route_frame_callback_done_sent: false,
+            renderer_backend_concrete_route_input_support: false,
+            renderer_backend_concrete_route_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -5383,6 +5502,73 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_renderer_backend_concrete_route_decision_report(
+        report: &RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+
+        Self {
+            renderer_backend_concrete_route_decision_invocations: usize::from(
+                report.renderer_backend_concrete_route_decision_available,
+            ),
+            renderer_backend_concrete_route_decision_reports: vec![report.clone()],
+            renderer_backend_concrete_route_decision_available: report
+                .renderer_backend_concrete_route_decision_available,
+            renderer_backend_concrete_route_decision_blocked: report
+                .renderer_backend_concrete_route_decision_blocked,
+            renderer_backend_concrete_route_owner_boundary_observed: report
+                .source_renderer_backend_owner_boundary_report_observed,
+            renderer_backend_concrete_route_owner_boundary_still_blocked: report
+                .renderer_backend_owner_boundary_still_blocked,
+            renderer_backend_concrete_type_candidate_defined: report
+                .renderer_backend_concrete_type_candidate_defined,
+            renderer_backend_concrete_type_compiled: report
+                .renderer_backend_concrete_type_compiled,
+            renderer_backend_concrete_route_construction_route_available: report
+                .renderer_backend_construction_route_available,
+            renderer_backend_concrete_route_runtime_storage_available: report
+                .renderer_backend_runtime_storage_available,
+            renderer_backend_concrete_route_cleanup_policy_available: report
+                .renderer_backend_cleanup_policy_available,
+            renderer_backend_concrete_route_render_target_binding_available: report
+                .render_target_binding_available,
+            renderer_backend_concrete_route_construction_allowed: report
+                .renderer_backend_construction_allowed,
+            renderer_backend_instance_created: report.renderer_backend_instance_created,
+            renderer_backend_concrete_route_missing_compile_proof: has_blocker(
+                RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingConcreteRendererBackendTypeCompileProof,
+            ),
+            renderer_backend_concrete_route_missing_construction_route: has_blocker(
+                RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingRendererBackendConstructionRoute,
+            ),
+            renderer_backend_concrete_route_missing_runtime_storage: has_blocker(
+                RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingRendererBackendRuntimeStorage,
+            ),
+            renderer_backend_concrete_route_missing_cleanup_policy: has_blocker(
+                RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingRendererBackendCleanupPolicy,
+            ),
+            renderer_backend_concrete_route_missing_render_target_binding: has_blocker(
+                RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingRenderTargetBinding,
+            ),
+            renderer_backend_concrete_route_construction_explicitly_disabled: has_blocker(
+                RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::RendererBackendConstructionExplicitlyDisabled,
+            ),
+            renderer_backend_concrete_route_without_backend_instance: has_blocker(
+                RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::ConcreteRouteDecisionWithoutBackendInstance,
+            ),
+            renderer_backend_concrete_route_buffer_import_attempted: report.buffer_import_attempted,
+            renderer_backend_concrete_route_buffer_imported: report.buffer_imported,
+            renderer_backend_concrete_route_texture_created: report.texture_created,
+            renderer_backend_concrete_route_renderer_called: report.renderer_called,
+            renderer_backend_concrete_route_damage_submitted: report.damage_submitted,
+            renderer_backend_concrete_route_frame_callback_done_sent: report
+                .frame_callback_done_sent,
+            renderer_backend_concrete_route_input_support: report.input_support,
+            renderer_backend_concrete_route_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -6880,6 +7066,64 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             delta.renderer_backend_owner_boundary_input_support;
         self.renderer_backend_owner_boundary_core_mutation_invoked |=
             delta.renderer_backend_owner_boundary_core_mutation_invoked;
+        self.renderer_backend_concrete_route_decision_invocations = self
+            .renderer_backend_concrete_route_decision_invocations
+            .saturating_add(delta.renderer_backend_concrete_route_decision_invocations);
+        self.renderer_backend_concrete_route_decision_reports
+            .extend(delta.renderer_backend_concrete_route_decision_reports);
+        self.renderer_backend_concrete_route_decision_available |=
+            delta.renderer_backend_concrete_route_decision_available;
+        self.renderer_backend_concrete_route_decision_blocked |=
+            delta.renderer_backend_concrete_route_decision_blocked;
+        self.renderer_backend_concrete_route_owner_boundary_observed |=
+            delta.renderer_backend_concrete_route_owner_boundary_observed;
+        self.renderer_backend_concrete_route_owner_boundary_still_blocked |=
+            delta.renderer_backend_concrete_route_owner_boundary_still_blocked;
+        self.renderer_backend_concrete_type_candidate_defined |=
+            delta.renderer_backend_concrete_type_candidate_defined;
+        self.renderer_backend_concrete_type_compiled |=
+            delta.renderer_backend_concrete_type_compiled;
+        self.renderer_backend_concrete_route_construction_route_available |=
+            delta.renderer_backend_concrete_route_construction_route_available;
+        self.renderer_backend_concrete_route_runtime_storage_available |=
+            delta.renderer_backend_concrete_route_runtime_storage_available;
+        self.renderer_backend_concrete_route_cleanup_policy_available |=
+            delta.renderer_backend_concrete_route_cleanup_policy_available;
+        self.renderer_backend_concrete_route_render_target_binding_available |=
+            delta.renderer_backend_concrete_route_render_target_binding_available;
+        self.renderer_backend_concrete_route_construction_allowed |=
+            delta.renderer_backend_concrete_route_construction_allowed;
+        self.renderer_backend_instance_created |= delta.renderer_backend_instance_created;
+        self.renderer_backend_concrete_route_missing_compile_proof |=
+            delta.renderer_backend_concrete_route_missing_compile_proof;
+        self.renderer_backend_concrete_route_missing_construction_route |=
+            delta.renderer_backend_concrete_route_missing_construction_route;
+        self.renderer_backend_concrete_route_missing_runtime_storage |=
+            delta.renderer_backend_concrete_route_missing_runtime_storage;
+        self.renderer_backend_concrete_route_missing_cleanup_policy |=
+            delta.renderer_backend_concrete_route_missing_cleanup_policy;
+        self.renderer_backend_concrete_route_missing_render_target_binding |=
+            delta.renderer_backend_concrete_route_missing_render_target_binding;
+        self.renderer_backend_concrete_route_construction_explicitly_disabled |=
+            delta.renderer_backend_concrete_route_construction_explicitly_disabled;
+        self.renderer_backend_concrete_route_without_backend_instance |=
+            delta.renderer_backend_concrete_route_without_backend_instance;
+        self.renderer_backend_concrete_route_buffer_import_attempted |=
+            delta.renderer_backend_concrete_route_buffer_import_attempted;
+        self.renderer_backend_concrete_route_buffer_imported |=
+            delta.renderer_backend_concrete_route_buffer_imported;
+        self.renderer_backend_concrete_route_texture_created |=
+            delta.renderer_backend_concrete_route_texture_created;
+        self.renderer_backend_concrete_route_renderer_called |=
+            delta.renderer_backend_concrete_route_renderer_called;
+        self.renderer_backend_concrete_route_damage_submitted |=
+            delta.renderer_backend_concrete_route_damage_submitted;
+        self.renderer_backend_concrete_route_frame_callback_done_sent |=
+            delta.renderer_backend_concrete_route_frame_callback_done_sent;
+        self.renderer_backend_concrete_route_input_support |=
+            delta.renderer_backend_concrete_route_input_support;
+        self.renderer_backend_concrete_route_core_mutation_invoked |=
+            delta.renderer_backend_concrete_route_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -7187,6 +7431,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_renderer_backend_owner_boundary_report(
                 &report.renderer_backend_owner_boundary_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_renderer_backend_concrete_route_decision_report(
+                &report.renderer_backend_concrete_route_decision_report,
             ),
         );
 
