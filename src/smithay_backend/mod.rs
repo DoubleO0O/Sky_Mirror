@@ -396,6 +396,9 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker,
     RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation,
     RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
+    RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker,
+    RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation,
+    RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport,
     RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
     RuntimeSurfaceCommitRendererBackendInstanceAuditChecklist,
     RuntimeSurfaceCommitRendererBackendInstanceAuditOperation,
@@ -433,6 +436,7 @@ pub use linux_shm_buffer_import_adapter::{
     observe_wl_buffer_type_boundary,
     real_texture_creation_readiness_decision_from_frame_callback_completion_policy,
     renderer_backend_concrete_route_decision_from_owner_boundary,
+    renderer_backend_construction_route_proof_from_concrete_route_decision,
     renderer_backend_instance_audit_from_texture_owner_boundary_report,
     renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision,
     shm_buffer_metadata_report_from_adapter_report,
@@ -8484,6 +8488,11 @@ mod nested_socket_probe_gate_tests {
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
+        let phase56n_production_module = production_module
+            .split_once(
+                "pub enum RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation",
+            )
+            .map_or(production_module, |(phase56n, _)| phase56n);
 
         for required in [
             "Phase 56N - Renderer Backend Concrete Route Decision",
@@ -8603,10 +8612,171 @@ mod nested_socket_probe_gate_tests {
             ".done(",
         ] {
             assert!(
-                !production_module.contains(forbidden)
+                !phase56n_production_module.contains(forbidden)
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56N source 包含禁止的真实 renderer/texture/frame token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56O 必须建立 renderer backend construction route proof seam。
+    ///
+    /// 这个 source-contract 要求 Phase 56O 消费 Phase 56N concrete route decision，
+    /// 在 `smithay-linux` 下选择 Smithay DummyRenderer construction proof。它只证明
+    /// construction route 和 cleanup/storage seam，不 import buffer、不创建 texture、
+    /// 不调用 render、不提交 damage，也不发送 frame callback done。
+    #[test]
+    fn renderer_backend_construction_route_proof_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cargo_toml =
+            std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml 必须存在");
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56O SHM adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56O coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56O loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56O orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56O_RENDERER_BACKEND_CONSTRUCTION_ROUTE_PROOF.md"),
+        )
+        .expect("Phase 56O 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56O - Renderer Backend Construction Route Proof",
+            "No-Brake Goal Mode",
+            "DummyRenderer",
+            "renderer_backend_construction_route_proof_available = true",
+            "renderer_backend_concrete_type_compiled = true",
+            "renderer_backend_construction_route_available = true",
+            "renderer_backend_runtime_storage_available = true",
+            "renderer_backend_cleanup_policy_available = true",
+            "renderer_backend_instance_created = true",
+            "renderer_called = false",
+            "texture_created = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56O 文档缺少 renderer backend construction proof 证据: {required}"
+            );
+        }
+
+        for required in [
+            "\"smithay/renderer_test\"",
+            "smithay = { version = \"0.7\", optional = true, default-features = false, features = [\"wayland_frontend\"] }",
+        ] {
+            assert!(
+                cargo_toml.contains(required),
+                "Phase 56O Cargo feature gate 缺少 Dummy construction proof 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation",
+            "ObserveRendererBackendConcreteRouteDecisionReport",
+            "SelectSmithayDummyRendererRoute",
+            "CompileSmithayDummyRendererType",
+            "ConstructSmithayDummyRendererInstance",
+            "StoreRendererBackendInstance",
+            "DefineRendererBackendCleanupPolicy",
+            "BuildRendererBackendConstructionRouteProofReport",
+            "pub enum RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker",
+            "ConstructionRouteDecisionStillBlocked",
+            "RenderTargetBindingStillMissing",
+            "TextureImportStillMissing",
+            "RenderInvocationExplicitlyDeferred",
+            "TextureCreationExplicitlyDeferred",
+            "FrameCallbackCompletionExplicitlyDeferred",
+            "pub struct RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport",
+            "pub fn renderer_backend_construction_route_proof_from_concrete_route_decision",
+            "DummyRenderer::default()",
+            "renderer_backend_construction_route_proof_available: true",
+            "renderer_backend_concrete_type_compiled: true",
+            "renderer_backend_construction_route_available: true",
+            "renderer_backend_runtime_storage_available: true",
+            "renderer_backend_cleanup_policy_available: true",
+            "renderer_backend_instance_created: true",
+            "renderer_called: false",
+            "texture_created: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56O adapter production source 缺少 construction route proof: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_backend_construction_route_proof_report:",
+            "RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport",
+            "renderer_backend_construction_route_proof_from_concrete_route_decision",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56O coordinator 缺少 construction route proof 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_backend_construction_route_proof_invocations: usize",
+            "pub renderer_backend_construction_route_proof_reports:",
+            "Vec<RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport>",
+            "pub renderer_backend_construction_route_proof_available: bool",
+            "pub renderer_backend_construction_route_proof_instance_created: bool",
+            "from_renderer_backend_construction_route_proof_report",
+            "report.renderer_backend_construction_route_proof_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56O loop 缺少 construction route proof 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "renderer_backend_construction_route_proof_invocations",
+            "renderer_backend_construction_route_proof_reports",
+            "renderer_backend_construction_route_proof_available",
+            "renderer_backend_construction_route_proof_instance_created",
+            "renderer_backend_construction_route_proof_renderer_called",
+            "renderer_backend_construction_route_proof_texture_created",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56O orchestrator test/report 缺少 construction route proof 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "import_buffer(",
+            ".damage(",
+            ".done(",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56O source 包含禁止的真实 renderer/texture/frame token: {forbidden}"
             );
         }
     }

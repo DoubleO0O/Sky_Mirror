@@ -9,6 +9,7 @@ smithay-probe = []
 smithay-linux = [
     "smithay-probe",
     "dep:smithay",
+    "smithay/renderer_test",
     "dep:wayland-client",
     "dep:wayland-protocols",
 ]

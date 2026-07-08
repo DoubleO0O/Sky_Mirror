@@ -5,6 +5,7 @@
 //! create textures, call a renderer, submit damage, send frame callback done,
 //! connect input, or mutate core state.
 
+use smithay::backend::renderer::test::DummyRenderer;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 
 use crate::smithay_backend::nested_runtime_coordinator::{
@@ -579,12 +580,22 @@ pub struct RuntimeSurfaceCommitShmBufferMetadataReport {
 
 /// Runtime-owned Linux-only SHM-first adapter skeleton.
 #[derive(Debug, Default)]
-pub struct LinuxShmFirstBufferImportAdapterSkeleton;
+pub struct LinuxShmFirstBufferImportAdapterSkeleton {
+    dummy_renderer_backend_instance: Option<DummyRenderer>,
+}
 
 impl LinuxShmFirstBufferImportAdapterSkeleton {
     /// Create the adapter skeleton.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// 返回 Phase 56O Dummy renderer backend instance 是否已经由 adapter owner 持有。
+    ///
+    /// 该查询只证明 Linux-only adapter 内部有 renderer backend storage seam；它不暴露
+    /// Smithay renderer 类型到 core，也不调用 renderer。
+    pub fn has_dummy_renderer_backend_instance(&self) -> bool {
+        self.dummy_renderer_backend_instance.is_some()
     }
 
     /// Build the evidence-only adapter report from the Phase 55L record.
@@ -720,6 +731,21 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
         report: &RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
     ) -> RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport {
         renderer_backend_concrete_route_decision_from_owner_boundary(report)
+    }
+
+    /// 从 Phase 56N concrete route decision 派生 Phase 56O renderer backend construction proof。
+    ///
+    /// 该 owner 方法会在 Linux-only adapter 内构造并保存 Dummy renderer backend instance，
+    /// 只证明 construction route / storage / cleanup seam。它不 import buffer、不创建
+    /// texture、不调用 render、不提交 damage，也不发送 frame callback done。
+    pub fn renderer_backend_construction_route_proof_from_concrete_route_decision(
+        &mut self,
+        report: &RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
+    ) -> RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport {
+        renderer_backend_construction_route_proof_from_concrete_route_decision(
+            report,
+            &mut self.dummy_renderer_backend_instance,
+        )
     }
 }
 
@@ -4040,6 +4066,214 @@ pub fn renderer_backend_concrete_route_decision_from_owner_boundary(
             RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::CheckRendererBackendCleanupPolicy,
             RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::CheckRenderTargetBinding,
             RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::BuildRendererBackendConcreteRouteDecisionReport,
+        ],
+        blockers,
+    }
+}
+
+/// Phase 56O renderer backend construction route proof 中可定位的操作阶段。
+///
+/// 这些步骤只证明 Smithay test DummyRenderer backend instance 可以在 Linux-only adapter
+/// owner 内构造并保存。它们不 import buffer、不创建 texture、不调用 render、不提交
+/// damage，也不发送 frame callback done。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation {
+    /// 观察 Phase 56N renderer backend concrete route decision report。
+    ObserveRendererBackendConcreteRouteDecisionReport,
+    /// 选择 Smithay DummyRenderer route。
+    SelectSmithayDummyRendererRoute,
+    /// 编译证明 DummyRenderer concrete type 可见。
+    CompileSmithayDummyRendererType,
+    /// 构造 Smithay DummyRenderer backend instance。
+    ConstructSmithayDummyRendererInstance,
+    /// 将 renderer backend instance 存入 adapter owner。
+    StoreRendererBackendInstance,
+    /// 定义 renderer backend cleanup policy。
+    DefineRendererBackendCleanupPolicy,
+    /// 构建 renderer backend construction route proof report。
+    BuildRendererBackendConstructionRouteProofReport,
+}
+
+/// Phase 56O renderer backend construction route proof blocker taxonomy。
+///
+/// blocker 明确说明：本阶段可以构造并持有 Smithay DummyRenderer backend instance，但仍没有
+/// render target binding、texture import、texture creation、render invocation、damage submit
+/// 或 frame callback completion。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker {
+    /// 上游 construction route decision 仍处于 blocked 状态。
+    ConstructionRouteDecisionStillBlocked,
+    /// Smithay DummyRenderer construction route 失败。
+    SmithayDummyRendererConstructionFailed,
+    /// render target binding 仍缺失。
+    RenderTargetBindingStillMissing,
+    /// texture import route 仍缺失。
+    TextureImportStillMissing,
+    /// render invocation 在本阶段显式推迟。
+    RenderInvocationExplicitlyDeferred,
+    /// texture creation 在本阶段显式推迟。
+    TextureCreationExplicitlyDeferred,
+    /// frame callback completion 在本阶段显式推迟。
+    FrameCallbackCompletionExplicitlyDeferred,
+}
+
+/// Phase 56O renderer backend construction route proof report。
+///
+/// 该 report 从 Phase 56N concrete route decision 派生，证明 Smithay DummyRenderer
+/// backend 可以在 adapter owner 内构造并保存。它只报告 renderer backend instance
+/// construction/storage/cleanup seam，不 import buffer、不创建 texture、不调用 renderer、
+/// 不提交 damage、不发送 frame callback done、不接 input，也不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport {
+    /// construction route proof seam 是否可用。
+    pub renderer_backend_construction_route_proof_available: bool,
+
+    /// 是否观察到 Phase 56N concrete route decision report。
+    pub source_renderer_backend_concrete_route_decision_report_observed: bool,
+
+    /// 被消费的 Phase 56N concrete route decision report。
+    pub source_renderer_backend_concrete_route_decision_report:
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
+
+    /// construction route proof 是否仍 blocked。
+    pub renderer_backend_construction_route_proof_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub renderer_backend_construction_route_proof_blocker_reason: &'static str,
+
+    /// 上游 concrete route decision 是否仍 blocked。
+    pub renderer_backend_concrete_route_decision_still_blocked: bool,
+
+    /// concrete renderer backend type 是否已编译证明。
+    pub renderer_backend_concrete_type_compiled: bool,
+
+    /// concrete renderer backend type 名称。
+    pub renderer_backend_concrete_type_name: &'static str,
+
+    /// construction route 是否可用。
+    pub renderer_backend_construction_route_available: bool,
+
+    /// runtime storage seam 是否可用。
+    pub renderer_backend_runtime_storage_available: bool,
+
+    /// cleanup policy 是否可用。
+    pub renderer_backend_cleanup_policy_available: bool,
+
+    /// render target binding 是否可用；Phase 56O 固定 false。
+    pub render_target_binding_available: bool,
+
+    /// 是否允许构造 renderer backend instance。
+    pub renderer_backend_construction_allowed: bool,
+
+    /// 是否已创建 renderer backend instance。
+    pub renderer_backend_instance_created: bool,
+
+    /// Phase 56O 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56O 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56O 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56O 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56O 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56O 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56O 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56O 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// construction route proof 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation>,
+
+    /// 阻止真实 render/texture/frame completion 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker>,
+}
+
+/// 从 Phase 56N concrete route decision 派生 Phase 56O construction route proof。
+///
+/// 这是 Phase 56O 的唯一执行入口：它会调用 DummyRenderer::default()，并把成功构造的
+/// renderer backend instance 存入 Linux-only adapter owner。该函数不 import buffer、
+/// 不创建 texture、不调用 render、不提交 damage，也不发送 frame callback done。
+#[must_use = "renderer backend construction proof is not render execution"]
+pub fn renderer_backend_construction_route_proof_from_concrete_route_decision(
+    report: &RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport,
+    dummy_renderer_backend_instance: &mut Option<DummyRenderer>,
+) -> RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport {
+    *dummy_renderer_backend_instance = Some(DummyRenderer::default());
+    let renderer_backend_instance_created = dummy_renderer_backend_instance.is_some();
+
+    let mut blockers = Vec::new();
+    if report.renderer_backend_concrete_route_decision_blocked {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker::ConstructionRouteDecisionStillBlocked,
+        );
+    }
+    if !renderer_backend_instance_created {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker::SmithayDummyRendererConstructionFailed,
+        );
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker::RenderTargetBindingStillMissing,
+        RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker::TextureImportStillMissing,
+        RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker::RenderInvocationExplicitlyDeferred,
+        RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker::TextureCreationExplicitlyDeferred,
+        RuntimeSurfaceCommitRendererBackendConstructionRouteProofBlocker::FrameCallbackCompletionExplicitlyDeferred,
+    ]);
+
+    // Phase 56O Smithay DummyRenderer construction success truth table:
+    // renderer_backend_construction_route_proof_available: true
+    // renderer_backend_concrete_type_compiled: true
+    // renderer_backend_construction_route_available: true
+    // renderer_backend_runtime_storage_available: true
+    // renderer_backend_cleanup_policy_available: true
+    // renderer_backend_instance_created: true
+    // renderer_called: false
+    // texture_created: false
+    RuntimeSurfaceCommitRendererBackendConstructionRouteProofReport {
+        renderer_backend_construction_route_proof_available: true,
+        source_renderer_backend_concrete_route_decision_report_observed: report
+            .renderer_backend_concrete_route_decision_available,
+        source_renderer_backend_concrete_route_decision_report: report.clone(),
+        renderer_backend_construction_route_proof_blocked: true,
+        renderer_backend_construction_route_proof_blocker_reason:
+            "renderer backend construction route proof only: Smithay DummyRenderer instance exists, but render target binding, texture import, texture creation, render invocation, damage, and frame callback completion are still deferred",
+        renderer_backend_concrete_route_decision_still_blocked: report
+            .renderer_backend_concrete_route_decision_blocked,
+        renderer_backend_concrete_type_compiled: true,
+        renderer_backend_concrete_type_name: std::any::type_name::<DummyRenderer>(),
+        renderer_backend_construction_route_available: renderer_backend_instance_created,
+        renderer_backend_runtime_storage_available: renderer_backend_instance_created,
+        renderer_backend_cleanup_policy_available: true,
+        render_target_binding_available: false,
+        renderer_backend_construction_allowed: true,
+        renderer_backend_instance_created,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation::ObserveRendererBackendConcreteRouteDecisionReport,
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation::SelectSmithayDummyRendererRoute,
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation::CompileSmithayDummyRendererType,
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation::ConstructSmithayDummyRendererInstance,
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation::StoreRendererBackendInstance,
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation::DefineRendererBackendCleanupPolicy,
+            RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation::BuildRendererBackendConstructionRouteProofReport,
         ],
         blockers,
     }
