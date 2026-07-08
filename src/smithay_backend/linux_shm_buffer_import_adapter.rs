@@ -709,6 +709,18 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport {
         renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision(report)
     }
+
+    /// 从 Phase 56M owner boundary 派生 Phase 56N renderer backend concrete route decision。
+    ///
+    /// 该 owner 方法只选择 future concrete renderer candidate 与 construction route
+    /// blockers。它不构造 renderer backend instance，不调用 renderer，不创建 texture，
+    /// 不提交 damage，也不发送 frame callback done。
+    pub fn renderer_backend_concrete_route_decision_from_owner_boundary(
+        &mut self,
+        report: &RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
+    ) -> RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport {
+        renderer_backend_concrete_route_decision_from_owner_boundary(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -3831,6 +3843,203 @@ pub fn renderer_backend_owner_boundary_from_real_texture_creation_readiness_deci
             RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::DefineRendererBackendAvailabilityOwner,
             RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::SelectMinimalRendererPath,
             RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::BuildRendererBackendOwnerBoundaryReport,
+        ],
+        blockers,
+    }
+}
+
+/// Phase 56N renderer backend concrete route decision 中可定位的纯数据操作阶段。
+///
+/// 这些步骤只选择候选 concrete renderer route 并记录 construction blockers。它们不构造
+/// renderer backend instance，不调用 renderer，也不触发 texture / damage / frame callback
+/// done 能力。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation {
+    /// 观察 Phase 56M renderer backend owner boundary report。
+    ObserveRendererBackendOwnerBoundaryReport,
+    /// 选择 renderer backend concrete type candidate。
+    SelectRendererBackendConcreteTypeCandidate,
+    /// 检查 renderer backend construction route。
+    CheckRendererBackendConstructionRoute,
+    /// 检查 runtime storage seam。
+    CheckRendererBackendRuntimeStorage,
+    /// 检查 cleanup policy。
+    CheckRendererBackendCleanupPolicy,
+    /// 检查 render target binding。
+    CheckRenderTargetBinding,
+    /// 构建 renderer backend concrete route decision report。
+    BuildRendererBackendConcreteRouteDecisionReport,
+}
+
+/// Phase 56N renderer backend concrete route decision blocker taxonomy。
+///
+/// blocker 明确说明：本阶段只选择 candidate，不声称 concrete type 已编译，也不声称
+/// construction route 可用。真实 renderer backend instance 必须等后续 Linux-target
+/// skeleton 阶段证明。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker {
+    /// 上游 renderer backend owner boundary 仍处于 blocked 状态。
+    RendererBackendOwnerBoundaryStillBlocked,
+    /// 缺少 concrete renderer backend type 的 compile proof。
+    MissingConcreteRendererBackendTypeCompileProof,
+    /// 缺少 renderer backend construction route。
+    MissingRendererBackendConstructionRoute,
+    /// 缺少 runtime storage seam。
+    MissingRendererBackendRuntimeStorage,
+    /// 缺少 cleanup policy。
+    MissingRendererBackendCleanupPolicy,
+    /// 缺少 render target binding。
+    MissingRenderTargetBinding,
+    /// 本阶段明确禁用 renderer backend construction。
+    RendererBackendConstructionExplicitlyDisabled,
+    /// route decision 存在，但没有真实 renderer backend instance。
+    ConcreteRouteDecisionWithoutBackendInstance,
+}
+
+/// Phase 56N renderer backend concrete route decision report。
+///
+/// 该 report 从 Phase 56M owner boundary 派生，只记录 future concrete route candidate
+/// 和仍缺失的 construction proof。它不创建 renderer backend instance，不创建 texture，
+/// 不调用 renderer，不提交 damage，不发送 frame callback done，不接 input，也不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport {
+    /// concrete route decision seam 是否可用。
+    pub renderer_backend_concrete_route_decision_available: bool,
+
+    /// 是否观察到 Phase 56M owner boundary report。
+    pub source_renderer_backend_owner_boundary_report_observed: bool,
+
+    /// 被消费的 Phase 56M owner boundary report。
+    pub source_renderer_backend_owner_boundary_report:
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
+
+    /// concrete route decision 是否仍 blocked。
+    pub renderer_backend_concrete_route_decision_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub renderer_backend_concrete_route_decision_blocker_reason: &'static str,
+
+    /// 上游 renderer backend owner boundary 是否仍 blocked。
+    pub renderer_backend_owner_boundary_still_blocked: bool,
+
+    /// 是否已定义 concrete type candidate。
+    pub renderer_backend_concrete_type_candidate_defined: bool,
+
+    /// concrete type candidate 名称；这只是 pure-data route label。
+    pub renderer_backend_concrete_type_candidate: &'static str,
+
+    /// concrete renderer backend type 是否已有 compile proof；Phase 56N 固定 false。
+    pub renderer_backend_concrete_type_compiled: bool,
+
+    /// construction route 是否可用；Phase 56N 固定 false。
+    pub renderer_backend_construction_route_available: bool,
+
+    /// runtime storage seam 是否可用；Phase 56N 固定 false。
+    pub renderer_backend_runtime_storage_available: bool,
+
+    /// cleanup policy 是否可用；Phase 56N 固定 false。
+    pub renderer_backend_cleanup_policy_available: bool,
+
+    /// render target binding 是否可用；Phase 56N 固定 false。
+    pub render_target_binding_available: bool,
+
+    /// 是否允许构造 renderer backend instance；Phase 56N 固定 false。
+    pub renderer_backend_construction_allowed: bool,
+
+    /// 是否已创建 renderer backend instance；Phase 56N 固定 false。
+    pub renderer_backend_instance_created: bool,
+
+    /// Phase 56N 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56N 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56N 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56N 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56N 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56N 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56N 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56N 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// concrete route decision 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation>,
+
+    /// 阻止真实 renderer backend construction 的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker>,
+}
+
+/// 从 Phase 56M renderer backend owner boundary 派生 Phase 56N concrete route decision。
+///
+/// 这是 Phase 56N 的唯一执行入口：它只生成 pure-data decision report。本函数不构造
+/// renderer backend instance，不创建 texture，不调用 renderer，不提交 damage，也不发送 frame
+/// callback done。
+#[must_use = "renderer backend concrete route decision is not renderer backend construction"]
+pub fn renderer_backend_concrete_route_decision_from_owner_boundary(
+    report: &RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
+) -> RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport {
+    let mut blockers = Vec::new();
+    if report.renderer_backend_owner_boundary_blocked {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::RendererBackendOwnerBoundaryStillBlocked,
+        );
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingConcreteRendererBackendTypeCompileProof,
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingRendererBackendConstructionRoute,
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingRendererBackendRuntimeStorage,
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingRendererBackendCleanupPolicy,
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::MissingRenderTargetBinding,
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::RendererBackendConstructionExplicitlyDisabled,
+        RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionBlocker::ConcreteRouteDecisionWithoutBackendInstance,
+    ]);
+
+    RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionReport {
+        renderer_backend_concrete_route_decision_available: true,
+        source_renderer_backend_owner_boundary_report_observed: report
+            .renderer_backend_owner_boundary_available,
+        source_renderer_backend_owner_boundary_report: report.clone(),
+        renderer_backend_concrete_route_decision_blocked: true,
+        renderer_backend_concrete_route_decision_blocker_reason:
+            "renderer backend concrete route decision only: missing compile proof, construction route, runtime storage, cleanup policy, render target binding, and backend instance",
+        renderer_backend_owner_boundary_still_blocked: report
+            .renderer_backend_owner_boundary_blocked,
+        renderer_backend_concrete_type_candidate_defined: true,
+        renderer_backend_concrete_type_candidate: "smithay_linux_nested_renderer_candidate",
+        renderer_backend_concrete_type_compiled: false,
+        renderer_backend_construction_route_available: false,
+        renderer_backend_runtime_storage_available: false,
+        renderer_backend_cleanup_policy_available: false,
+        render_target_binding_available: false,
+        renderer_backend_construction_allowed: false,
+        renderer_backend_instance_created: false,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::ObserveRendererBackendOwnerBoundaryReport,
+            RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::SelectRendererBackendConcreteTypeCandidate,
+            RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::CheckRendererBackendConstructionRoute,
+            RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::CheckRendererBackendRuntimeStorage,
+            RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::CheckRendererBackendCleanupPolicy,
+            RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::CheckRenderTargetBinding,
+            RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation::BuildRendererBackendConcreteRouteDecisionReport,
         ],
         blockers,
     }
