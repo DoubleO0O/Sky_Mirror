@@ -24,6 +24,7 @@ use crate::{
             RuntimeSurfaceCommitFrameCallbackCompletionPolicyReport,
             RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
             RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
             RuntimeSurfaceCommitShmBufferMetadataReport,
             RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
             RuntimeSurfaceCommitTextureCreationNoopReport,
@@ -4540,6 +4541,10 @@ pub struct NestedRuntimeLiveAdmissionUnmapPumpReport {
     /// Phase 56L real texture creation readiness decision report。
     pub real_texture_creation_readiness_decision_report:
         RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
+
+    /// Phase 56M renderer backend owner boundary report。
+    pub renderer_backend_owner_boundary_report:
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
 }
 
 /// Linux-only nested client lifecycle single-pump coordinator。
@@ -4944,6 +4949,11 @@ impl NestedRuntimeCoordinator {
             .real_texture_creation_readiness_decision_from_frame_callback_completion_policy(
                 &frame_callback_completion_policy_report,
             );
+        let renderer_backend_owner_boundary_report = self
+            .shm_first_buffer_import_adapter
+            .renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision(
+                &real_texture_creation_readiness_decision_report,
+            );
 
         NestedRuntimeLiveAdmissionUnmapPumpReport {
             lifecycle_report,
@@ -4983,6 +4993,7 @@ impl NestedRuntimeCoordinator {
             damage_to_texture_mapping_audit_report,
             frame_callback_completion_policy_report,
             real_texture_creation_readiness_decision_report,
+            renderer_backend_owner_boundary_report,
         }
     }
 

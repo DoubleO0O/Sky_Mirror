@@ -25,6 +25,8 @@ use crate::{
         RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
         RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
         RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
         RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataReport,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
         RuntimeSurfaceCommitShmFirstBufferImportAdapterReport,
@@ -2709,6 +2711,112 @@ pub struct NestedRuntimeSurfaceCommitRunSummary {
     /// Phase 56L 是否触发 core mutation；固定保持 false。
     pub real_texture_creation_core_mutation_invoked: bool,
 
+    /// Phase 56M renderer backend owner boundary seam 被调用的次数。
+    pub renderer_backend_owner_boundary_invocations: usize,
+
+    /// 按 FIFO 顺序保存的 renderer backend owner boundary reports。
+    pub renderer_backend_owner_boundary_reports:
+        Vec<RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport>,
+
+    /// Phase 56M renderer backend owner boundary 是否可用。
+    pub renderer_backend_owner_boundary_available: bool,
+
+    /// Phase 56M renderer backend owner boundary 是否 blocked。
+    pub renderer_backend_owner_boundary_blocked: bool,
+
+    /// Phase 56M 是否观察到 56L readiness decision。
+    pub renderer_backend_owner_boundary_readiness_decision_observed: bool,
+
+    /// Phase 56M 上游 readiness decision 是否仍 blocked。
+    pub renderer_backend_owner_boundary_readiness_still_blocked: bool,
+
+    /// Phase 56M renderer backend owner 是否已定义。
+    pub renderer_backend_owner_defined: bool,
+
+    /// Phase 56M renderer backend lifecycle owner 是否已定义。
+    pub renderer_backend_lifecycle_owner_defined: bool,
+
+    /// Phase 56M renderer backend cleanup owner 是否已定义。
+    pub renderer_backend_cleanup_owner_defined: bool,
+
+    /// Phase 56M renderer backend error owner 是否已定义。
+    pub renderer_backend_error_owner_defined: bool,
+
+    /// Phase 56M renderer backend availability owner 是否已定义。
+    pub renderer_backend_availability_owner_defined: bool,
+
+    /// Phase 56M 是否选择最小 renderer path。
+    pub renderer_backend_minimal_renderer_path_selected: bool,
+
+    /// Phase 56M 真实 renderer backend instance 是否可用；固定保持 false。
+    pub renderer_backend_owner_boundary_instance_available: bool,
+
+    /// Phase 56M 是否已选择 concrete renderer backend type；固定保持 false。
+    pub renderer_backend_concrete_type_selected: bool,
+
+    /// Phase 56M renderer backend construction route 是否可用；固定保持 false。
+    pub renderer_backend_construction_route_available: bool,
+
+    /// Phase 56M runtime storage seam 是否可用；固定保持 false。
+    pub renderer_backend_runtime_storage_available: bool,
+
+    /// Phase 56M cleanup implementation 是否存在；固定保持 false。
+    pub renderer_backend_cleanup_implemented: bool,
+
+    /// Phase 56M render target binding 是否可用；固定保持 false。
+    pub renderer_backend_render_target_binding_available: bool,
+
+    /// Phase 56M 是否允许创建 renderer backend；固定保持 false。
+    pub renderer_backend_creation_allowed: bool,
+
+    /// Phase 56M 是否缺少 renderer backend instance。
+    pub renderer_backend_owner_boundary_missing_instance: bool,
+
+    /// Phase 56M 是否缺少 concrete renderer backend type。
+    pub renderer_backend_owner_boundary_missing_concrete_type: bool,
+
+    /// Phase 56M 是否缺少 construction route。
+    pub renderer_backend_owner_boundary_missing_construction_route: bool,
+
+    /// Phase 56M 是否缺少 runtime storage。
+    pub renderer_backend_owner_boundary_missing_runtime_storage: bool,
+
+    /// Phase 56M 是否缺少 cleanup implementation。
+    pub renderer_backend_owner_boundary_missing_cleanup_implementation: bool,
+
+    /// Phase 56M 是否缺少 render target binding。
+    pub renderer_backend_owner_boundary_missing_render_target_binding: bool,
+
+    /// Phase 56M 是否明确禁用 renderer backend creation。
+    pub renderer_backend_owner_boundary_creation_explicitly_disabled: bool,
+
+    /// Phase 56M 是否只有 owner boundary、没有真实 renderer backend instance。
+    pub renderer_backend_owner_boundary_without_instance: bool,
+
+    /// Phase 56M 是否尝试 import buffer；固定保持 false。
+    pub renderer_backend_owner_boundary_buffer_import_attempted: bool,
+
+    /// Phase 56M 是否 import buffer；固定保持 false。
+    pub renderer_backend_owner_boundary_buffer_imported: bool,
+
+    /// Phase 56M 是否创建 texture；固定保持 false。
+    pub renderer_backend_owner_boundary_texture_created: bool,
+
+    /// Phase 56M 是否调用 renderer；固定保持 false。
+    pub renderer_backend_owner_boundary_renderer_called: bool,
+
+    /// Phase 56M 是否提交 damage；固定保持 false。
+    pub renderer_backend_owner_boundary_damage_submitted: bool,
+
+    /// Phase 56M 是否发送 frame callback done；固定保持 false。
+    pub renderer_backend_owner_boundary_frame_callback_done_sent: bool,
+
+    /// Phase 56M 是否接入 input；固定保持 false。
+    pub renderer_backend_owner_boundary_input_support: bool,
+
+    /// Phase 56M 是否触发 core mutation；固定保持 false。
+    pub renderer_backend_owner_boundary_core_mutation_invoked: bool,
+
     /// 是否处理 buffer attach；本阶段固定保持 false。
     pub buffer_attached: bool,
 
@@ -3466,6 +3574,41 @@ impl NestedRuntimeSurfaceCommitRunSummary {
             real_texture_creation_frame_callback_done_sent: false,
             real_texture_creation_input_support: false,
             real_texture_creation_core_mutation_invoked: false,
+            renderer_backend_owner_boundary_invocations: 0,
+            renderer_backend_owner_boundary_reports: Vec::new(),
+            renderer_backend_owner_boundary_available: false,
+            renderer_backend_owner_boundary_blocked: false,
+            renderer_backend_owner_boundary_readiness_decision_observed: false,
+            renderer_backend_owner_boundary_readiness_still_blocked: false,
+            renderer_backend_owner_defined: false,
+            renderer_backend_lifecycle_owner_defined: false,
+            renderer_backend_cleanup_owner_defined: false,
+            renderer_backend_error_owner_defined: false,
+            renderer_backend_availability_owner_defined: false,
+            renderer_backend_minimal_renderer_path_selected: false,
+            renderer_backend_owner_boundary_instance_available: false,
+            renderer_backend_concrete_type_selected: false,
+            renderer_backend_construction_route_available: false,
+            renderer_backend_runtime_storage_available: false,
+            renderer_backend_cleanup_implemented: false,
+            renderer_backend_render_target_binding_available: false,
+            renderer_backend_creation_allowed: false,
+            renderer_backend_owner_boundary_missing_instance: false,
+            renderer_backend_owner_boundary_missing_concrete_type: false,
+            renderer_backend_owner_boundary_missing_construction_route: false,
+            renderer_backend_owner_boundary_missing_runtime_storage: false,
+            renderer_backend_owner_boundary_missing_cleanup_implementation: false,
+            renderer_backend_owner_boundary_missing_render_target_binding: false,
+            renderer_backend_owner_boundary_creation_explicitly_disabled: false,
+            renderer_backend_owner_boundary_without_instance: false,
+            renderer_backend_owner_boundary_buffer_import_attempted: false,
+            renderer_backend_owner_boundary_buffer_imported: false,
+            renderer_backend_owner_boundary_texture_created: false,
+            renderer_backend_owner_boundary_renderer_called: false,
+            renderer_backend_owner_boundary_damage_submitted: false,
+            renderer_backend_owner_boundary_frame_callback_done_sent: false,
+            renderer_backend_owner_boundary_input_support: false,
+            renderer_backend_owner_boundary_core_mutation_invoked: false,
             buffer_attached: report.buffer_attached,
             damage_submitted: report.damage_submitted,
             frame_callback_requested: report.frame_callback_requested,
@@ -5164,6 +5307,82 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         }
     }
 
+    fn from_renderer_backend_owner_boundary_report(
+        report: &RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
+    ) -> Self {
+        let has_blocker = |blocker| report.blockers.contains(&blocker);
+
+        Self {
+            renderer_backend_owner_boundary_invocations: usize::from(
+                report.renderer_backend_owner_boundary_available,
+            ),
+            renderer_backend_owner_boundary_reports: vec![report.clone()],
+            renderer_backend_owner_boundary_available: report
+                .renderer_backend_owner_boundary_available,
+            renderer_backend_owner_boundary_blocked: report
+                .renderer_backend_owner_boundary_blocked,
+            renderer_backend_owner_boundary_readiness_decision_observed: report
+                .source_real_texture_creation_readiness_decision_report_observed,
+            renderer_backend_owner_boundary_readiness_still_blocked: report
+                .real_texture_creation_readiness_still_blocked,
+            renderer_backend_owner_defined: report.renderer_backend_owner_defined,
+            renderer_backend_lifecycle_owner_defined: report
+                .renderer_backend_lifecycle_owner_defined,
+            renderer_backend_cleanup_owner_defined: report.renderer_backend_cleanup_owner_defined,
+            renderer_backend_error_owner_defined: report.renderer_backend_error_owner_defined,
+            renderer_backend_availability_owner_defined: report
+                .renderer_backend_availability_owner_defined,
+            renderer_backend_minimal_renderer_path_selected: report
+                .minimal_renderer_path_selected,
+            renderer_backend_owner_boundary_instance_available: report
+                .renderer_backend_instance_available,
+            renderer_backend_concrete_type_selected: report
+                .renderer_backend_concrete_type_selected,
+            renderer_backend_construction_route_available: report
+                .renderer_backend_construction_route_available,
+            renderer_backend_runtime_storage_available: report
+                .renderer_backend_runtime_storage_available,
+            renderer_backend_cleanup_implemented: report.renderer_backend_cleanup_implemented,
+            renderer_backend_render_target_binding_available: report
+                .render_target_binding_available,
+            renderer_backend_creation_allowed: report.renderer_backend_creation_allowed,
+            renderer_backend_owner_boundary_missing_instance: has_blocker(
+                RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendInstance,
+            ),
+            renderer_backend_owner_boundary_missing_concrete_type: has_blocker(
+                RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendConcreteType,
+            ),
+            renderer_backend_owner_boundary_missing_construction_route: has_blocker(
+                RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendConstructionRoute,
+            ),
+            renderer_backend_owner_boundary_missing_runtime_storage: has_blocker(
+                RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendRuntimeStorage,
+            ),
+            renderer_backend_owner_boundary_missing_cleanup_implementation: has_blocker(
+                RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendCleanupImplementation,
+            ),
+            renderer_backend_owner_boundary_missing_render_target_binding: has_blocker(
+                RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRenderTargetBinding,
+            ),
+            renderer_backend_owner_boundary_creation_explicitly_disabled: has_blocker(
+                RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::RendererBackendCreationExplicitlyDisabled,
+            ),
+            renderer_backend_owner_boundary_without_instance: has_blocker(
+                RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::RendererBackendOwnerBoundaryWithoutInstance,
+            ),
+            renderer_backend_owner_boundary_buffer_import_attempted: report.buffer_import_attempted,
+            renderer_backend_owner_boundary_buffer_imported: report.buffer_imported,
+            renderer_backend_owner_boundary_texture_created: report.texture_created,
+            renderer_backend_owner_boundary_renderer_called: report.renderer_called,
+            renderer_backend_owner_boundary_damage_submitted: report.damage_submitted,
+            renderer_backend_owner_boundary_frame_callback_done_sent: report
+                .frame_callback_done_sent,
+            renderer_backend_owner_boundary_input_support: report.input_support,
+            renderer_backend_owner_boundary_core_mutation_invoked: report.core_mutation_invoked,
+            ..Self::default()
+        }
+    }
+
     fn has_progress(&self) -> bool {
         self.commit_observations_drained > 0
             || self.commit_observation_errors > 0
@@ -6595,6 +6814,72 @@ impl NestedRuntimeSurfaceCommitRunSummary {
         self.real_texture_creation_input_support |= delta.real_texture_creation_input_support;
         self.real_texture_creation_core_mutation_invoked |=
             delta.real_texture_creation_core_mutation_invoked;
+        self.renderer_backend_owner_boundary_invocations = self
+            .renderer_backend_owner_boundary_invocations
+            .saturating_add(delta.renderer_backend_owner_boundary_invocations);
+        self.renderer_backend_owner_boundary_reports
+            .extend(delta.renderer_backend_owner_boundary_reports);
+        self.renderer_backend_owner_boundary_available |=
+            delta.renderer_backend_owner_boundary_available;
+        self.renderer_backend_owner_boundary_blocked |=
+            delta.renderer_backend_owner_boundary_blocked;
+        self.renderer_backend_owner_boundary_readiness_decision_observed |=
+            delta.renderer_backend_owner_boundary_readiness_decision_observed;
+        self.renderer_backend_owner_boundary_readiness_still_blocked |=
+            delta.renderer_backend_owner_boundary_readiness_still_blocked;
+        self.renderer_backend_owner_defined |= delta.renderer_backend_owner_defined;
+        self.renderer_backend_lifecycle_owner_defined |=
+            delta.renderer_backend_lifecycle_owner_defined;
+        self.renderer_backend_cleanup_owner_defined |= delta.renderer_backend_cleanup_owner_defined;
+        self.renderer_backend_error_owner_defined |= delta.renderer_backend_error_owner_defined;
+        self.renderer_backend_availability_owner_defined |=
+            delta.renderer_backend_availability_owner_defined;
+        self.renderer_backend_minimal_renderer_path_selected |=
+            delta.renderer_backend_minimal_renderer_path_selected;
+        self.renderer_backend_owner_boundary_instance_available |=
+            delta.renderer_backend_owner_boundary_instance_available;
+        self.renderer_backend_concrete_type_selected |=
+            delta.renderer_backend_concrete_type_selected;
+        self.renderer_backend_construction_route_available |=
+            delta.renderer_backend_construction_route_available;
+        self.renderer_backend_runtime_storage_available |=
+            delta.renderer_backend_runtime_storage_available;
+        self.renderer_backend_cleanup_implemented |= delta.renderer_backend_cleanup_implemented;
+        self.renderer_backend_render_target_binding_available |=
+            delta.renderer_backend_render_target_binding_available;
+        self.renderer_backend_creation_allowed |= delta.renderer_backend_creation_allowed;
+        self.renderer_backend_owner_boundary_missing_instance |=
+            delta.renderer_backend_owner_boundary_missing_instance;
+        self.renderer_backend_owner_boundary_missing_concrete_type |=
+            delta.renderer_backend_owner_boundary_missing_concrete_type;
+        self.renderer_backend_owner_boundary_missing_construction_route |=
+            delta.renderer_backend_owner_boundary_missing_construction_route;
+        self.renderer_backend_owner_boundary_missing_runtime_storage |=
+            delta.renderer_backend_owner_boundary_missing_runtime_storage;
+        self.renderer_backend_owner_boundary_missing_cleanup_implementation |=
+            delta.renderer_backend_owner_boundary_missing_cleanup_implementation;
+        self.renderer_backend_owner_boundary_missing_render_target_binding |=
+            delta.renderer_backend_owner_boundary_missing_render_target_binding;
+        self.renderer_backend_owner_boundary_creation_explicitly_disabled |=
+            delta.renderer_backend_owner_boundary_creation_explicitly_disabled;
+        self.renderer_backend_owner_boundary_without_instance |=
+            delta.renderer_backend_owner_boundary_without_instance;
+        self.renderer_backend_owner_boundary_buffer_import_attempted |=
+            delta.renderer_backend_owner_boundary_buffer_import_attempted;
+        self.renderer_backend_owner_boundary_buffer_imported |=
+            delta.renderer_backend_owner_boundary_buffer_imported;
+        self.renderer_backend_owner_boundary_texture_created |=
+            delta.renderer_backend_owner_boundary_texture_created;
+        self.renderer_backend_owner_boundary_renderer_called |=
+            delta.renderer_backend_owner_boundary_renderer_called;
+        self.renderer_backend_owner_boundary_damage_submitted |=
+            delta.renderer_backend_owner_boundary_damage_submitted;
+        self.renderer_backend_owner_boundary_frame_callback_done_sent |=
+            delta.renderer_backend_owner_boundary_frame_callback_done_sent;
+        self.renderer_backend_owner_boundary_input_support |=
+            delta.renderer_backend_owner_boundary_input_support;
+        self.renderer_backend_owner_boundary_core_mutation_invoked |=
+            delta.renderer_backend_owner_boundary_core_mutation_invoked;
         self.buffer_attached |= delta.buffer_attached;
         self.damage_submitted |= delta.damage_submitted;
         self.frame_callback_requested |= delta.frame_callback_requested;
@@ -6897,6 +7182,11 @@ impl ObservedNestedRuntimePumpReport {
         surface_commit.observe(
             NestedRuntimeSurfaceCommitRunSummary::from_real_texture_creation_readiness_decision_report(
                 &report.real_texture_creation_readiness_decision_report,
+            ),
+        );
+        surface_commit.observe(
+            NestedRuntimeSurfaceCommitRunSummary::from_renderer_backend_owner_boundary_report(
+                &report.renderer_backend_owner_boundary_report,
             ),
         );
 
