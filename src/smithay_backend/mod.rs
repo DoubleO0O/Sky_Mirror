@@ -398,6 +398,10 @@ pub use linux_shm_buffer_import_adapter::{
     RuntimeSurfaceCommitRendererBackendInstanceAuditOperation,
     RuntimeSurfaceCommitRendererBackendInstanceAuditReport,
     RuntimeSurfaceCommitRendererBackendInstancePolicy,
+    RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker,
+    RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation,
+    RuntimeSurfaceCommitRendererBackendOwnerBoundaryPolicy,
+    RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport,
     RuntimeSurfaceCommitShmBufferMetadataBlocker, RuntimeSurfaceCommitShmBufferMetadataOperation,
     RuntimeSurfaceCommitShmBufferMetadataReport,
     RuntimeSurfaceCommitShmFirstBufferImportAdapterBlocker,
@@ -426,6 +430,7 @@ pub use linux_shm_buffer_import_adapter::{
     observe_wl_buffer_type_boundary,
     real_texture_creation_readiness_decision_from_frame_callback_completion_policy,
     renderer_backend_instance_audit_from_texture_owner_boundary_report,
+    renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision,
     shm_buffer_metadata_report_from_adapter_report,
     shm_first_buffer_import_adapter_report_from_actual_attempt_record,
     texture_creation_noop_report_from_precondition_audit,
@@ -8279,6 +8284,168 @@ mod nested_socket_probe_gate_tests {
                     && !runtime_loop.contains(forbidden)
                     && !orchestrator.contains(forbidden),
                 "Phase 56L source 包含禁止的真实 texture/render/frame token: {forbidden}"
+            );
+        }
+    }
+
+    /// Phase 56M 必须建立 real renderer backend owner boundary seam。
+    ///
+    /// 这个 source-contract 只允许从 Phase 56L real texture creation readiness decision
+    /// 派生 pure-data owner boundary；它不创建 renderer backend instance，不创建
+    /// texture，不调用 renderer，不提交 damage，也不发送 frame callback done。
+    #[test]
+    fn renderer_backend_owner_boundary_source_exists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let module = std::fs::read_to_string(
+            root.join("src/smithay_backend/linux_shm_buffer_import_adapter.rs"),
+        )
+        .expect("Phase 56M SHM adapter module 必须存在");
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("Phase 56M coordinator source 必须存在");
+        let runtime_loop =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_loop.rs"))
+                .expect("Phase 56M loop source 必须存在");
+        let orchestrator = std::fs::read_to_string(
+            root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
+        )
+        .expect("Phase 56M orchestrator source 必须存在");
+        let phase_doc = std::fs::read_to_string(
+            root.join("docs/phases/PHASE_56M_REAL_RENDERER_BACKEND_OWNER_BOUNDARY.md"),
+        )
+        .expect("Phase 56M 文档必须存在");
+
+        let production_module = module
+            .split_once("#[cfg(test)]")
+            .map_or(module.as_str(), |(production, _)| production);
+
+        for required in [
+            "Phase 56M - Real Renderer Backend Owner Boundary",
+            "No-Brake Goal Mode",
+            "renderer_backend_owner_boundary_available = true",
+            "renderer_backend_owner_boundary_blocked = true",
+            "renderer_backend_owner_defined = true",
+            "minimal_renderer_path_selected = true",
+            "renderer_backend_instance_available = false",
+            "renderer_backend_creation_allowed = false",
+            "renderer_called = false",
+        ] {
+            assert!(
+                phase_doc.contains(required),
+                "Phase 56M 文档缺少 renderer backend owner boundary 证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub enum RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation",
+            "ObserveRealTextureCreationReadinessDecision",
+            "DefineRendererBackendOwner",
+            "DefineRendererBackendLifecycleOwner",
+            "DefineRendererBackendCleanupOwner",
+            "DefineRendererBackendErrorOwner",
+            "SelectMinimalRendererPath",
+            "BuildRendererBackendOwnerBoundaryReport",
+            "pub enum RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker",
+            "RealTextureCreationReadinessStillBlocked",
+            "MissingRendererBackendInstance",
+            "MissingRendererBackendConcreteType",
+            "MissingRendererBackendConstructionRoute",
+            "MissingRendererBackendRuntimeStorage",
+            "MissingRendererBackendCleanupImplementation",
+            "MissingRenderTargetBinding",
+            "RendererBackendCreationExplicitlyDisabled",
+            "pub struct RuntimeSurfaceCommitRendererBackendOwnerBoundaryPolicy",
+            "pub struct RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport",
+            "pub fn renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision",
+            "renderer_backend_owner_boundary_available: true",
+            "renderer_backend_owner_boundary_blocked: true",
+            "renderer_backend_owner_defined: true",
+            "renderer_backend_lifecycle_owner_defined: true",
+            "renderer_backend_cleanup_owner_defined: true",
+            "renderer_backend_error_owner_defined: true",
+            "renderer_backend_availability_owner_defined: true",
+            "minimal_renderer_path_selected: true",
+            "renderer_backend_instance_available: false",
+            "renderer_backend_creation_allowed: false",
+            "buffer_import_attempted: false",
+            "buffer_imported: false",
+            "texture_created: false",
+            "renderer_called: false",
+            "damage_submitted: false",
+            "frame_callback_done_sent: false",
+            "input_support: false",
+            "core_mutation_invoked: false",
+        ] {
+            assert!(
+                production_module.contains(required),
+                "Phase 56M adapter production source 缺少 renderer backend owner boundary: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_backend_owner_boundary_report:",
+            "RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport",
+            "renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "Phase 56M coordinator 缺少 renderer backend owner boundary 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "pub renderer_backend_owner_boundary_invocations: usize",
+            "pub renderer_backend_owner_boundary_reports:",
+            "Vec<RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport>",
+            "pub renderer_backend_owner_boundary_available: bool",
+            "pub renderer_backend_owner_boundary_blocked: bool",
+            "pub renderer_backend_owner_defined: bool",
+            "pub renderer_backend_creation_allowed: bool",
+            "from_renderer_backend_owner_boundary_report",
+            "report.renderer_backend_owner_boundary_report",
+        ] {
+            assert!(
+                runtime_loop.contains(required),
+                "Phase 56M loop 缺少 renderer backend owner boundary 汇总证据: {required}"
+            );
+        }
+
+        for required in [
+            "renderer_backend_owner_boundary_invocations",
+            "renderer_backend_owner_boundary_reports",
+            "renderer_backend_owner_boundary_available",
+            "renderer_backend_owner_boundary_blocked",
+            "renderer_backend_owner_defined",
+            "renderer_backend_creation_allowed",
+            "renderer_backend_owner_boundary_renderer_called",
+        ] {
+            assert!(
+                orchestrator.contains(required),
+                "Phase 56M orchestrator test/report 缺少 renderer backend owner boundary 暴露证据: {required}"
+            );
+        }
+
+        for forbidden in [
+            "buffer_import_attempted: true",
+            "buffer_imported: true",
+            "texture_created: true",
+            "renderer_called: true",
+            "damage_submitted: true",
+            "frame_callback_done_sent: true",
+            "input_support: true",
+            "core_mutation_invoked: true",
+            "renderer_backend_instance_available: true",
+            "renderer_backend_creation_allowed: true",
+            "render_invoked: true",
+            "import_buffer(",
+            ".damage(",
+            ".done(",
+        ] {
+            assert!(
+                !production_module.contains(forbidden)
+                    && !runtime_loop.contains(forbidden)
+                    && !orchestrator.contains(forbidden),
+                "Phase 56M source 包含禁止的真实 renderer/texture/frame token: {forbidden}"
             );
         }
     }

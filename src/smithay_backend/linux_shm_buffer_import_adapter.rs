@@ -697,6 +697,18 @@ impl LinuxShmFirstBufferImportAdapterSkeleton {
     ) -> RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport {
         real_texture_creation_readiness_decision_from_frame_callback_completion_policy(report)
     }
+
+    /// 从 Phase 56L readiness decision 派生 Phase 56M renderer backend owner boundary。
+    ///
+    /// 该 owner 方法只定义真实 renderer backend instance 的 future owner / lifecycle /
+    /// cleanup / error / availability seam。它不创建 renderer backend instance，不调用
+    /// renderer，不创建 texture，不提交 damage，也不发送 frame callback done。
+    pub fn renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision(
+        &mut self,
+        report: &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
+    ) -> RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport {
+        renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision(report)
+    }
 }
 
 /// Convert the Phase 55L record into a Phase 56A SHM-first blocked report.
@@ -3548,6 +3560,282 @@ pub fn real_texture_creation_readiness_decision_from_frame_callback_completion_p
     }
 }
 
+/// Phase 56M renderer backend owner boundary 中可定位的纯数据操作阶段。
+///
+/// 这些步骤只定义真实 renderer backend instance 的 future ownership seam 和最小
+/// Linux nested renderer 路线。它们不会创建 renderer backend instance，不会调用
+/// renderer，也不会触发 texture / damage / frame callback done 能力。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation {
+    /// 观察 Phase 56L real texture creation readiness decision。
+    ObserveRealTextureCreationReadinessDecision,
+    /// 定义 renderer backend instance 的 future owner。
+    DefineRendererBackendOwner,
+    /// 定义 renderer backend lifecycle owner。
+    DefineRendererBackendLifecycleOwner,
+    /// 定义 renderer backend cleanup owner。
+    DefineRendererBackendCleanupOwner,
+    /// 定义 renderer backend error owner。
+    DefineRendererBackendErrorOwner,
+    /// 定义 renderer backend availability owner。
+    DefineRendererBackendAvailabilityOwner,
+    /// 选择最小 Linux nested renderer 路线。
+    SelectMinimalRendererPath,
+    /// 构建 renderer backend owner boundary report。
+    BuildRendererBackendOwnerBoundaryReport,
+}
+
+/// Phase 56M renderer backend owner boundary blocker taxonomy。
+///
+/// blocker 明确说明：owner boundary 已定义，但真实 renderer backend instance 尚未
+/// 构造。后续阶段必须补齐具体 renderer 类型、construction route、runtime storage、
+/// cleanup implementation 和 render target binding 后，才能允许真实 renderer 创建。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker {
+    /// 上游 real texture creation readiness decision 仍处于 blocked 状态。
+    RealTextureCreationReadinessStillBlocked,
+    /// 缺少真实 renderer backend instance。
+    MissingRendererBackendInstance,
+    /// 缺少已选定并编译验证的 renderer backend concrete type。
+    MissingRendererBackendConcreteType,
+    /// 缺少创建 renderer backend instance 的 construction route。
+    MissingRendererBackendConstructionRoute,
+    /// 缺少 runtime 持有 renderer backend instance 的 storage seam。
+    MissingRendererBackendRuntimeStorage,
+    /// 缺少 renderer backend cleanup implementation。
+    MissingRendererBackendCleanupImplementation,
+    /// 缺少 renderer backend 与 nested render target 的绑定。
+    MissingRenderTargetBinding,
+    /// 本阶段明确禁止创建 renderer backend instance。
+    RendererBackendCreationExplicitlyDisabled,
+    /// owner boundary 存在，但没有真实 renderer backend instance。
+    RendererBackendOwnerBoundaryWithoutInstance,
+}
+
+/// Phase 56M renderer backend owner boundary policy。
+///
+/// policy 只记录 future owner 分工和最小 renderer 路线。它不持有真实 renderer
+/// resource，也不把 Smithay / Linux renderer 类型泄漏到 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererBackendOwnerBoundaryPolicy {
+    /// renderer backend instance future owner 是否已定义。
+    pub renderer_backend_owner_defined: bool,
+
+    /// renderer backend instance future owner 名称。
+    pub renderer_backend_owner: &'static str,
+
+    /// renderer backend lifecycle owner 是否已定义。
+    pub renderer_backend_lifecycle_owner_defined: bool,
+
+    /// renderer backend cleanup owner 是否已定义。
+    pub renderer_backend_cleanup_owner_defined: bool,
+
+    /// renderer backend error owner 是否已定义。
+    pub renderer_backend_error_owner_defined: bool,
+
+    /// renderer backend availability owner 是否已定义。
+    pub renderer_backend_availability_owner_defined: bool,
+
+    /// 是否选择最小 Linux nested renderer 路线。
+    pub minimal_renderer_path_selected: bool,
+
+    /// 最小 renderer 路线名称；这只是 pure-data route label。
+    pub minimal_renderer_path: &'static str,
+}
+
+/// Phase 56M renderer backend owner boundary report。
+///
+/// 该 report 从 Phase 56L readiness decision 派生，只定义真实 renderer backend 的
+/// future ownership / lifecycle / cleanup / error / availability seam。它不创建 renderer
+/// backend instance，不创建 texture，不调用 renderer，不提交 damage，不发送 frame callback
+/// done，不接 input，也不修改 core。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport {
+    /// renderer backend owner boundary seam 是否可用。
+    pub renderer_backend_owner_boundary_available: bool,
+
+    /// 是否观察到 Phase 56L readiness decision report。
+    pub source_real_texture_creation_readiness_decision_report_observed: bool,
+
+    /// 被消费的 Phase 56L readiness decision report。
+    pub source_real_texture_creation_readiness_decision_report:
+        RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
+
+    /// renderer backend owner boundary policy。
+    pub policy: RuntimeSurfaceCommitRendererBackendOwnerBoundaryPolicy,
+
+    /// owner boundary 是否仍 blocked。
+    pub renderer_backend_owner_boundary_blocked: bool,
+
+    /// 稳定 blocker reason，便于 runtime / orchestrator report 展示。
+    pub renderer_backend_owner_boundary_blocker_reason: &'static str,
+
+    /// 上游 real texture creation readiness decision 是否仍 blocked。
+    pub real_texture_creation_readiness_still_blocked: bool,
+
+    /// renderer backend instance future owner 是否已定义。
+    pub renderer_backend_owner_defined: bool,
+
+    /// renderer backend instance future owner 名称。
+    pub renderer_backend_owner: &'static str,
+
+    /// renderer backend lifecycle owner 是否已定义。
+    pub renderer_backend_lifecycle_owner_defined: bool,
+
+    /// renderer backend cleanup owner 是否已定义。
+    pub renderer_backend_cleanup_owner_defined: bool,
+
+    /// renderer backend error owner 是否已定义。
+    pub renderer_backend_error_owner_defined: bool,
+
+    /// renderer backend availability owner 是否已定义。
+    pub renderer_backend_availability_owner_defined: bool,
+
+    /// 是否选择最小 Linux nested renderer 路线。
+    pub minimal_renderer_path_selected: bool,
+
+    /// 最小 renderer 路线名称；这不是真实 renderer type。
+    pub minimal_renderer_path: &'static str,
+
+    /// 真实 renderer backend instance 是否可用；Phase 56M 固定 false。
+    pub renderer_backend_instance_available: bool,
+
+    /// 是否已选择具体 renderer backend type；Phase 56M 固定 false。
+    pub renderer_backend_concrete_type_selected: bool,
+
+    /// renderer backend construction route 是否可用；Phase 56M 固定 false。
+    pub renderer_backend_construction_route_available: bool,
+
+    /// runtime storage seam 是否可用；Phase 56M 固定 false。
+    pub renderer_backend_runtime_storage_available: bool,
+
+    /// cleanup implementation 是否存在；Phase 56M 固定 false。
+    pub renderer_backend_cleanup_implemented: bool,
+
+    /// render target binding 是否可用；Phase 56M 固定 false。
+    pub render_target_binding_available: bool,
+
+    /// 是否允许创建 renderer backend instance；Phase 56M 固定 false。
+    pub renderer_backend_creation_allowed: bool,
+
+    /// Phase 56M 不尝试真实 import。
+    pub buffer_import_attempted: bool,
+
+    /// Phase 56M 不完成真实 import。
+    pub buffer_imported: bool,
+
+    /// Phase 56M 不创建 texture。
+    pub texture_created: bool,
+
+    /// Phase 56M 不调用 renderer。
+    pub renderer_called: bool,
+
+    /// Phase 56M 不提交 damage。
+    pub damage_submitted: bool,
+
+    /// Phase 56M 不发送 frame callback done。
+    pub frame_callback_done_sent: bool,
+
+    /// Phase 56M 不接入 input。
+    pub input_support: bool,
+
+    /// Phase 56M 不触发 core mutation。
+    pub core_mutation_invoked: bool,
+
+    /// owner boundary 执行步骤。
+    pub operations: Vec<RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation>,
+
+    /// 阻止真实 renderer backend instance 创建的 blockers。
+    pub blockers: Vec<RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker>,
+}
+
+/// 从 Phase 56L readiness decision 派生 Phase 56M renderer backend owner boundary。
+///
+/// 这是 Phase 56M 的唯一执行入口：它只生成 pure-data owner boundary report。本函数不
+/// 创建 renderer backend instance，不创建 texture，不调用 renderer，不提交 damage，也不发送
+/// frame callback done。
+#[must_use = "renderer backend owner boundary is not renderer backend creation"]
+pub fn renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision(
+    report: &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionReport,
+) -> RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport {
+    let policy = RuntimeSurfaceCommitRendererBackendOwnerBoundaryPolicy {
+        renderer_backend_owner_defined: true,
+        renderer_backend_owner: "linux_nested_renderer_backend_owner",
+        renderer_backend_lifecycle_owner_defined: true,
+        renderer_backend_cleanup_owner_defined: true,
+        renderer_backend_error_owner_defined: true,
+        renderer_backend_availability_owner_defined: true,
+        minimal_renderer_path_selected: true,
+        minimal_renderer_path: "smithay_linux_nested_renderer",
+    };
+
+    let mut blockers = Vec::new();
+    if report.real_texture_creation_readiness_blocked {
+        blockers.push(
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::RealTextureCreationReadinessStillBlocked,
+        );
+    }
+    blockers.extend([
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendInstance,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendConcreteType,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendConstructionRoute,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendRuntimeStorage,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendCleanupImplementation,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRenderTargetBinding,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::RendererBackendCreationExplicitlyDisabled,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::RendererBackendOwnerBoundaryWithoutInstance,
+    ]);
+
+    RuntimeSurfaceCommitRendererBackendOwnerBoundaryReport {
+        renderer_backend_owner_boundary_available: true,
+        source_real_texture_creation_readiness_decision_report_observed: report
+            .real_texture_creation_readiness_decision_available,
+        source_real_texture_creation_readiness_decision_report: report.clone(),
+        policy: policy.clone(),
+        renderer_backend_owner_boundary_blocked: true,
+        renderer_backend_owner_boundary_blocker_reason:
+            "renderer backend owner boundary only: missing concrete type, construction route, runtime storage, cleanup implementation, render target binding, and real backend instance",
+        real_texture_creation_readiness_still_blocked: report
+            .real_texture_creation_readiness_blocked,
+        renderer_backend_owner_defined: policy.renderer_backend_owner_defined,
+        renderer_backend_owner: policy.renderer_backend_owner,
+        renderer_backend_lifecycle_owner_defined: policy
+            .renderer_backend_lifecycle_owner_defined,
+        renderer_backend_cleanup_owner_defined: policy.renderer_backend_cleanup_owner_defined,
+        renderer_backend_error_owner_defined: policy.renderer_backend_error_owner_defined,
+        renderer_backend_availability_owner_defined: policy
+            .renderer_backend_availability_owner_defined,
+        minimal_renderer_path_selected: policy.minimal_renderer_path_selected,
+        minimal_renderer_path: policy.minimal_renderer_path,
+        renderer_backend_instance_available: false,
+        renderer_backend_concrete_type_selected: false,
+        renderer_backend_construction_route_available: false,
+        renderer_backend_runtime_storage_available: false,
+        renderer_backend_cleanup_implemented: false,
+        render_target_binding_available: false,
+        renderer_backend_creation_allowed: false,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+        operations: vec![
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::ObserveRealTextureCreationReadinessDecision,
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::DefineRendererBackendOwner,
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::DefineRendererBackendLifecycleOwner,
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::DefineRendererBackendCleanupOwner,
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::DefineRendererBackendErrorOwner,
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::DefineRendererBackendAvailabilityOwner,
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::SelectMinimalRendererPath,
+            RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation::BuildRendererBackendOwnerBoundaryReport,
+        ],
+        blockers,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3555,6 +3843,7 @@ mod tests {
         RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker,
         RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker,
         RuntimeSurfaceCommitRendererBackendInstanceAuditBlocker,
+        RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker,
         RuntimeSurfaceCommitTextureCreationBlocker,
         RuntimeSurfaceCommitTextureCreationPreconditionBlocker,
         RuntimeSurfaceCommitTextureImportRouteDecisionBlocker,
@@ -3563,6 +3852,7 @@ mod tests {
         frame_callback_completion_policy_from_damage_to_texture_mapping_audit,
         real_texture_creation_readiness_decision_from_frame_callback_completion_policy,
         renderer_backend_instance_audit_from_texture_owner_boundary_report,
+        renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision,
         texture_creation_noop_report_from_precondition_audit,
         texture_creation_precondition_audit_from_validation_harness_report,
         texture_import_route_decision_from_renderer_backend_instance_audit,
@@ -4051,6 +4341,95 @@ mod tests {
         ));
         assert!(report.blockers.contains(
             &RuntimeSurfaceCommitRealTextureCreationReadinessDecisionBlocker::RealTextureCreationExplicitlyDisabled
+        ));
+        assert!(!report.buffer_import_attempted);
+        assert!(!report.buffer_imported);
+        assert!(!report.texture_created);
+        assert!(!report.renderer_called);
+        assert!(!report.damage_submitted);
+        assert!(!report.frame_callback_done_sent);
+        assert!(!report.input_support);
+        assert!(!report.core_mutation_invoked);
+    }
+
+    /// Phase 56M 从 Phase 56L readiness decision 派生 renderer backend owner boundary。
+    ///
+    /// 该测试固定：owner boundary 只定义真实 renderer backend instance 的 future
+    /// owner / lifecycle / cleanup / error / availability seam；它不创建 renderer backend，
+    /// 不创建 texture，不调用 renderer，不提交 damage，也不发送 frame callback done。
+    #[test]
+    fn derives_blocked_renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision()
+     {
+        let validation_harness = validate_shm_metadata_harness_paths();
+        let audit =
+            texture_creation_precondition_audit_from_validation_harness_report(&validation_harness);
+        let noop_report = texture_creation_noop_report_from_precondition_audit(&audit);
+        let owner_report = texture_owner_boundary_report_from_noop_report(&noop_report);
+        let renderer_backend_audit =
+            renderer_backend_instance_audit_from_texture_owner_boundary_report(&owner_report);
+        let route_decision = texture_import_route_decision_from_renderer_backend_instance_audit(
+            &renderer_backend_audit,
+        );
+        let damage_mapping =
+            damage_to_texture_mapping_audit_from_texture_import_route_decision(&route_decision);
+        let frame_policy =
+            frame_callback_completion_policy_from_damage_to_texture_mapping_audit(&damage_mapping);
+        let readiness =
+            real_texture_creation_readiness_decision_from_frame_callback_completion_policy(
+                &frame_policy,
+            );
+        let report = renderer_backend_owner_boundary_from_real_texture_creation_readiness_decision(
+            &readiness,
+        );
+
+        assert!(report.renderer_backend_owner_boundary_available);
+        assert!(report.source_real_texture_creation_readiness_decision_report_observed);
+        assert!(report.renderer_backend_owner_boundary_blocked);
+        assert!(report.real_texture_creation_readiness_still_blocked);
+        assert!(report.renderer_backend_owner_defined);
+        assert_eq!(
+            report.renderer_backend_owner,
+            "linux_nested_renderer_backend_owner"
+        );
+        assert!(report.renderer_backend_lifecycle_owner_defined);
+        assert!(report.renderer_backend_cleanup_owner_defined);
+        assert!(report.renderer_backend_error_owner_defined);
+        assert!(report.renderer_backend_availability_owner_defined);
+        assert!(report.minimal_renderer_path_selected);
+        assert_eq!(
+            report.minimal_renderer_path,
+            "smithay_linux_nested_renderer"
+        );
+        assert!(!report.renderer_backend_instance_available);
+        assert!(!report.renderer_backend_concrete_type_selected);
+        assert!(!report.renderer_backend_construction_route_available);
+        assert!(!report.renderer_backend_runtime_storage_available);
+        assert!(!report.renderer_backend_cleanup_implemented);
+        assert!(!report.render_target_binding_available);
+        assert!(!report.renderer_backend_creation_allowed);
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::RealTextureCreationReadinessStillBlocked
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendInstance
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendConcreteType
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendConstructionRoute
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendRuntimeStorage
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRendererBackendCleanupImplementation
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::MissingRenderTargetBinding
+        ));
+        assert!(report.blockers.contains(
+            &RuntimeSurfaceCommitRendererBackendOwnerBoundaryBlocker::RendererBackendCreationExplicitlyDisabled
         ));
         assert!(!report.buffer_import_attempted);
         assert!(!report.buffer_imported);
