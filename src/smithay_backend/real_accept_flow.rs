@@ -516,6 +516,20 @@ fn with_production_protocol_display(
     assemble_real_accept_flow(name, display, Some(report))
 }
 
+/// 把 calloop source insertion 失败映射成不再持有 listening socket 的错误。
+///
+/// `InsertError<ListeningSocketSource>` 的 `inserted` 字段会把注册失败后退回的 source
+/// 交还调用者；若直接把整个 `InsertError` 装箱，调用者只要保留返回的 `Err`，socket
+/// 与 lock path 就会继续存活。这里显式拆开错误并在返回前 drop source，只传播内部
+/// `calloop::Error`，因此错误值的生命周期不再延长 socket owner 的生命周期。
+fn map_listening_socket_insert_error(
+    error: calloop::InsertError<ListeningSocketSource>,
+) -> Box<dyn std::error::Error> {
+    let calloop::InsertError { inserted, error } = error;
+    drop(inserted);
+    Box::new(error)
+}
+
 /// 组装两条 constructor 共用的 socket、source 与 flow owner。
 ///
 /// production 调用者必须先完成两个 globals；这里真实绑定 socket 后立刻记录
@@ -541,7 +555,7 @@ fn assemble_real_accept_flow(
     event_loop
         .handle()
         .insert_source(socket_source, |stream, _, data| data.accept_stream(stream))
-        .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+        .map_err(map_listening_socket_insert_error)?;
 
     Ok(NestedRealAcceptFlow {
         event_loop,
@@ -801,14 +815,15 @@ impl NestedRealAcceptFlow {
 mod tests {
     use std::{os::unix::net::UnixStream, path::Path, time::Duration};
 
-    use smithay::reexports::wayland_server::Display;
+    use smithay::reexports::{calloop, wayland_server::Display};
 
     use super::{
         NestedAcceptedClientFailureReason, NestedAcceptedClientMapping,
         NestedRealAcceptConnectedBridgeBlocker, NestedRealAcceptFlow, NestedRealAcceptLoopData,
         ProductionProtocolBootstrapError, ProductionProtocolBootstrapReport,
         bootstrap_production_protocol_globals, bridge_connected_events,
-        nested_real_accept_connected_bridge_readiness_report, with_production_protocol_display,
+        map_listening_socket_insert_error, nested_real_accept_connected_bridge_readiness_report,
+        with_production_protocol_display,
     };
     use crate::{
         core::{
@@ -825,6 +840,7 @@ mod tests {
             linux_xdg_shell::LinuxXdgShellGlobalInitError,
             test_support::{assert_runtime_dir, unique_socket_name},
             wayland_display::SmithayWaylandDisplayProbe,
+            wayland_socket::SmithayWaylandSocketProbe,
         },
     };
 
@@ -940,6 +956,43 @@ mod tests {
             !socket_path.exists(),
             "成功 flow drop 后 socket owner 必须移除 path"
         );
+    }
+
+    /// source insertion 失败的返回值即使被调用者保留，也不能继续持有 socket/lock。
+    #[test]
+    fn production_protocol_bootstrap_insert_source_failure_releases_socket_before_returning_error()
+    {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("production-protocol-source-insert-failure");
+        let runtime_dir =
+            std::env::var_os("XDG_RUNTIME_DIR").expect("Linux Smithay 测试需要 XDG_RUNTIME_DIR");
+        let socket_path = Path::new(&runtime_dir).join(&socket_name);
+        let socket = SmithayWaylandSocketProbe::with_name(&socket_name)
+            .expect("失败注入前必须真实绑定唯一 socket");
+        assert!(socket_path.exists());
+        let injected_error = calloop::InsertError {
+            inserted: socket.into_source(),
+            error: calloop::Error::InvalidToken,
+        };
+
+        // Act：模拟 calloop insert_source 失败，并故意把返回 Err 保留到重试之后。
+        let retained_error: Result<(), Box<dyn std::error::Error>> =
+            Err(map_listening_socket_insert_error(injected_error));
+
+        // Assert：Err 本身不得继续拥有 source；path/lock 释放后同名 socket 必须立即可重绑。
+        assert!(retained_error.is_err());
+        assert!(
+            !socket_path.exists(),
+            "错误映射必须在返回前释放 InsertError 中的 ListeningSocketSource"
+        );
+        let retry_socket = SmithayWaylandSocketProbe::with_name(&socket_name)
+            .expect("调用者仍保留 Err 时，同名 socket 必须可立即重试");
+        assert!(socket_path.exists());
+        drop(retry_socket);
+        assert!(!socket_path.exists());
+
+        // 保持到测试末尾，防止测试仅因提前 drop Err 而偶然通过。
+        assert!(retained_error.is_err());
     }
 
     /// 验证 B 路线报告保留全部真实 runtime blockers 和 capability false。
