@@ -532,14 +532,16 @@ fn map_listening_socket_insert_error(
 
 /// 组装两条 constructor 共用的 socket、source 与 flow owner。
 ///
-/// production 调用者必须先完成两个 globals；这里真实绑定 socket 后立刻记录
-/// `socket_bound_after_bootstrap`，再消费 socket 生成 source 并插入 calloop。
-/// controlled/probe 调用者传入 `None`，因此旧路径不会伪造 production report。
+/// 两条路径都先从 Display owner 建立 persistent insert boundary，再尝试真实绑定
+/// socket，保持旧 controlled constructor 的内部 owner 顺序。production 调用者必须
+/// 已完成两个 globals；socket bind 成功后才记录 `socket_bound_after_bootstrap`，随后
+/// 消费 socket 生成 source 并插入 calloop。controlled/probe 的 report 保持 `None`。
 fn assemble_real_accept_flow(
     name: &str,
     display: SmithayWaylandDisplayProbe,
     mut production_protocol_bootstrap_report: Option<ProductionProtocolBootstrapReport>,
 ) -> Result<NestedRealAcceptFlow, Box<dyn std::error::Error>> {
+    let insert_boundary = NestedClientInsertCompileBoundary::new(display.display_handle());
     let socket = SmithayWaylandSocketProbe::with_name(name)?;
     let socket_name = socket.socket_name_string();
 
@@ -549,7 +551,6 @@ fn assemble_real_accept_flow(
     }
 
     let socket_source: ListeningSocketSource = socket.into_source();
-    let insert_boundary = NestedClientInsertCompileBoundary::new(display.display_handle());
     let event_loop: EventLoop<'static, NestedRealAcceptLoopData> = EventLoop::try_new()?;
 
     event_loop
