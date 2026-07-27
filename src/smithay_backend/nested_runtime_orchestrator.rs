@@ -474,13 +474,18 @@ impl NestedRuntimeOrchestrator {
 #[cfg(test)]
 mod tests {
     use std::{
+        fs,
         io::ErrorKind,
-        os::unix::net::UnixStream,
+        os::unix::{
+            fs::PermissionsExt,
+            net::{UnixListener, UnixStream},
+        },
         panic::{self, AssertUnwindSafe},
-        path::PathBuf,
+        path::{Path, PathBuf},
+        process::{Child, Command, ExitStatus, Stdio},
         sync::mpsc,
         thread,
-        time::{Duration, Instant},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     use calloop::{EventLoop, Interest, Mode, PostAction, generic::Generic};
@@ -543,6 +548,19 @@ mod tests {
     const PRODUCTION_PROTOCOL_PUMP_TIMEOUT: Duration = Duration::from_millis(5);
     const PRODUCTION_PROTOCOL_MAX_PUMPS: usize = 1_000;
     const PRODUCTION_PROTOCOL_CLIENT_MAX_READINESS_POLLS: usize = 1_000;
+    const PRODUCTION_PROTOCOL_CHILD_ROLE_ENV: &str = "SKY_MIRROR_PHASE56P_PROTOCOL_CHILD_ROLE";
+    const PRODUCTION_PROTOCOL_CHILD_SOCKET_ENV: &str = "SKY_MIRROR_PHASE56P_PROTOCOL_CHILD_SOCKET";
+    const PRODUCTION_PROTOCOL_CHILD_SCENARIO_ROLE: &str = "external-wayland-scenario";
+    const PRODUCTION_PROTOCOL_CHILD_BOUNDED_PARK_ROLE: &str = "bounded-park";
+    const PRODUCTION_PROTOCOL_EXTERNAL_TEST_NAME: &str = "smithay_backend::nested_runtime_orchestrator::tests::production_orchestrator_external_registry_roundtrip";
+    const PRODUCTION_PROTOCOL_WATCHDOG_REGRESSION_TEST_NAME: &str = "smithay_backend::nested_runtime_orchestrator::tests::production_protocol_watchdog_kills_bounded_parked_child";
+    const PRODUCTION_PROTOCOL_OUTER_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(6);
+    const PRODUCTION_PROTOCOL_WATCHDOG_KILL_REAP_TIMEOUT: Duration = Duration::from_secs(1);
+    const PRODUCTION_PROTOCOL_WATCHDOG_POLL_INTERVAL: Duration = Duration::from_millis(5);
+    const PRODUCTION_PROTOCOL_WATCHDOG_MAX_POLLS: usize = 1_500;
+    const PRODUCTION_PROTOCOL_BOUNDED_PARK_DURATION: Duration = Duration::from_secs(1);
+    const PRODUCTION_PROTOCOL_BOUNDED_PARK_STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
+    const PRODUCTION_PROTOCOL_BOUNDED_PARK_WATCHDOG_TIMEOUT: Duration = Duration::from_millis(300);
 
     /// 外部 Wayland client 的纯数据证据；它刻意只存在于测试模块，不能流入 production
     /// getter 或 public API。服务端只能证明 owner 已完成 bootstrap，不能独立声称外部
@@ -873,6 +891,240 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct ProtocolChildWatchdogReport {
+        status: ExitStatus,
+        timed_out: bool,
+        polls: usize,
+    }
+
+    fn wait_for_protocol_child_exit_with_bounded_try_wait(
+        child: &mut Child,
+        deadline: Instant,
+        stage: &str,
+    ) -> Result<(ExitStatus, usize), String> {
+        for polls in 1..=PRODUCTION_PROTOCOL_WATCHDOG_MAX_POLLS {
+            match child
+                .try_wait()
+                .map_err(|error| format!("protocol child {stage} try_wait 失败: {error}"))?
+            {
+                Some(status) => return Ok((status, polls)),
+                None => {}
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "protocol child {stage} 超过绝对 watchdog deadline（polls={polls}）"
+                ));
+            }
+            thread::sleep(remaining.min(PRODUCTION_PROTOCOL_WATCHDOG_POLL_INTERVAL));
+        }
+
+        Err(format!(
+            "protocol child {stage} 超过固定 watchdog poll 上限 {}",
+            PRODUCTION_PROTOCOL_WATCHDOG_MAX_POLLS
+        ))
+    }
+
+    // 这层 process watchdog 绝不替代场景内的真实 Wayland client thread：child 仍逐字节
+    // 运行既有 start -> client thread -> channel -> bounded server -> drop/socket assertion。
+    // 父进程只在 inner connect/join 未来回归为卡死时提供 OS 级硬截止、kill 与有界 reap。
+    fn run_protocol_child_with_watchdog(
+        mut child: Child,
+        deadline: Instant,
+    ) -> Result<ProtocolChildWatchdogReport, String> {
+        match wait_for_protocol_child_exit_with_bounded_try_wait(&mut child, deadline, "正常退出")
+        {
+            Ok((status, polls)) => Ok(ProtocolChildWatchdogReport {
+                status,
+                timed_out: false,
+                polls,
+            }),
+            Err(wait_error) => {
+                if let Err(kill_error) = child.kill() {
+                    // `try_wait` 与 kill 之间 child 可能刚好自行退出。先再做一次非阻塞
+                    // reaping，避免把已退出 child 误作 kill failure 且让 Child handle 静默 drop。
+                    if let Some(status) = child.try_wait().map_err(|error| {
+                        format!("{wait_error}; protocol child kill 失败后 try_wait 也失败: {error}")
+                    })? {
+                        return Ok(ProtocolChildWatchdogReport {
+                            status,
+                            timed_out: true,
+                            polls: 1,
+                        });
+                    }
+                    return Err(format!(
+                        "{wait_error}; protocol child watchdog kill 失败且 child 仍未退出: {kill_error}"
+                    ));
+                }
+                let killed_deadline =
+                    Instant::now() + PRODUCTION_PROTOCOL_WATCHDOG_KILL_REAP_TIMEOUT;
+                let (status, polls) = wait_for_protocol_child_exit_with_bounded_try_wait(
+                    &mut child,
+                    killed_deadline,
+                    "kill 后退出",
+                )
+                .map_err(|reap_error| {
+                    format!(
+                        "{wait_error}; protocol child 已发出 kill，但未在有界 try_wait 中确认退出: {reap_error}"
+                    )
+                })?;
+                Ok(ProtocolChildWatchdogReport {
+                    status,
+                    timed_out: true,
+                    polls,
+                })
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProtocolChildRuntimeDir {
+        path: PathBuf,
+        socket_path: PathBuf,
+    }
+
+    #[derive(Debug)]
+    struct ProtocolChildRuntimeCleanup {
+        socket_was_residual: bool,
+        runtime_dir_removed: bool,
+    }
+
+    impl ProtocolChildRuntimeDir {
+        fn create() -> Result<Self, String> {
+            let entropy = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| format!("生成 protocol child runtime dir 时间熵失败: {error}"))?
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "sky-mirror-phase56p-protocol-{}-{entropy}",
+                std::process::id()
+            ));
+            fs::create_dir(&path)
+                .map_err(|error| format!("创建 protocol child runtime dir 失败: {error}"))?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("收紧 protocol child runtime dir 权限失败: {error}"))?;
+            let socket_path = path.join("phase56p-external-protocol.sock");
+
+            Ok(Self { path, socket_path })
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn socket_name(&self) -> &str {
+            self.socket_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("固定 protocol child socket name 必须是 UTF-8")
+        }
+
+        fn socket_path(&self) -> &Path {
+            &self.socket_path
+        }
+
+        fn cleanup_and_verify(self) -> Result<ProtocolChildRuntimeCleanup, String> {
+            let runtime_parent = std::env::temp_dir();
+            let is_expected_child_dir = self.path.parent() == Some(runtime_parent.as_path())
+                && self
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("sky-mirror-phase56p-protocol-"));
+            if !is_expected_child_dir {
+                return Err("拒绝清理非本测试创建的 protocol child runtime dir".to_owned());
+            }
+
+            let socket_was_residual = self.socket_path.exists();
+            if socket_was_residual {
+                fs::remove_file(&self.socket_path)
+                    .map_err(|error| format!("清理 protocol child 残留 socket 失败: {error}"))?;
+            }
+            let mut remaining_entries = fs::read_dir(&self.path)
+                .map_err(|error| format!("读取 protocol child runtime dir 失败: {error}"))?;
+            if remaining_entries.next().is_some() {
+                return Err("protocol child runtime dir 仍含未知残留，拒绝递归删除".to_owned());
+            }
+            fs::remove_dir(&self.path)
+                .map_err(|error| format!("移除空 protocol child runtime dir 失败: {error}"))?;
+
+            Ok(ProtocolChildRuntimeCleanup {
+                socket_was_residual,
+                runtime_dir_removed: !self.path.exists(),
+            })
+        }
+    }
+
+    fn wait_for_protocol_child_socket_startup(
+        child: &mut Child,
+        socket_path: &Path,
+        deadline: Instant,
+    ) -> Result<usize, String> {
+        for polls in 1..=PRODUCTION_PROTOCOL_WATCHDOG_MAX_POLLS {
+            if socket_path.exists() {
+                return Ok(polls);
+            }
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| format!("bounded-park child startup try_wait 失败: {error}"))?
+            {
+                return Err(format!(
+                    "bounded-park child 在绑定 socket 前提前退出: {status}"
+                ));
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "bounded-park child 未在 startup deadline 内绑定 socket（polls={polls}）"
+                ));
+            }
+            thread::sleep(remaining.min(PRODUCTION_PROTOCOL_WATCHDOG_POLL_INTERVAL));
+        }
+
+        Err(format!(
+            "bounded-park child startup 超过固定 watchdog poll 上限 {}",
+            PRODUCTION_PROTOCOL_WATCHDOG_MAX_POLLS
+        ))
+    }
+
+    fn spawn_protocol_child(
+        current_exe: &Path,
+        test_name: &str,
+        role: &str,
+        child_runtime_dir: &ProtocolChildRuntimeDir,
+    ) -> Result<Child, String> {
+        Command::new(current_exe)
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(PRODUCTION_PROTOCOL_CHILD_ROLE_ENV, role)
+            .env("XDG_RUNTIME_DIR", child_runtime_dir.path())
+            .env(
+                PRODUCTION_PROTOCOL_CHILD_SOCKET_ENV,
+                child_runtime_dir.socket_name(),
+            )
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|error| format!("启动 protocol child 失败: {error}"))
+    }
+
+    fn child_protocol_socket_path() -> PathBuf {
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .expect("protocol child 必须收到唯一 XDG_RUNTIME_DIR");
+        let socket_name = std::env::var(PRODUCTION_PROTOCOL_CHILD_SOCKET_ENV)
+            .expect("protocol child 必须收到唯一 socket name");
+        assert!(
+            !socket_name.is_empty() && !socket_name.contains('/'),
+            "protocol child socket name 必须是非空 basename"
+        );
+        PathBuf::from(runtime_dir).join(socket_name)
+    }
+
     fn production_orchestrator_external_registry_roundtrip_evidence() -> Result<
         (
             ExternalProtocolRoundtripEvidence,
@@ -890,6 +1142,10 @@ mod tests {
             "production-protocol-registry-roundtrip",
             PRODUCTION_PROTOCOL_MAX_PUMPS,
         );
+        if std::env::var_os(PRODUCTION_PROTOCOL_CHILD_ROLE_ENV).is_some() {
+            runtime_config.socket_name = std::env::var(PRODUCTION_PROTOCOL_CHILD_SOCKET_ENV)
+                .map_err(|error| format!("protocol child 读取唯一 socket name 失败: {error}"))?;
+        }
         runtime_config.loop_config.pump_timeout = PRODUCTION_PROTOCOL_PUMP_TIMEOUT;
         let socket_path = PathBuf::from(runtime_dir).join(&runtime_config.socket_name);
         let mut state = State::new();
@@ -1058,7 +1314,7 @@ mod tests {
         let event_queue_roundtrip = ["event_queue", ".roundtrip("].concat();
         let connection_roundtrip = ["connection", ".roundtrip("].concat();
         let blocking_dispatch = ["blocking", "_dispatch("].concat();
-        let driver_marker = ["fn drive", "_external_protocol_client"].concat();
+        let driver_marker = ["fn drive_client", "_event_queue_until"].concat();
         let driver_end_marker = [
             "fn production_orchestrator",
             "_external_registry_roundtrip_evidence",
@@ -1073,9 +1329,9 @@ mod tests {
             })
             .unwrap_or_default();
 
-        // 这里检查的是单独抽取的 client driver 的硬边界：同步 helper 内部会以
-        // poll(None) 等待，socket timeout 无法为它们提供 deadline。测试必须禁止
-        // 它们回流，并由下面的 UnixStream::pair 失败路径验证显式驱动真实结束。
+        // 这里从底层 fd readiness helper 一直覆盖到 client entry driver：同步 helper
+        // 内部会以 poll(None) 等待，socket timeout 无法为它们提供 deadline。测试必须
+        // 禁止它们回流，并由下面的 UnixStream::pair 失败路径验证显式驱动真实结束。
         assert!(
             !driver_source.is_empty(),
             "必须存在独立的外部 client deadline driver"
@@ -1095,6 +1351,58 @@ mod tests {
         assert!(
             !driver_source.contains(&blocking_dispatch),
             "外部 client 不得调用同步 dispatch helper"
+        );
+    }
+
+    #[test]
+    fn production_protocol_external_test_requires_current_exe_child_watchdog() {
+        let source = include_str!("nested_runtime_orchestrator.rs");
+        let outer_test_marker = [
+            "fn production_orchestrator",
+            "_external_registry_roundtrip()",
+        ]
+        .concat();
+        let outer_test_end_marker = "/// C";
+        let current_exe = ["current", "_exe()"].concat();
+        let child_role = ["PRODUCTION_PROTOCOL_CHILD", "_SCENARIO_ROLE"].concat();
+        let watchdog = ["run_protocol_child", "_with_watchdog"].concat();
+        let try_wait = ["try", "_wait()"].concat();
+        let kill = [".kill", "()"].concat();
+        let outer_test_source = source
+            .split_once(&outer_test_marker)
+            .and_then(|(_, source)| {
+                source
+                    .split_once(outer_test_end_marker)
+                    .map(|(outer_test, _)| outer_test)
+            })
+            .unwrap_or_default();
+
+        // 内层保留真实 external Wayland client thread；但其 connect/join 即使回归为
+        // 阻塞，外层也必须只等待绝对 deadline，随后 kill 独立 child。相同 test name
+        // 加 sentinel 可让 child 仅跑原完整场景而不递归创建 watchdog。
+        assert!(
+            !outer_test_source.is_empty(),
+            "必须存在 production protocol outer watchdog test"
+        );
+        assert!(
+            outer_test_source.contains(&current_exe),
+            "同名 outer test 必须以 current_exe 启动独立 child"
+        );
+        assert!(
+            outer_test_source.contains(&child_role),
+            "同名 outer test 必须用 child-role sentinel 阻止递归"
+        );
+        assert!(
+            outer_test_source.contains(&watchdog),
+            "同名 outer test 必须进入独立的 child watchdog"
+        );
+        assert!(
+            source.contains(&try_wait),
+            "child watchdog 必须只用有界 try_wait 观察退出"
+        );
+        assert!(
+            source.contains(&kill),
+            "child watchdog timeout 后必须 kill child"
         );
     }
 
@@ -1167,8 +1475,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn production_orchestrator_external_registry_roundtrip() {
+    fn production_orchestrator_external_registry_roundtrip_inner() {
         let (evidence, server_report, lifecycle_report, pump_iterations) =
             production_orchestrator_external_registry_roundtrip_evidence()
                 .expect("外部 registry roundtrip harness 必须在固定 deadline 内完成并清理 socket");
@@ -1226,6 +1533,150 @@ mod tests {
         assert!(!server_report.frame_callback_done_sent);
         assert!(!server_report.input_support);
         assert!(!server_report.core_mutation_invoked);
+    }
+
+    #[test]
+    fn production_orchestrator_external_registry_roundtrip() {
+        match std::env::var(PRODUCTION_PROTOCOL_CHILD_ROLE_ENV).as_deref() {
+            Ok(PRODUCTION_PROTOCOL_CHILD_SCENARIO_ROLE) => {
+                production_orchestrator_external_registry_roundtrip_inner();
+                return;
+            }
+            Ok(role) => panic!("外部 protocol child 收到未知 role: {role}"),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(error) => panic!("读取外部 protocol child role 失败: {error}"),
+        }
+
+        let current_exe =
+            std::env::current_exe().expect("outer watchdog 必须取得当前 test executable");
+        let child_runtime_dir = ProtocolChildRuntimeDir::create()
+            .expect("outer watchdog 必须创建唯一 child runtime dir");
+        let child_result = spawn_protocol_child(
+            &current_exe,
+            PRODUCTION_PROTOCOL_EXTERNAL_TEST_NAME,
+            PRODUCTION_PROTOCOL_CHILD_SCENARIO_ROLE,
+            &child_runtime_dir,
+        )
+        .and_then(|child| {
+            run_protocol_child_with_watchdog(
+                child,
+                Instant::now() + PRODUCTION_PROTOCOL_OUTER_WATCHDOG_TIMEOUT,
+            )
+        });
+        let cleanup = child_runtime_dir
+            .cleanup_and_verify()
+            .expect("outer watchdog 必须清理并移除唯一 child runtime dir");
+        let report = child_result.expect("outer watchdog 必须在绝对 deadline 内确认 child 退出");
+
+        assert!(
+            !report.timed_out,
+            "正常 external protocol child 不得触发 watchdog kill: {report:?}"
+        );
+        assert!(
+            report.status.success(),
+            "external protocol child 必须以成功状态退出: {report:?}"
+        );
+        assert!(
+            !cleanup.socket_was_residual,
+            "正常 external protocol child 必须自行 drop 并移除唯一 socket: {cleanup:?}"
+        );
+        assert!(
+            cleanup.runtime_dir_removed,
+            "outer watchdog 必须移除唯一 child runtime dir: {cleanup:?}"
+        );
+        println!(
+            "phase56p production protocol outer watchdog: child_polls={} timed_out={} status={} child_socket_residual={} child_runtime_dir_removed={}",
+            report.polls,
+            report.timed_out,
+            report.status,
+            cleanup.socket_was_residual,
+            cleanup.runtime_dir_removed,
+        );
+    }
+
+    #[test]
+    fn production_protocol_watchdog_kills_bounded_parked_child() {
+        match std::env::var(PRODUCTION_PROTOCOL_CHILD_ROLE_ENV).as_deref() {
+            Ok(PRODUCTION_PROTOCOL_CHILD_BOUNDED_PARK_ROLE) => {
+                let socket_path = child_protocol_socket_path();
+                let _socket_listener = UnixListener::bind(&socket_path)
+                    .expect("bounded-park child 必须创建唯一测试 socket");
+                // 这不是无限 sleep：父端先在有界 startup poll 中观察到本 socket，再开始
+                // 300ms kill deadline；它必须先于 1s park 触发并留下可验证的 cleanup 事实。
+                thread::park_timeout(PRODUCTION_PROTOCOL_BOUNDED_PARK_DURATION);
+                return;
+            }
+            Ok(role) => panic!("watchdog regression child 收到未知 role: {role}"),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(error) => panic!("读取 watchdog regression child role 失败: {error}"),
+        }
+
+        let current_exe =
+            std::env::current_exe().expect("watchdog regression 必须取得当前 test executable");
+        let child_runtime_dir = ProtocolChildRuntimeDir::create()
+            .expect("watchdog regression 必须创建唯一 child runtime dir");
+        let child_result = spawn_protocol_child(
+            &current_exe,
+            PRODUCTION_PROTOCOL_WATCHDOG_REGRESSION_TEST_NAME,
+            PRODUCTION_PROTOCOL_CHILD_BOUNDED_PARK_ROLE,
+            &child_runtime_dir,
+        )
+        .and_then(|mut child| {
+            match wait_for_protocol_child_socket_startup(
+                &mut child,
+                child_runtime_dir.socket_path(),
+                Instant::now() + PRODUCTION_PROTOCOL_BOUNDED_PARK_STARTUP_TIMEOUT,
+            ) {
+                Ok(startup_polls) => run_protocol_child_with_watchdog(
+                    child,
+                    Instant::now() + PRODUCTION_PROTOCOL_BOUNDED_PARK_WATCHDOG_TIMEOUT,
+                )
+                .map(|report| (report, startup_polls)),
+                Err(startup_error) => {
+                    let terminal_result =
+                        run_protocol_child_with_watchdog(child, Instant::now());
+                    Err(format!(
+                        "{startup_error}; startup 失败后 terminal watchdog 结果: {terminal_result:?}"
+                    ))
+                }
+            }
+        });
+        let cleanup = child_runtime_dir
+            .cleanup_and_verify()
+            .expect("watchdog regression 必须清理唯一 child runtime dir");
+        let (report, startup_polls) =
+            child_result.expect("watchdog kill 后必须在有界 try_wait 中确认 child 退出");
+
+        assert!(
+            startup_polls <= PRODUCTION_PROTOCOL_WATCHDOG_MAX_POLLS,
+            "bounded-park child startup 必须在固定 poll 上限内绑定 socket: {startup_polls}"
+        );
+
+        assert!(
+            report.timed_out,
+            "bounded-park child 必须触发 outer watchdog kill: {report:?}"
+        );
+        assert!(
+            !report.status.success(),
+            "被 watchdog kill 的 bounded-park child 不得被误报为成功: {report:?}"
+        );
+        assert!(
+            cleanup.socket_was_residual,
+            "kill 后 parent 必须观察并精确清理 child 遗留 socket: {cleanup:?}"
+        );
+        assert!(
+            cleanup.runtime_dir_removed,
+            "kill 后 parent 必须移除唯一 child runtime dir: {cleanup:?}"
+        );
+        println!(
+            "phase56p protocol watchdog regression: startup_polls={} child_polls={} timed_out={} status={} child_socket_residual={} child_runtime_dir_removed={}",
+            startup_polls,
+            report.polls,
+            report.timed_out,
+            report.status,
+            cleanup.socket_was_residual,
+            cleanup.runtime_dir_removed,
+        );
     }
 
     /// C 路线只上调 Linux CI 已证明的 start/run/stop capability。
