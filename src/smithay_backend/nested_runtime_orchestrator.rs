@@ -6,10 +6,14 @@
 
 use crate::{
     core::state::State,
-    smithay_backend::nested_runtime_loop::{
-        NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLiveUnmapRunSummary, NestedRuntimeLoop,
-        NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
-        NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle, NestedRuntimeSurfaceCommitRunSummary,
+    smithay_backend::{
+        nested_runtime_loop::{
+            NestedRuntimeLiveAdmissionRunSummary, NestedRuntimeLiveUnmapRunSummary,
+            NestedRuntimeLoop, NestedRuntimeLoopConfig, NestedRuntimeLoopError,
+            NestedRuntimeLoopExitReason, NestedRuntimeLoopReport, NestedRuntimeLoopStopHandle,
+            NestedRuntimeSurfaceCommitRunSummary,
+        },
+        real_accept_flow::ProductionProtocolBootstrapReport,
     },
 };
 
@@ -317,7 +321,7 @@ impl NestedRuntimeOrchestrator {
         }
 
         let previous_state = self.state;
-        match NestedRuntimeLoop::with_socket_name(&self.config.socket_name) {
+        match NestedRuntimeLoop::with_production_protocol_bootstrap(&self.config.socket_name) {
             Ok(runtime_loop) => {
                 let socket_name = runtime_loop.socket_name().to_owned();
                 self.runtime_loop = Some(runtime_loop);
@@ -357,6 +361,17 @@ impl NestedRuntimeOrchestrator {
             .as_ref()
             .map(NestedRuntimeLoop::stop_handle)
             .ok_or(NestedRuntimeOrchestratorError::MissingRuntimeLoop { state: self.state })
+    }
+
+    /// 返回当前 loop owner 可直接证明的 production bootstrap server truth。orchestrator
+    /// 只转发，不为外部 registry/client bind 填充成功，也不将有限 lifecycle 编排扩张为
+    /// buffer import、texture/renderer、damage、frame callback、input 或 core 已执行的结论。
+    pub(crate) fn production_protocol_bootstrap_report(
+        &self,
+    ) -> Option<ProductionProtocolBootstrapReport> {
+        self.runtime_loop
+            .as_ref()
+            .and_then(NestedRuntimeLoop::production_protocol_bootstrap_report)
     }
 
     /// 从 Started 进入 Running，执行既有 bounded loop，并生成 final lifecycle report。
@@ -458,7 +473,20 @@ impl NestedRuntimeOrchestrator {
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time::Duration};
+    use std::{
+        os::unix::net::UnixStream,
+        path::PathBuf,
+        sync::mpsc,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use wayland_client::{
+        Connection, Dispatch, QueueHandle,
+        globals::{GlobalListContents, registry_queue_init},
+        protocol::{wl_compositor::WlCompositor, wl_registry::WlRegistry},
+    };
+    use wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
 
     use super::{
         NestedRuntimeLifecycleState, NestedRuntimeOrchestrator, NestedRuntimeOrchestratorBlocker,
@@ -480,6 +508,7 @@ mod tests {
             nested_runtime_loop::{
                 NestedRuntimeLoopConfig, NestedRuntimeLoopError, NestedRuntimeLoopExitReason,
             },
+            real_accept_flow::ProductionProtocolBootstrapReport,
             test_support::{assert_runtime_dir, unique_socket_name},
         },
     };
@@ -494,6 +523,293 @@ mod tests {
                 continue_after_error: false,
             },
         }
+    }
+
+    fn assert_start_keeps_production_globals_initialized(
+        display: &crate::smithay_backend::wayland_display::SmithayWaylandDisplayProbe,
+    ) {
+        // `start()` 现在按 production owner 顺序完成两个 global bootstrap；既有受控
+        // observation 测试仍可借 display 做后续登记/commit proof，但不得再次初始化 owner。
+        // 这里显式验证已存在的前置条件，保留 controlled 语义，同时不把它外推为 client
+        // discovery/bind 或 buffer/render/core 的完成事实。
+        assert!(display.is_xdg_shell_global_initialized());
+        assert!(display.is_wl_compositor_global_initialized());
+    }
+
+    const PRODUCTION_PROTOCOL_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+    const PRODUCTION_PROTOCOL_PUMP_TIMEOUT: Duration = Duration::from_millis(5);
+    const PRODUCTION_PROTOCOL_MAX_PUMPS: usize = 1_000;
+    const PRODUCTION_PROTOCOL_JOIN_POLL: Duration = Duration::from_millis(1);
+
+    /// 外部 Wayland client 的纯数据证据；它刻意只存在于测试模块，不能流入 production
+    /// getter 或 public API。服务端只能证明 owner 已完成 bootstrap，不能独立声称外部
+    /// registry discovery/bind 成功；两类事实必须由此处真实 client 的独立 roundtrip 分开记录。
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    struct ExternalProtocolRoundtripEvidence {
+        client_connected: bool,
+        registry_roundtrip_completed: bool,
+        wl_compositor_discovered: bool,
+        xdg_wm_base_discovered: bool,
+        wl_compositor_bound: bool,
+        xdg_wm_base_bound: bool,
+        client_finished_before_deadline: bool,
+        server_finished_before_deadline: bool,
+        socket_removed_after_drop: bool,
+    }
+
+    #[derive(Default)]
+    struct ProductionProtocolClientState;
+
+    impl Dispatch<WlRegistry, GlobalListContents> for ProductionProtocolClientState {
+        fn event(
+            _state: &mut Self,
+            _proxy: &WlRegistry,
+            _event: wayland_client::protocol::wl_registry::Event,
+            _data: &GlobalListContents,
+            _connection: &Connection,
+            _queue_handle: &QueueHandle<Self>,
+        ) {
+        }
+    }
+
+    wayland_client::delegate_noop!(ProductionProtocolClientState: ignore WlCompositor);
+    wayland_client::delegate_noop!(ProductionProtocolClientState: ignore XdgWmBase);
+
+    fn join_production_protocol_client_before_deadline(
+        client_thread: thread::JoinHandle<()>,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+
+        // Join 只在固定次数与固定 deadline 双重约束内轮询；这避免测试在 client panic、
+        // 意外阻塞或 socket 生命周期异常时无限等待，同时仍让正常路径显式回收 thread owner。
+        for _ in 0..PRODUCTION_PROTOCOL_MAX_PUMPS {
+            if client_thread.is_finished() {
+                return client_thread
+                    .join()
+                    .map_err(|_| "外部 protocol client thread panic".to_owned());
+            }
+            if Instant::now() >= deadline {
+                return Err("外部 protocol client thread 未在 5 秒 deadline 前结束".to_owned());
+            }
+            thread::sleep(PRODUCTION_PROTOCOL_JOIN_POLL);
+        }
+
+        Err("外部 protocol client thread 超过固定 join 轮询上限".to_owned())
+    }
+
+    fn production_orchestrator_external_registry_roundtrip_evidence() -> Result<
+        (
+            ExternalProtocolRoundtripEvidence,
+            ProductionProtocolBootstrapReport,
+            usize,
+        ),
+        String,
+    > {
+        assert_runtime_dir();
+        let test_started_at = Instant::now();
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .ok_or_else(|| "测试缺少 XDG_RUNTIME_DIR".to_owned())?;
+        let mut runtime_config = config(
+            "production-protocol-registry-roundtrip",
+            PRODUCTION_PROTOCOL_MAX_PUMPS,
+        );
+        runtime_config.loop_config.pump_timeout = PRODUCTION_PROTOCOL_PUMP_TIMEOUT;
+        let socket_path = PathBuf::from(runtime_dir).join(&runtime_config.socket_name);
+        let mut state = State::new();
+        let mut orchestrator = NestedRuntimeOrchestrator::new(runtime_config);
+        let mut client_thread = None;
+
+        let result = (|| -> Result<_, String> {
+            let _start_report = orchestrator
+                .start()
+                .map_err(|error| format!("orchestrator start 失败: {error:?}"))?;
+            if !socket_path.exists() {
+                return Err("orchestrator start 后测试 socket path 不存在".to_owned());
+            }
+            let server_report = orchestrator
+                .production_protocol_bootstrap_report()
+                .ok_or_else(|| {
+                    "production orchestrator start 后缺少 server bootstrap report".to_owned()
+                })?;
+
+            let stop_handle = orchestrator
+                .stop_handle()
+                .map_err(|error| format!("orchestrator stop handle 获取失败: {error:?}"))?;
+            let (client_connected_sender, client_connected_receiver) = mpsc::channel();
+            let (client_start_sender, client_start_receiver) = mpsc::channel();
+            let (client_result_sender, client_result_receiver) = mpsc::channel();
+            let client_socket_path = socket_path.clone();
+
+            client_thread = Some(thread::spawn(move || {
+                let client_result = (|| -> Result<ExternalProtocolRoundtripEvidence, String> {
+                    let client_stream = UnixStream::connect(&client_socket_path)
+                        .map_err(|error| format!("外部 client 连接测试 socket 失败: {error}"))?;
+                    client_stream
+                        .set_read_timeout(Some(PRODUCTION_PROTOCOL_TEST_TIMEOUT))
+                        .map_err(|error| {
+                            format!("外部 client 设置 socket read timeout 失败: {error}")
+                        })?;
+                    client_stream
+                        .set_write_timeout(Some(PRODUCTION_PROTOCOL_TEST_TIMEOUT))
+                        .map_err(|error| {
+                            format!("外部 client 设置 socket write timeout 失败: {error}")
+                        })?;
+                    client_connected_sender
+                        .send(())
+                        .map_err(|_| "主线程在 client 连通前提前退出".to_owned())?;
+                    // 只有主线程在固定 deadline 内观察到连通后才发出开始信号；客户端的
+                    // 等待同样使用 recv_timeout，避免 barrier::wait 这类无超时原语在
+                    // panic 或调度异常时永久卡住。主线程发信号后立即进入有限 server pump。
+                    client_start_receiver
+                        .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                        .map_err(|error| {
+                            format!("外部 client 未在 5 秒内收到 server run 信号: {error}")
+                        })?;
+
+                    let connection = Connection::from_socket(client_stream).map_err(|error| {
+                        format!("外部 client 创建 Wayland connection 失败: {error}")
+                    })?;
+                    let (globals, mut event_queue) =
+                        registry_queue_init::<ProductionProtocolClientState>(&connection).map_err(
+                            |error| format!("外部 client 初始 registry roundtrip 失败: {error}"),
+                        )?;
+                    let (wl_compositor_discovered, xdg_wm_base_discovered) =
+                        globals.contents().with_list(|registered_globals| {
+                            (
+                                registered_globals
+                                    .iter()
+                                    .any(|global| global.interface == "wl_compositor"),
+                                registered_globals
+                                    .iter()
+                                    .any(|global| global.interface == "xdg_wm_base"),
+                            )
+                        });
+                    let mut evidence = ExternalProtocolRoundtripEvidence {
+                        client_connected: true,
+                        registry_roundtrip_completed: true,
+                        wl_compositor_discovered,
+                        xdg_wm_base_discovered,
+                        ..ExternalProtocolRoundtripEvidence::default()
+                    };
+
+                    if wl_compositor_discovered && xdg_wm_base_discovered {
+                        let queue_handle = event_queue.handle();
+                        let _compositor = globals
+                            .bind::<WlCompositor, _, _>(&queue_handle, 1..=5, ())
+                            .map_err(|error| {
+                                format!("外部 client bind wl_compositor 失败: {error}")
+                            })?;
+                        evidence.wl_compositor_bound = true;
+                        let _xdg_wm_base = globals
+                            .bind::<XdgWmBase, _, _>(&queue_handle, 1..=7, ())
+                            .map_err(|error| {
+                                format!("外部 client bind xdg_wm_base 失败: {error}")
+                            })?;
+                        evidence.xdg_wm_base_bound = true;
+                        let mut client_state = ProductionProtocolClientState;
+                        event_queue.roundtrip(&mut client_state).map_err(|error| {
+                            format!("外部 client bind 后 event-queue roundtrip 失败: {error}")
+                        })?;
+                    }
+
+                    Ok(evidence)
+                })();
+
+                // 不论 discovery/bind 是成功、缺 global 还是 protocol error，client 都必须
+                // 先回传结构化结果再请求 stop+wakeup。这样 server 的 owner 仍只由
+                // orchestrator 生命周期回收，客户端不会通过无界等待或直接 display 控制 API
+                // 影响它；buffer/render/core 工作也继续明确延后，绝不由本测试伪造完成。
+                let _ = client_result_sender.send(client_result);
+                stop_handle.request_stop_and_wakeup();
+            }));
+
+            client_connected_receiver
+                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                .map_err(|error| format!("未在 5 秒内观察到外部 client 连通: {error}"))?;
+            client_start_sender
+                .send(())
+                .map_err(|_| "外部 client 在 server run 信号前提前退出".to_owned())?;
+
+            let server_started_at = Instant::now();
+            let lifecycle_report = orchestrator
+                .run(&mut state)
+                .map_err(|error| format!("orchestrator bounded run 失败: {error:?}"))?;
+            let server_finished_before_deadline =
+                server_started_at.elapsed() <= PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+
+            let mut evidence = client_result_receiver
+                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                .map_err(|error| format!("未在 5 秒内收到外部 client 结果: {error}"))??;
+            evidence.server_finished_before_deadline = server_finished_before_deadline;
+            Ok((evidence, server_report, lifecycle_report.pump_iterations))
+        })();
+
+        // 无论上面的任一步骤如何返回，都先通过公开 stop 生命周期请求 owner 收尾，再 drop
+        // orchestrator 释放 socket/source。随后单独检查 path 已删除，避免把内存 drop 或
+        // client thread 结束误当作 socket cleanup 已经证明。
+        let _stop_report = orchestrator.stop(&state);
+        drop(orchestrator);
+        let socket_removed_after_drop = !socket_path.exists();
+        let join_result = client_thread
+            .map(join_production_protocol_client_before_deadline)
+            .unwrap_or(Ok(()));
+
+        match (result, join_result) {
+            (Ok((mut evidence, server_report, pump_iterations)), Ok(())) => {
+                // 该字段只在 JoinHandle 已成功回收后填写，因此它证明的是 client thread
+                // 本身在 deadline 内结束，而不是仅证明 client closure 已准备返回或已经
+                // 发送 result。client 与 server 的完成事实仍分开记录，避免并发时序混淆。
+                evidence.client_finished_before_deadline =
+                    test_started_at.elapsed() <= PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+                evidence.socket_removed_after_drop = socket_removed_after_drop;
+                if !socket_removed_after_drop {
+                    return Err("orchestrator drop 后测试 socket path 未清理".to_owned());
+                }
+                Ok((evidence, server_report, pump_iterations))
+            }
+            (Ok(_), Err(error)) => Err(error),
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(join_error)) => Err(format!("{error}; {join_error}")),
+        }
+    }
+
+    #[test]
+    fn production_orchestrator_external_registry_roundtrip() {
+        let (evidence, server_report, pump_iterations) =
+            production_orchestrator_external_registry_roundtrip_evidence()
+                .expect("外部 registry roundtrip harness 必须在固定 deadline 内完成并清理 socket");
+
+        assert!((1..=PRODUCTION_PROTOCOL_MAX_PUMPS).contains(&pump_iterations));
+        println!(
+            "phase56p production protocol roundtrip: actual_pumps={pump_iterations}/{} test_timeout={:?} pump_timeout={:?} join_poll={:?} external={evidence:?} server={server_report:?}",
+            PRODUCTION_PROTOCOL_MAX_PUMPS,
+            PRODUCTION_PROTOCOL_TEST_TIMEOUT,
+            PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
+            PRODUCTION_PROTOCOL_JOIN_POLL,
+        );
+        assert!(evidence.client_connected);
+        assert!(evidence.registry_roundtrip_completed);
+        assert!(evidence.wl_compositor_discovered);
+        assert!(evidence.xdg_wm_base_discovered);
+        assert!(evidence.wl_compositor_bound);
+        assert!(evidence.xdg_wm_base_bound);
+        assert!(evidence.client_finished_before_deadline);
+        assert!(evidence.server_finished_before_deadline);
+        assert!(evidence.socket_removed_after_drop);
+        assert!(server_report.bootstrap_attempted);
+        assert!(server_report.wl_compositor_initialized);
+        assert!(server_report.xdg_wm_base_initialized);
+        assert!(server_report.socket_bound_after_bootstrap);
+        assert!(!server_report.external_registry_discovered_both_globals);
+        assert!(!server_report.external_client_bound_both_globals);
+        assert!(!server_report.buffer_import_attempted);
+        assert!(!server_report.buffer_imported);
+        assert!(!server_report.texture_created);
+        assert!(!server_report.renderer_called);
+        assert!(!server_report.damage_submitted);
+        assert!(!server_report.frame_callback_done_sent);
+        assert!(!server_report.input_support);
+        assert!(!server_report.core_mutation_invoked);
     }
 
     /// C 路线只上调 Linux CI 已证明的 start/run/stop capability。
@@ -629,12 +945,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_xdg_shell_global()
-                .expect("测试 xdg-shell global 必须初始化");
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             adapter_toplevel_identity_registration_report(display)
                 .expect("adapter identity registration proof 必须完成")
         };
@@ -689,12 +1000,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_xdg_shell_global()
-                .expect("测试 xdg-shell global 必须初始化");
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             adapter_toplevel_identity_registration_report(display)
                 .expect("adapter identity registration proof 必须完成")
         };
@@ -742,12 +1048,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_xdg_shell_global()
-                .expect("测试 xdg-shell global 必须初始化");
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_registration = adapter_toplevel_identity_registration_report(display)
                 .expect("首次 adapter identity registration proof 必须完成");
             let second_registration = adapter_toplevel_identity_registration_report(display)
@@ -804,9 +1105,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_commit = controlled_wl_surface_commit_observation_report(display)
                 .expect("首个 controlled commit proof 必须完成");
             let second_commit = controlled_wl_surface_commit_observation_report(display)
@@ -868,9 +1167,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_commit = controlled_wl_surface_null_attach_commit_observation_report(display)
                 .expect("首个 null attach commit proof 必须完成");
             let second_commit = controlled_wl_surface_commit_observation_report(display)
@@ -926,9 +1223,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_commit = controlled_wl_surface_damage_commit_observation_report(display)
                 .expect("首个 damage commit proof 必须完成");
             let second_commit = controlled_wl_surface_commit_observation_report(display)
@@ -984,9 +1279,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_commit =
                 controlled_wl_surface_frame_callback_commit_observation_report(display)
                     .expect("首个 frame callback commit proof 必须完成");
@@ -1043,9 +1336,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_commit =
                 controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
                     .expect("首个 render-dirty readiness commit proof 必须完成");
@@ -1118,9 +1409,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_commit =
                 controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
                     .expect("首个 render-dirty readiness commit proof 必须完成");
@@ -1198,9 +1487,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_commit =
                 controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
                     .expect("首个 render-dirty readiness commit proof 必须完成");
@@ -1283,9 +1570,7 @@ mod tests {
                 .as_mut()
                 .expect("Started 必须持有 runtime loop")
                 .display_mut_for_controlled_toplevel_registration();
-            display
-                .initialize_wl_compositor_global()
-                .expect("测试 wl_compositor global 必须初始化");
+            assert_start_keeps_production_globals_initialized(display);
             let first_commit =
                 controlled_wl_surface_render_dirty_readiness_commit_observation_report(display)
                     .expect("首个 render-dirty readiness commit proof 必须完成");

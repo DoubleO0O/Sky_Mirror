@@ -92,6 +92,7 @@ use crate::{
         RuntimeSurfaceCommitTextureSupportShellReadinessReport,
         render_dirty_readiness_intent_from_commit_drain_report,
     },
+    smithay_backend::real_accept_flow::ProductionProtocolBootstrapReport,
 };
 
 /// Phase 51L bounded loop 尚未满足的独立能力条件。
@@ -7452,9 +7453,33 @@ impl NestedRuntimeLoop {
         })
     }
 
+    /// 创建带 production protocol bootstrap 的有限 loop。coordinator 保持 Display→globals
+    /// →socket/source 的 owner 生命周期，loop 只持有它并提供有界 pump/stop；该构造不把
+    /// server globals 误作 client discovery/bind，也不会提前实施 buffer、render 或 core。
+    pub(crate) fn with_production_protocol_bootstrap(
+        name: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let coordinator = NestedRuntimeCoordinator::with_production_protocol_bootstrap(name)?;
+        let stop_handle = NestedRuntimeLoopStopHandle::new(coordinator.loop_signal());
+
+        Ok(Self {
+            coordinator,
+            stop_handle,
+        })
+    }
+
     /// 返回 loop 已绑定的 Wayland socket 名称。
     pub fn socket_name(&self) -> &str {
         self.coordinator.socket_name()
+    }
+
+    /// 返回 coordinator/flow owner 的只读 server truth；external 两项仍由测试 client 的
+    /// 有界 roundtrip 单独证明。本接口不宣称 socket 之外的 buffer、renderer、damage、
+    /// frame callback 或 core 路径已经执行。
+    pub(crate) fn production_protocol_bootstrap_report(
+        &self,
+    ) -> Option<ProductionProtocolBootstrapReport> {
+        self.coordinator.production_protocol_bootstrap_report()
     }
 
     /// 返回可供其他调用方请求 cooperative stop 的 handle。
