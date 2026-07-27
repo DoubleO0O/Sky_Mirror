@@ -552,8 +552,10 @@ mod tests {
     const PRODUCTION_PROTOCOL_CHILD_SOCKET_ENV: &str = "SKY_MIRROR_PHASE56P_PROTOCOL_CHILD_SOCKET";
     const PRODUCTION_PROTOCOL_CHILD_SCENARIO_ROLE: &str = "external-wayland-scenario";
     const PRODUCTION_PROTOCOL_CHILD_BOUNDED_PARK_ROLE: &str = "bounded-park";
+    const PRODUCTION_PROTOCOL_CHILD_SILENT_PEER_DRIVER_ROLE: &str = "silent-peer-driver";
     const PRODUCTION_PROTOCOL_EXTERNAL_TEST_NAME: &str = "smithay_backend::nested_runtime_orchestrator::tests::production_orchestrator_external_registry_roundtrip";
     const PRODUCTION_PROTOCOL_WATCHDOG_REGRESSION_TEST_NAME: &str = "smithay_backend::nested_runtime_orchestrator::tests::production_protocol_watchdog_kills_bounded_parked_child";
+    const PRODUCTION_PROTOCOL_SILENT_PEER_DRIVER_TEST_NAME: &str = "smithay_backend::nested_runtime_orchestrator::tests::production_protocol_client_driver_times_out_and_scoped_thread_joins";
     const PRODUCTION_PROTOCOL_OUTER_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(6);
     const PRODUCTION_PROTOCOL_WATCHDOG_KILL_REAP_TIMEOUT: Duration = Duration::from_secs(1);
     const PRODUCTION_PROTOCOL_WATCHDOG_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -898,6 +900,101 @@ mod tests {
         polls: usize,
     }
 
+    // `Child` drop 不会替我们 wait/reap。所有 watchdog child 都由此 guard 持有：正常
+    // try_wait 已确认退出时显式释放；任一错误路径与 guard drop 都会再次 SIGKILL，并且
+    // 只在固定 deadline/poll 上限内 try_wait reap，绝不退回无界 Child::wait。
+    struct ProtocolChildTerminationGuard {
+        child: Option<Child>,
+    }
+
+    impl ProtocolChildTerminationGuard {
+        fn new(child: Child) -> Self {
+            Self { child: Some(child) }
+        }
+
+        fn child_mut(&mut self) -> &mut Child {
+            self.child
+                .as_mut()
+                .expect("未 reaped 的 protocol child guard 必须持有 Child")
+        }
+
+        fn release_after_reap(&mut self) {
+            // `try_wait` 返回 Some 后已经完成 reaping；此时才允许丢弃 Child handle。
+            let _ = self.child.take();
+        }
+
+        fn terminate_and_reap_once(
+            &mut self,
+            deadline: Instant,
+            stage: &str,
+        ) -> Result<(ExitStatus, usize), String> {
+            let result = {
+                let child = self.child_mut();
+                let kill_result = child.kill();
+                let reap_result =
+                    wait_for_protocol_child_exit_with_bounded_try_wait(child, deadline, stage);
+
+                match (kill_result, reap_result) {
+                    // kill 与 try_wait 有竞态：即使 kill 报告已退出，只要 try_wait 得到
+                    // status，就已经完成 reaping，必须视为成功而非误报 kill failure。
+                    (_, Ok(reaped)) => Ok(reaped),
+                    (Ok(()), Err(reap_error)) => Err(format!(
+                        "protocol child {stage} 已发出 kill，但未在有界 try_wait 中确认退出: {reap_error}"
+                    )),
+                    (Err(kill_error), Err(reap_error)) => Err(format!(
+                        "protocol child {stage} kill 失败且 child 仍未在有界 try_wait 中退出: {kill_error}; {reap_error}"
+                    )),
+                }
+            };
+            if result.is_ok() {
+                self.release_after_reap();
+            }
+            result
+        }
+
+        fn terminate_and_reap_with_retry(
+            &mut self,
+            deadline: Instant,
+            stage: &str,
+        ) -> Result<(ExitStatus, usize), String> {
+            match self.terminate_and_reap_once(deadline, stage) {
+                Ok(reaped) => Ok(reaped),
+                Err(first_error) => {
+                    let retry_stage = format!("{stage} 重试");
+                    self.terminate_and_reap_once(
+                        Instant::now() + PRODUCTION_PROTOCOL_WATCHDOG_KILL_REAP_TIMEOUT,
+                        &retry_stage,
+                    )
+                    .map_err(|retry_error| {
+                        format!(
+                            "{first_error}; protocol child {stage} 重复 kill/reap 后仍未确认退出: {retry_error}"
+                        )
+                    })
+                }
+            }
+        }
+    }
+
+    impl Drop for ProtocolChildTerminationGuard {
+        fn drop(&mut self) {
+            if self.child.is_none() {
+                return;
+            }
+
+            // 运行路径已返回 Err 时 guard 仍在作用域内；drop 必须再作一次有界终止尝试，
+            // 不能静默丢掉可能仍在运行或未 reaped 的 Child。Drop 无法返回 Result，故将
+            // OS 在重复 SIGKILL 后仍不退出的极端情形以结构化诊断输出保留给测试日志。
+            if let Err(error) = self.terminate_and_reap_with_retry(
+                Instant::now() + PRODUCTION_PROTOCOL_WATCHDOG_KILL_REAP_TIMEOUT,
+                "RAII drop cleanup",
+            ) {
+                eprintln!(
+                    "protocol child RAII drop cleanup failed after repeated bounded kill/reap: {error}"
+                );
+            }
+        }
+    }
+
     fn wait_for_protocol_child_exit_with_bounded_try_wait(
         child: &mut Child,
         deadline: Instant,
@@ -931,45 +1028,29 @@ mod tests {
     // 运行既有 start -> client thread -> channel -> bounded server -> drop/socket assertion。
     // 父进程只在 inner connect/join 未来回归为卡死时提供 OS 级硬截止、kill 与有界 reap。
     fn run_protocol_child_with_watchdog(
-        mut child: Child,
+        child: Child,
         deadline: Instant,
     ) -> Result<ProtocolChildWatchdogReport, String> {
-        match wait_for_protocol_child_exit_with_bounded_try_wait(&mut child, deadline, "正常退出")
-        {
-            Ok((status, polls)) => Ok(ProtocolChildWatchdogReport {
-                status,
-                timed_out: false,
-                polls,
-            }),
+        let mut child_guard = ProtocolChildTerminationGuard::new(child);
+        match wait_for_protocol_child_exit_with_bounded_try_wait(
+            child_guard.child_mut(),
+            deadline,
+            "正常退出",
+        ) {
+            Ok((status, polls)) => {
+                child_guard.release_after_reap();
+                Ok(ProtocolChildWatchdogReport {
+                    status,
+                    timed_out: false,
+                    polls,
+                })
+            }
             Err(wait_error) => {
-                if let Err(kill_error) = child.kill() {
-                    // `try_wait` 与 kill 之间 child 可能刚好自行退出。先再做一次非阻塞
-                    // reaping，避免把已退出 child 误作 kill failure 且让 Child handle 静默 drop。
-                    if let Some(status) = child.try_wait().map_err(|error| {
-                        format!("{wait_error}; protocol child kill 失败后 try_wait 也失败: {error}")
-                    })? {
-                        return Ok(ProtocolChildWatchdogReport {
-                            status,
-                            timed_out: true,
-                            polls: 1,
-                        });
-                    }
-                    return Err(format!(
-                        "{wait_error}; protocol child watchdog kill 失败且 child 仍未退出: {kill_error}"
-                    ));
-                }
                 let killed_deadline =
                     Instant::now() + PRODUCTION_PROTOCOL_WATCHDOG_KILL_REAP_TIMEOUT;
-                let (status, polls) = wait_for_protocol_child_exit_with_bounded_try_wait(
-                    &mut child,
-                    killed_deadline,
-                    "kill 后退出",
-                )
-                .map_err(|reap_error| {
-                    format!(
-                        "{wait_error}; protocol child 已发出 kill，但未在有界 try_wait 中确认退出: {reap_error}"
-                    )
-                })?;
+                let (status, polls) = child_guard
+                    .terminate_and_reap_with_retry(killed_deadline, "watchdog kill 后退出")
+                    .map_err(|termination_error| format!("{wait_error}; {termination_error}"))?;
                 Ok(ProtocolChildWatchdogReport {
                     status,
                     timed_out: true,
@@ -1407,7 +1488,90 @@ mod tests {
     }
 
     #[test]
-    fn production_protocol_client_driver_times_out_and_scoped_thread_joins() {
+    fn production_protocol_child_watchdog_requires_raii_bounded_termination_guard() {
+        let source = include_str!("nested_runtime_orchestrator.rs");
+        let guard_marker = ["struct ProtocolChild", "TerminationGuard"].concat();
+        let guard_end_marker = "struct ProtocolChildRuntimeDir";
+        let drop_impl = ["impl Drop for ProtocolChild", "TerminationGuard"].concat();
+        let retry = ["terminate_and_reap", "_with_retry"].concat();
+        let kill = [".kill", "()"].concat();
+        let try_wait = ["try", "_wait"].concat();
+        let unbounded_wait = [".wait", "("].concat();
+        let guard_source = source
+            .split_once(&guard_marker)
+            .and_then(|(_, source)| source.split_once(guard_end_marker).map(|(guard, _)| guard))
+            .unwrap_or_default();
+
+        assert!(
+            !guard_source.is_empty(),
+            "watchdog 必须持有 protocol child RAII termination guard"
+        );
+        assert!(
+            guard_source.contains(&drop_impl),
+            "Child guard 必须在 Drop 中执行有界终止收尾"
+        );
+        assert!(
+            guard_source.contains(&retry),
+            "Child guard 失败路径必须再次执行 bounded kill/reap"
+        );
+        assert!(
+            guard_source.contains(&kill) && guard_source.contains(&try_wait),
+            "Child guard 必须用 kill 和 bounded try_wait 完成终止/reap"
+        );
+        assert!(
+            !guard_source.contains(&unbounded_wait),
+            "Child guard 不得引入无界 Child::wait"
+        );
+    }
+
+    #[test]
+    fn production_protocol_silent_peer_driver_requires_current_exe_child_watchdog() {
+        let source = include_str!("nested_runtime_orchestrator.rs");
+        let outer_test_marker = [
+            "fn production_protocol_client_driver",
+            "_times_out_and_scoped_thread_joins()",
+        ]
+        .concat();
+        let outer_test_end_marker = "fn production_protocol_cleanup_error_records_socket_residue";
+        let current_exe = ["current", "_exe()"].concat();
+        let child_role = ["PRODUCTION_PROTOCOL_CHILD", "_SILENT_PEER_DRIVER_ROLE"].concat();
+        let watchdog = ["run_protocol_child", "_with_watchdog"].concat();
+        let scoped_thread = ["thread", "::scope"].concat();
+        let outer_test_source = source
+            .split_once(&outer_test_marker)
+            .and_then(|(_, source)| {
+                source
+                    .split_once(outer_test_end_marker)
+                    .map(|(outer_test, _)| outer_test)
+            })
+            .unwrap_or_default();
+
+        // 静默 peer 失败路径同样会真实 join worker；若该 join 未来因 socket wait 回归为
+        // 无界，standalone test 本身不能卡住。完整 thread::scope 场景必须留在同名 child，
+        // outer test 只保留 current_exe sentinel 与 bounded process watchdog。
+        assert!(
+            !outer_test_source.is_empty(),
+            "必须存在 silent-peer driver outer watchdog test"
+        );
+        assert!(
+            outer_test_source.contains(&current_exe),
+            "silent-peer outer test 必须以 current_exe 启动独立 child"
+        );
+        assert!(
+            outer_test_source.contains(&child_role),
+            "silent-peer outer test 必须用 child-role sentinel 阻止递归"
+        );
+        assert!(
+            outer_test_source.contains(&watchdog),
+            "silent-peer outer test 必须进入独立 child watchdog"
+        );
+        assert!(
+            !outer_test_source.contains(&scoped_thread),
+            "silent-peer outer test 不得直接 thread::scope 后 join"
+        );
+    }
+
+    fn production_protocol_client_driver_times_out_and_scoped_thread_joins_inner() {
         let (client_stream, silent_peer) =
             UnixStream::pair().expect("UnixStream::pair 必须创建静默 Wayland peer");
         let started_at = Instant::now();
@@ -1460,6 +1624,69 @@ mod tests {
         assert!(
             started_at.elapsed() <= PRODUCTION_PROTOCOL_TEST_TIMEOUT,
             "静默 peer deadline driver 不得超过测试硬上限"
+        );
+    }
+
+    #[test]
+    fn production_protocol_client_driver_times_out_and_scoped_thread_joins() {
+        match std::env::var(PRODUCTION_PROTOCOL_CHILD_ROLE_ENV).as_deref() {
+            Ok(PRODUCTION_PROTOCOL_CHILD_SILENT_PEER_DRIVER_ROLE) => {
+                production_protocol_client_driver_times_out_and_scoped_thread_joins_inner();
+                return;
+            }
+            Ok(role) => panic!("silent-peer driver child 收到未知 role: {role}"),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(error) => panic!("读取 silent-peer driver child role 失败: {error}"),
+        }
+
+        // child 内仍真实运行 UnixStream::pair -> scoped worker -> deadline driver -> join。
+        // 这里的 process watchdog 不替代该 join，只在未来 socket wait 回归为无界时以绝对
+        // deadline kill 独立 child，保证 standalone filter 不会被 worker join 永久卡住。
+        let current_exe = std::env::current_exe()
+            .expect("silent-peer outer watchdog 必须取得当前 test executable");
+        let child_runtime_dir = ProtocolChildRuntimeDir::create()
+            .expect("silent-peer outer watchdog 必须创建唯一 child runtime dir");
+        let child_result = spawn_protocol_child(
+            &current_exe,
+            PRODUCTION_PROTOCOL_SILENT_PEER_DRIVER_TEST_NAME,
+            PRODUCTION_PROTOCOL_CHILD_SILENT_PEER_DRIVER_ROLE,
+            &child_runtime_dir,
+        )
+        .and_then(|child| {
+            run_protocol_child_with_watchdog(
+                child,
+                Instant::now() + PRODUCTION_PROTOCOL_OUTER_WATCHDOG_TIMEOUT,
+            )
+        });
+        let cleanup = child_runtime_dir
+            .cleanup_and_verify()
+            .expect("silent-peer outer watchdog 必须清理并移除唯一 child runtime dir");
+        let report =
+            child_result.expect("silent-peer outer watchdog 必须在绝对 deadline 内确认 child 退出");
+
+        assert!(
+            !report.timed_out,
+            "正常 silent-peer driver child 不得触发 watchdog kill: {report:?}"
+        );
+        assert!(
+            report.status.success(),
+            "silent-peer driver child 必须以成功状态退出: {report:?}"
+        );
+        assert!(
+            !cleanup.socket_was_residual,
+            "silent-peer driver child 不得留下未受控 socket residue: {cleanup:?}"
+        );
+        assert!(
+            cleanup.runtime_dir_removed,
+            "silent-peer outer watchdog 必须移除唯一 child runtime dir: {cleanup:?}"
+        );
+        println!(
+            "phase56p silent-peer driver outer watchdog: child_polls={} timed_out={} status={} child_socket_residual={} child_runtime_dir_removed={}",
+            report.polls,
+            report.timed_out,
+            report.status,
+            cleanup.socket_was_residual,
+            cleanup.runtime_dir_removed,
         );
     }
 
@@ -1676,6 +1903,60 @@ mod tests {
             report.status,
             cleanup.socket_was_residual,
             cleanup.runtime_dir_removed,
+        );
+    }
+
+    #[test]
+    fn production_protocol_child_termination_guard_drop_kills_and_reaps_parked_child() {
+        let current_exe =
+            std::env::current_exe().expect("RAII drop regression 必须取得当前 test executable");
+        let child_runtime_dir = ProtocolChildRuntimeDir::create()
+            .expect("RAII drop regression 必须创建唯一 child runtime dir");
+        let startup_result = spawn_protocol_child(
+            &current_exe,
+            PRODUCTION_PROTOCOL_WATCHDOG_REGRESSION_TEST_NAME,
+            PRODUCTION_PROTOCOL_CHILD_BOUNDED_PARK_ROLE,
+            &child_runtime_dir,
+        )
+        .and_then(|child| {
+            let mut child_guard = ProtocolChildTerminationGuard::new(child);
+            let child_pid = child_guard.child_mut().id();
+            let startup_polls = wait_for_protocol_child_socket_startup(
+                child_guard.child_mut(),
+                child_runtime_dir.socket_path(),
+                Instant::now() + PRODUCTION_PROTOCOL_BOUNDED_PARK_STARTUP_TIMEOUT,
+            )?;
+
+            // 不显式调用 watchdog：让 guard 的 Drop 路径承担 kill + bounded try_wait reap，
+            // 证明 future early-return/unwind 不会静默 drop 仍运行的 child。
+            drop(child_guard);
+            Ok((startup_polls, child_pid))
+        });
+        let cleanup = child_runtime_dir
+            .cleanup_and_verify()
+            .expect("RAII drop regression 必须清理唯一 child runtime dir");
+        let (startup_polls, child_pid) =
+            startup_result.expect("RAII drop guard 必须在 bounded cleanup 后终止 parked child");
+
+        assert!(
+            startup_polls <= PRODUCTION_PROTOCOL_WATCHDOG_MAX_POLLS,
+            "RAII drop child startup 必须在固定 poll 上限内绑定 socket: {startup_polls}"
+        );
+        assert!(
+            !Path::new(&format!("/proc/{child_pid}")).exists(),
+            "RAII drop 后 child 必须已退出并被 reaped，/proc/{child_pid} 不得仍存在"
+        );
+        assert!(
+            cleanup.socket_was_residual,
+            "RAII drop kill 后 parent 必须观察并精确清理 child 遗留 socket: {cleanup:?}"
+        );
+        assert!(
+            cleanup.runtime_dir_removed,
+            "RAII drop 后 parent 必须移除唯一 child runtime dir: {cleanup:?}"
+        );
+        println!(
+            "phase56p protocol RAII drop regression: child_pid={} startup_polls={} child_socket_residual={} child_runtime_dir_removed={}",
+            child_pid, startup_polls, cleanup.socket_was_residual, cleanup.runtime_dir_removed,
         );
     }
 
