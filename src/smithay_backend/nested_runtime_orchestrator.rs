@@ -474,17 +474,20 @@ impl NestedRuntimeOrchestrator {
 #[cfg(test)]
 mod tests {
     use std::{
+        io::ErrorKind,
         os::unix::net::UnixStream,
+        panic::{self, AssertUnwindSafe},
         path::PathBuf,
         sync::mpsc,
         thread,
         time::{Duration, Instant},
     };
 
+    use calloop::{EventLoop, Interest, Mode, PostAction, generic::Generic};
     use wayland_client::{
-        Connection, Dispatch, QueueHandle,
-        globals::{GlobalListContents, registry_queue_init},
-        protocol::{wl_compositor::WlCompositor, wl_registry::WlRegistry},
+        Connection, Dispatch, EventQueue, Proxy, QueueHandle,
+        backend::WaylandError,
+        protocol::{wl_callback::WlCallback, wl_compositor::WlCompositor, wl_registry::WlRegistry},
     };
     use wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
 
@@ -539,7 +542,7 @@ mod tests {
     const PRODUCTION_PROTOCOL_TEST_TIMEOUT: Duration = Duration::from_secs(5);
     const PRODUCTION_PROTOCOL_PUMP_TIMEOUT: Duration = Duration::from_millis(5);
     const PRODUCTION_PROTOCOL_MAX_PUMPS: usize = 1_000;
-    const PRODUCTION_PROTOCOL_JOIN_POLL: Duration = Duration::from_millis(1);
+    const PRODUCTION_PROTOCOL_CLIENT_MAX_READINESS_POLLS: usize = 1_000;
 
     /// 外部 Wayland client 的纯数据证据；它刻意只存在于测试模块，不能流入 production
     /// getter 或 public API。服务端只能证明 owner 已完成 bootstrap，不能独立声称外部
@@ -548,6 +551,9 @@ mod tests {
     struct ExternalProtocolRoundtripEvidence {
         client_connected: bool,
         registry_roundtrip_completed: bool,
+        registry_readiness_polls: usize,
+        bind_roundtrip_completed: bool,
+        bind_readiness_polls: usize,
         wl_compositor_discovered: bool,
         xdg_wm_base_discovered: bool,
         wl_compositor_bound: bool,
@@ -557,50 +563,321 @@ mod tests {
         socket_removed_after_drop: bool,
     }
 
-    #[derive(Default)]
-    struct ProductionProtocolClientState;
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct RegisteredProtocolGlobal {
+        name: u32,
+        version: u32,
+    }
 
-    impl Dispatch<WlRegistry, GlobalListContents> for ProductionProtocolClientState {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ProductionProtocolRoundtripStage {
+        Registry,
+        Bind,
+    }
+
+    #[derive(Default)]
+    struct ProductionProtocolClientState {
+        wl_compositor: Option<RegisteredProtocolGlobal>,
+        xdg_wm_base: Option<RegisteredProtocolGlobal>,
+        registry_sync_done: bool,
+        bind_sync_done: bool,
+    }
+
+    impl Dispatch<WlRegistry, ()> for ProductionProtocolClientState {
         fn event(
-            _state: &mut Self,
+            state: &mut Self,
             _proxy: &WlRegistry,
             _event: wayland_client::protocol::wl_registry::Event,
-            _data: &GlobalListContents,
+            _data: &(),
             _connection: &Connection,
             _queue_handle: &QueueHandle<Self>,
         ) {
+            match _event {
+                wayland_client::protocol::wl_registry::Event::Global {
+                    name,
+                    interface,
+                    version,
+                } if interface == "wl_compositor" => {
+                    state.wl_compositor = Some(RegisteredProtocolGlobal { name, version });
+                }
+                wayland_client::protocol::wl_registry::Event::Global {
+                    name,
+                    interface,
+                    version,
+                } if interface == "xdg_wm_base" => {
+                    state.xdg_wm_base = Some(RegisteredProtocolGlobal { name, version });
+                }
+                wayland_client::protocol::wl_registry::Event::GlobalRemove { name } => {
+                    if state
+                        .wl_compositor
+                        .is_some_and(|global| global.name == name)
+                    {
+                        state.wl_compositor = None;
+                    }
+                    if state.xdg_wm_base.is_some_and(|global| global.name == name) {
+                        state.xdg_wm_base = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl Dispatch<WlCallback, ProductionProtocolRoundtripStage> for ProductionProtocolClientState {
+        fn event(
+            state: &mut Self,
+            _proxy: &WlCallback,
+            event: wayland_client::protocol::wl_callback::Event,
+            stage: &ProductionProtocolRoundtripStage,
+            _connection: &Connection,
+            _queue_handle: &QueueHandle<Self>,
+        ) {
+            if let wayland_client::protocol::wl_callback::Event::Done { .. } = event {
+                match stage {
+                    ProductionProtocolRoundtripStage::Registry => {
+                        state.registry_sync_done = true;
+                    }
+                    ProductionProtocolRoundtripStage::Bind => {
+                        state.bind_sync_done = true;
+                    }
+                }
+            }
         }
     }
 
     wayland_client::delegate_noop!(ProductionProtocolClientState: ignore WlCompositor);
     wayland_client::delegate_noop!(ProductionProtocolClientState: ignore XdgWmBase);
 
-    fn join_production_protocol_client_before_deadline(
-        client_thread: thread::JoinHandle<()>,
-    ) -> Result<(), String> {
-        let deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+    #[derive(Default)]
+    struct ProductionProtocolReadiness {
+        readable_or_error: bool,
+    }
 
-        // Join 只在固定次数与固定 deadline 双重约束内轮询；这避免测试在 client panic、
-        // 意外阻塞或 socket 生命周期异常时无限等待，同时仍让正常路径显式回收 thread owner。
-        for _ in 0..PRODUCTION_PROTOCOL_MAX_PUMPS {
-            if client_thread.is_finished() {
-                return client_thread
-                    .join()
-                    .map_err(|_| "外部 protocol client thread panic".to_owned());
+    fn drive_client_event_queue_until(
+        event_queue: &mut EventQueue<ProductionProtocolClientState>,
+        client_state: &mut ProductionProtocolClientState,
+        readiness_loop: &mut EventLoop<ProductionProtocolReadiness>,
+        readiness: &mut ProductionProtocolReadiness,
+        deadline: Instant,
+        stage: &str,
+        completed: impl Fn(&ProductionProtocolClientState) -> bool,
+    ) -> Result<usize, String> {
+        let mut readiness_polls = 0usize;
+
+        while !completed(client_state) {
+            if readiness_polls >= PRODUCTION_PROTOCOL_CLIENT_MAX_READINESS_POLLS {
+                return Err(format!(
+                    "外部 client {stage} 超过固定 readiness poll 上限 {}",
+                    PRODUCTION_PROTOCOL_CLIENT_MAX_READINESS_POLLS
+                ));
             }
-            if Instant::now() >= deadline {
-                return Err("外部 protocol client thread 未在 5 秒 deadline 前结束".to_owned());
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(format!("外部 client {stage} 超过固定 deadline"));
             }
-            thread::sleep(PRODUCTION_PROTOCOL_JOIN_POLL);
+
+            // Wayland backend 的纯 Rust 单 reader 路径把 recvmsg/sendmsg 置于 DONTWAIT；
+            // 这里把 WouldBlock 作为可重试状态而不是把它转换成同步 helper。每次 retry
+            // 都经过下方剩余 deadline 的 fd readiness poll，绝不落入 poll(None)。
+            let flushed = match event_queue.flush() {
+                Ok(()) => true,
+                Err(WaylandError::Io(error)) if error.kind() == ErrorKind::WouldBlock => false,
+                Err(error) => {
+                    return Err(format!("外部 client {stage} flush 失败: {error}"));
+                }
+            };
+            event_queue
+                .dispatch_pending(client_state)
+                .map_err(|error| format!("外部 client {stage} dispatch_pending 失败: {error}"))?;
+            if completed(client_state) {
+                break;
+            }
+            if !flushed {
+                // 这个测试只发送极小的 registry/bind/sync 请求，正常路径不会触及 socket
+                // backpressure；若仍出现 WouldBlock，则使用固定上限和绝对 deadline 的短暂
+                // backoff 重试 flush，而不把 WRITE interest 注册成恒 ready 的 busy loop。
+                let retry_delay = deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(PRODUCTION_PROTOCOL_PUMP_TIMEOUT);
+                if retry_delay.is_zero() {
+                    return Err(format!("外部 client {stage} flush 超过固定 deadline"));
+                }
+                thread::sleep(retry_delay);
+                readiness_polls = readiness_polls.saturating_add(1);
+                continue;
+            }
+
+            // prepare_read 必须严格先于 fd readiness poll，才能保证 Wayland backend 的
+            // 单 reader 同步协议成立；若已有 pending event，按 API 约定再 dispatch 后重试。
+            let Some(read_guard) = event_queue.prepare_read() else {
+                event_queue
+                    .dispatch_pending(client_state)
+                    .map_err(|error| {
+                        format!(
+                            "外部 client {stage} prepare_read 后 dispatch_pending 失败: {error}"
+                        )
+                    })?;
+                readiness_polls = readiness_polls.saturating_add(1);
+                continue;
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(format!("外部 client {stage} 超过固定 deadline"));
+            }
+
+            readiness.readable_or_error = false;
+            readiness_loop
+                .dispatch(Some(remaining), readiness)
+                .map_err(|error| format!("外部 client {stage} fd readiness poll 失败: {error}"))?;
+            readiness_polls = readiness_polls.saturating_add(1);
+            if !readiness.readable_or_error {
+                return Err(format!(
+                    "外部 client {stage} fd readiness poll 到 deadline 仍无事件"
+                ));
+            }
+
+            match read_guard.read() {
+                Ok(_) => {}
+                Err(WaylandError::Io(error)) if error.kind() == ErrorKind::WouldBlock => {}
+                Err(error) => {
+                    return Err(format!("外部 client {stage} read 失败: {error}"));
+                }
+            }
+            event_queue
+                .dispatch_pending(client_state)
+                .map_err(|error| {
+                    format!("外部 client {stage} read 后 dispatch_pending 失败: {error}")
+                })?;
         }
 
-        Err("外部 protocol client thread 超过固定 join 轮询上限".to_owned())
+        Ok(readiness_polls)
+    }
+
+    fn drive_external_protocol_client(
+        client_stream: UnixStream,
+        deadline: Instant,
+    ) -> Result<ExternalProtocolRoundtripEvidence, String> {
+        client_stream
+            .set_nonblocking(true)
+            .map_err(|error| format!("外部 client 设置非阻塞 Wayland socket 失败: {error}"))?;
+        // clone 与 Connection 使用同一 Wayland socket；calloop 只观察 clone 的 fd readiness
+        // 而绝不 read，真正的单 reader 始终是 prepare_read 返回的 guard，因此不会破坏
+        // wayland-client 要求的 guard-先于-poll 同步次序。
+        let readiness_socket = client_stream
+            .try_clone()
+            .map_err(|error| format!("外部 client 克隆 readiness socket 失败: {error}"))?;
+        let connection = Connection::from_socket(client_stream)
+            .map_err(|error| format!("外部 client 创建 Wayland connection 失败: {error}"))?;
+        let mut event_queue = connection.new_event_queue();
+        let queue_handle = event_queue.handle();
+        let display = connection.display();
+        let mut client_state = ProductionProtocolClientState::default();
+        let mut readiness_loop = EventLoop::<ProductionProtocolReadiness>::try_new()
+            .map_err(|error| format!("外部 client 创建 fd readiness poll 失败: {error}"))?;
+        let mut readiness = ProductionProtocolReadiness::default();
+        let _readiness_source = readiness_loop
+            .handle()
+            .insert_source(
+                Generic::new(readiness_socket, Interest::READ, Mode::Level),
+                |readiness_event, _socket, readiness| {
+                    readiness.readable_or_error |=
+                        readiness_event.readable || readiness_event.error;
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|error| format!("外部 client 注册 fd readiness source 失败: {error}"))?;
+
+        // 不使用 globals helper：手工取得 registry 后立即发送第一个 sync callback，
+        // 它只标记初始 global 广播已经到达；下方的有界 driver 负责在 deadline 内读取。
+        let registry = display.get_registry(&queue_handle, ());
+        if !registry.is_alive() {
+            return Err("外部 client 创建 registry 后得到 inert proxy".to_owned());
+        }
+        let registry_sync = display.sync(&queue_handle, ProductionProtocolRoundtripStage::Registry);
+        if !registry_sync.is_alive() {
+            return Err("外部 client 创建 registry sync 后得到 inert proxy".to_owned());
+        }
+        let registry_readiness_polls = drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "registry discovery",
+            |state| state.registry_sync_done,
+        )?;
+
+        let wl_compositor = client_state
+            .wl_compositor
+            .ok_or_else(|| "外部 client registry 未发现 wl_compositor".to_owned())?;
+        let xdg_wm_base = client_state
+            .xdg_wm_base
+            .ok_or_else(|| "外部 client registry 未发现 xdg_wm_base".to_owned())?;
+        if wl_compositor.version == 0 || xdg_wm_base.version == 0 {
+            return Err("外部 client 收到 version=0 的 required global".to_owned());
+        }
+        let mut evidence = ExternalProtocolRoundtripEvidence {
+            registry_roundtrip_completed: true,
+            registry_readiness_polls,
+            wl_compositor_discovered: true,
+            xdg_wm_base_discovered: true,
+            ..ExternalProtocolRoundtripEvidence::default()
+        };
+
+        let compositor = registry.bind::<WlCompositor, _, _>(
+            wl_compositor.name,
+            wl_compositor.version.min(5),
+            &queue_handle,
+            (),
+        );
+        if !compositor.is_alive() {
+            return Err("外部 client bind wl_compositor 后得到 inert proxy".to_owned());
+        }
+        let xdg_wm_base = registry.bind::<XdgWmBase, _, _>(
+            xdg_wm_base.name,
+            xdg_wm_base.version.min(7),
+            &queue_handle,
+            (),
+        );
+        if !xdg_wm_base.is_alive() {
+            return Err("外部 client bind xdg_wm_base 后得到 inert proxy".to_owned());
+        }
+        let bind_sync = display.sync(&queue_handle, ProductionProtocolRoundtripStage::Bind);
+        if !bind_sync.is_alive() {
+            return Err("外部 client 创建 bind sync 后得到 inert proxy".to_owned());
+        }
+        let bind_readiness_polls = drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "global bind",
+            |state| state.bind_sync_done,
+        )?;
+        if !compositor.is_alive() || !xdg_wm_base.is_alive() {
+            return Err("外部 client bind sync 后 required proxy 已失效".to_owned());
+        }
+        evidence.bind_roundtrip_completed = true;
+        evidence.bind_readiness_polls = bind_readiness_polls;
+        evidence.wl_compositor_bound = true;
+        evidence.xdg_wm_base_bound = true;
+        Ok(evidence)
+    }
+
+    fn append_socket_cleanup_error(error: String, socket_removed_after_drop: bool) -> String {
+        if socket_removed_after_drop {
+            error
+        } else {
+            format!("{error}; orchestrator drop 后测试 socket path 仍残留")
+        }
     }
 
     fn production_orchestrator_external_registry_roundtrip_evidence() -> Result<
         (
             ExternalProtocolRoundtripEvidence,
             ProductionProtocolBootstrapReport,
+            super::NestedRuntimeLifecycleReport,
             usize,
         ),
         String,
@@ -617,132 +894,128 @@ mod tests {
         let socket_path = PathBuf::from(runtime_dir).join(&runtime_config.socket_name);
         let mut state = State::new();
         let mut orchestrator = NestedRuntimeOrchestrator::new(runtime_config);
-        let mut client_thread = None;
+        let (result, join_result) = thread::scope(|scope| {
+            let mut client_thread = None;
+            let mut client_finished_receiver = None;
+            let result = (|| -> Result<_, String> {
+                let _start_report = orchestrator
+                    .start()
+                    .map_err(|error| format!("orchestrator start 失败: {error:?}"))?;
+                if !socket_path.exists() {
+                    return Err("orchestrator start 后测试 socket path 不存在".to_owned());
+                }
+                let server_report = orchestrator
+                    .production_protocol_bootstrap_report()
+                    .ok_or_else(|| {
+                        "production orchestrator start 后缺少 server bootstrap report".to_owned()
+                    })?;
 
-        let result = (|| -> Result<_, String> {
-            let _start_report = orchestrator
-                .start()
-                .map_err(|error| format!("orchestrator start 失败: {error:?}"))?;
-            if !socket_path.exists() {
-                return Err("orchestrator start 后测试 socket path 不存在".to_owned());
-            }
-            let server_report = orchestrator
-                .production_protocol_bootstrap_report()
-                .ok_or_else(|| {
-                    "production orchestrator start 后缺少 server bootstrap report".to_owned()
-                })?;
+                let stop_handle = orchestrator
+                    .stop_handle()
+                    .map_err(|error| format!("orchestrator stop handle 获取失败: {error:?}"))?;
+                let (client_connected_sender, client_connected_receiver) = mpsc::channel();
+                let (client_start_sender, client_start_receiver) = mpsc::channel();
+                let (client_result_sender, client_result_receiver) = mpsc::channel();
+                let (client_finished_sender, finished_receiver) = mpsc::channel();
+                client_finished_receiver = Some(finished_receiver);
+                let client_socket_path = socket_path.clone();
 
-            let stop_handle = orchestrator
-                .stop_handle()
-                .map_err(|error| format!("orchestrator stop handle 获取失败: {error:?}"))?;
-            let (client_connected_sender, client_connected_receiver) = mpsc::channel();
-            let (client_start_sender, client_start_receiver) = mpsc::channel();
-            let (client_result_sender, client_result_receiver) = mpsc::channel();
-            let client_socket_path = socket_path.clone();
+                client_thread = Some(scope.spawn(move || {
+                    let client_result = panic::catch_unwind(AssertUnwindSafe(|| {
+                        (|| -> Result<ExternalProtocolRoundtripEvidence, String> {
+                            let client_stream =
+                                UnixStream::connect(&client_socket_path).map_err(|error| {
+                                    format!("外部 client 连接测试 socket 失败: {error}")
+                                })?;
+                            client_connected_sender
+                                .send(())
+                                .map_err(|_| "主线程在 client 连通前提前退出".to_owned())?;
+                            // 只有主线程在固定 deadline 内观察到连通后才发出开始信号；client
+                            // 等待使用 recv_timeout。随后所有 Wayland I/O 均进入显式 fd poll
+                            // driver；panic/error 也会进入下方统一回传、stop、wakeup 路径。
+                            client_start_receiver
+                                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                                .map_err(|error| {
+                                    format!("外部 client 未在 5 秒内收到 server run 信号: {error}")
+                                })?;
+                            let mut evidence = drive_external_protocol_client(
+                                client_stream,
+                                Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT,
+                            )?;
+                            evidence.client_connected = true;
+                            Ok(evidence)
+                        })()
+                    }))
+                    .unwrap_or_else(|_| Err("外部 protocol client thread panic".to_owned()));
 
-            client_thread = Some(thread::spawn(move || {
-                let client_result = (|| -> Result<ExternalProtocolRoundtripEvidence, String> {
-                    let client_stream = UnixStream::connect(&client_socket_path)
-                        .map_err(|error| format!("外部 client 连接测试 socket 失败: {error}"))?;
-                    client_stream
-                        .set_read_timeout(Some(PRODUCTION_PROTOCOL_TEST_TIMEOUT))
-                        .map_err(|error| {
-                            format!("外部 client 设置 socket read timeout 失败: {error}")
-                        })?;
-                    client_stream
-                        .set_write_timeout(Some(PRODUCTION_PROTOCOL_TEST_TIMEOUT))
-                        .map_err(|error| {
-                            format!("外部 client 设置 socket write timeout 失败: {error}")
-                        })?;
-                    client_connected_sender
-                        .send(())
-                        .map_err(|_| "主线程在 client 连通前提前退出".to_owned())?;
-                    // 只有主线程在固定 deadline 内观察到连通后才发出开始信号；客户端的
-                    // 等待同样使用 recv_timeout，避免 barrier::wait 这类无超时原语在
-                    // panic 或调度异常时永久卡住。主线程发信号后立即进入有限 server pump。
-                    client_start_receiver
+                    // 不论 discovery/bind、fd poll 或 panic 如何结束，都先回传结构化结果
+                    // 再请求 stop+wakeup；finished 是 worker 的最后一个可观察动作。主线程
+                    // 必须在有限 recv_timeout 内收到它后才 join，scope 再兜底禁止 detach。
+                    let _ = client_result_sender.send(client_result);
+                    stop_handle.request_stop_and_wakeup();
+                    let _ = client_finished_sender.send(());
+                }));
+
+                client_connected_receiver
+                    .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                    .map_err(|error| format!("未在 5 秒内观察到外部 client 连通: {error}"))?;
+                client_start_sender
+                    .send(())
+                    .map_err(|_| "外部 client 在 server run 信号前提前退出".to_owned())?;
+
+                let server_started_at = Instant::now();
+                let lifecycle_report = orchestrator
+                    .run(&mut state)
+                    .map_err(|error| format!("orchestrator bounded run 失败: {error:?}"))?;
+                // 只有 lifecycle 报告已经明确是 clean shutdown、final state=Stopped 且无
+                // structured error，才能填写 server_finished；仅观察 run 返回不构成完成事实。
+                if !lifecycle_report.is_clean_shutdown()
+                    || lifecycle_report.final_state != NestedRuntimeLifecycleState::Stopped
+                    || !lifecycle_report.errors.is_empty()
+                {
+                    return Err(format!(
+                        "orchestrator lifecycle 未完成 clean shutdown: final_state={:?}, errors={:?}, report={lifecycle_report:?}",
+                        lifecycle_report.final_state, lifecycle_report.errors
+                    ));
+                }
+                let server_finished_before_deadline =
+                    server_started_at.elapsed() <= PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+
+                let mut evidence = client_result_receiver
+                    .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                    .map_err(|error| format!("未在 5 秒内收到外部 client 结果: {error}"))??;
+                evidence.server_finished_before_deadline = server_finished_before_deadline;
+                Ok((
+                    evidence,
+                    server_report,
+                    lifecycle_report.clone(),
+                    lifecycle_report.pump_iterations,
+                ))
+            })();
+            let finished_result = client_finished_receiver
+                .map(|client_finished_receiver| {
+                    client_finished_receiver
                         .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
                         .map_err(|error| {
-                            format!("外部 client 未在 5 秒内收到 server run 信号: {error}")
-                        })?;
-
-                    let connection = Connection::from_socket(client_stream).map_err(|error| {
-                        format!("外部 client 创建 Wayland connection 失败: {error}")
-                    })?;
-                    let (globals, mut event_queue) =
-                        registry_queue_init::<ProductionProtocolClientState>(&connection).map_err(
-                            |error| format!("外部 client 初始 registry roundtrip 失败: {error}"),
-                        )?;
-                    let (wl_compositor_discovered, xdg_wm_base_discovered) =
-                        globals.contents().with_list(|registered_globals| {
-                            (
-                                registered_globals
-                                    .iter()
-                                    .any(|global| global.interface == "wl_compositor"),
-                                registered_globals
-                                    .iter()
-                                    .any(|global| global.interface == "xdg_wm_base"),
-                            )
-                        });
-                    let mut evidence = ExternalProtocolRoundtripEvidence {
-                        client_connected: true,
-                        registry_roundtrip_completed: true,
-                        wl_compositor_discovered,
-                        xdg_wm_base_discovered,
-                        ..ExternalProtocolRoundtripEvidence::default()
-                    };
-
-                    if wl_compositor_discovered && xdg_wm_base_discovered {
-                        let queue_handle = event_queue.handle();
-                        let _compositor = globals
-                            .bind::<WlCompositor, _, _>(&queue_handle, 1..=5, ())
-                            .map_err(|error| {
-                                format!("外部 client bind wl_compositor 失败: {error}")
-                            })?;
-                        evidence.wl_compositor_bound = true;
-                        let _xdg_wm_base = globals
-                            .bind::<XdgWmBase, _, _>(&queue_handle, 1..=7, ())
-                            .map_err(|error| {
-                                format!("外部 client bind xdg_wm_base 失败: {error}")
-                            })?;
-                        evidence.xdg_wm_base_bound = true;
-                        let mut client_state = ProductionProtocolClientState;
-                        event_queue.roundtrip(&mut client_state).map_err(|error| {
-                            format!("外部 client bind 后 event-queue roundtrip 失败: {error}")
-                        })?;
-                    }
-
-                    Ok(evidence)
-                })();
-
-                // 不论 discovery/bind 是成功、缺 global 还是 protocol error，client 都必须
-                // 先回传结构化结果再请求 stop+wakeup。这样 server 的 owner 仍只由
-                // orchestrator 生命周期回收，客户端不会通过无界等待或直接 display 控制 API
-                // 影响它；buffer/render/core 工作也继续明确延后，绝不由本测试伪造完成。
-                let _ = client_result_sender.send(client_result);
-                stop_handle.request_stop_and_wakeup();
-            }));
-
-            client_connected_receiver
-                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
-                .map_err(|error| format!("未在 5 秒内观察到外部 client 连通: {error}"))?;
-            client_start_sender
-                .send(())
-                .map_err(|_| "外部 client 在 server run 信号前提前退出".to_owned())?;
-
-            let server_started_at = Instant::now();
-            let lifecycle_report = orchestrator
-                .run(&mut state)
-                .map_err(|error| format!("orchestrator bounded run 失败: {error:?}"))?;
-            let server_finished_before_deadline =
-                server_started_at.elapsed() <= PRODUCTION_PROTOCOL_TEST_TIMEOUT;
-
-            let mut evidence = client_result_receiver
-                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
-                .map_err(|error| format!("未在 5 秒内收到外部 client 结果: {error}"))??;
-            evidence.server_finished_before_deadline = server_finished_before_deadline;
-            Ok((evidence, server_report, lifecycle_report.pump_iterations))
-        })();
+                            format!("外部 protocol client 未在 5 秒内完成 stop+wakeup: {error}")
+                        })
+                })
+                .unwrap_or(Ok(()));
+            let join_result = client_thread
+                .map(|client_thread| {
+                    client_thread
+                        .join()
+                        .map_err(|_| "外部 protocol client thread panic".to_owned())
+                })
+                .unwrap_or(Ok(()));
+            let result = match (result, finished_result) {
+                (Ok(result), Ok(())) => Ok(result),
+                (Ok(_), Err(finished_error)) => Err(finished_error),
+                (Err(error), Ok(())) => Err(error),
+                (Err(error), Err(finished_error)) => Err(format!("{error}; {finished_error}")),
+            };
+            (result, join_result)
+        });
 
         // 无论上面的任一步骤如何返回，都先通过公开 stop 生命周期请求 owner 收尾，再 drop
         // orchestrator 释放 socket/source。随后单独检查 path 已删除，避免把内存 drop 或
@@ -750,45 +1023,182 @@ mod tests {
         let _stop_report = orchestrator.stop(&state);
         drop(orchestrator);
         let socket_removed_after_drop = !socket_path.exists();
-        let join_result = client_thread
-            .map(join_production_protocol_client_before_deadline)
-            .unwrap_or(Ok(()));
 
         match (result, join_result) {
-            (Ok((mut evidence, server_report, pump_iterations)), Ok(())) => {
-                // 该字段只在 JoinHandle 已成功回收后填写，因此它证明的是 client thread
-                // 本身在 deadline 内结束，而不是仅证明 client closure 已准备返回或已经
-                // 发送 result。client 与 server 的完成事实仍分开记录，避免并发时序混淆。
+            (Ok((mut evidence, server_report, lifecycle_report, pump_iterations)), Ok(())) => {
+                // 该字段只在 scoped thread 已成功回收后填写；scope 不允许 drop 未 join 的
+                // client handle，因此它证明的是 client 本身结束，而非仅 closure 已回传 result。
                 evidence.client_finished_before_deadline =
                     test_started_at.elapsed() <= PRODUCTION_PROTOCOL_TEST_TIMEOUT;
                 evidence.socket_removed_after_drop = socket_removed_after_drop;
                 if !socket_removed_after_drop {
                     return Err("orchestrator drop 后测试 socket path 未清理".to_owned());
                 }
-                Ok((evidence, server_report, pump_iterations))
+                Ok((evidence, server_report, lifecycle_report, pump_iterations))
             }
-            (Ok(_), Err(error)) => Err(error),
-            (Err(error), Ok(())) => Err(error),
-            (Err(error), Err(join_error)) => Err(format!("{error}; {join_error}")),
+            (Ok(_), Err(error)) => Err(append_socket_cleanup_error(
+                error,
+                socket_removed_after_drop,
+            )),
+            (Err(error), Ok(())) => Err(append_socket_cleanup_error(
+                error,
+                socket_removed_after_drop,
+            )),
+            (Err(error), Err(join_error)) => Err(append_socket_cleanup_error(
+                format!("{error}; {join_error}"),
+                socket_removed_after_drop,
+            )),
         }
     }
 
     #[test]
+    fn production_protocol_client_driver_forbids_unbounded_roundtrip_helpers() {
+        let source = include_str!("nested_runtime_orchestrator.rs");
+        let registry_queue_helper = ["registry", "_queue", "_init"].concat();
+        let event_queue_roundtrip = ["event_queue", ".roundtrip("].concat();
+        let connection_roundtrip = ["connection", ".roundtrip("].concat();
+        let blocking_dispatch = ["blocking", "_dispatch("].concat();
+        let driver_marker = ["fn drive", "_external_protocol_client"].concat();
+        let driver_end_marker = [
+            "fn production_orchestrator",
+            "_external_registry_roundtrip_evidence",
+        ]
+        .concat();
+        let driver_source = source
+            .split_once(&driver_marker)
+            .and_then(|(_, source)| {
+                source
+                    .split_once(&driver_end_marker)
+                    .map(|(driver, _)| driver)
+            })
+            .unwrap_or_default();
+
+        // 这里检查的是单独抽取的 client driver 的硬边界：同步 helper 内部会以
+        // poll(None) 等待，socket timeout 无法为它们提供 deadline。测试必须禁止
+        // 它们回流，并由下面的 UnixStream::pair 失败路径验证显式驱动真实结束。
+        assert!(
+            !driver_source.is_empty(),
+            "必须存在独立的外部 client deadline driver"
+        );
+        assert!(
+            !driver_source.contains(&registry_queue_helper),
+            "外部 client 不得调用同步 registry helper"
+        );
+        assert!(
+            !driver_source.contains(&event_queue_roundtrip),
+            "外部 client 不得调用同步 event queue helper"
+        );
+        assert!(
+            !driver_source.contains(&connection_roundtrip),
+            "外部 client 不得调用同步 connection helper"
+        );
+        assert!(
+            !driver_source.contains(&blocking_dispatch),
+            "外部 client 不得调用同步 dispatch helper"
+        );
+    }
+
+    #[test]
+    fn production_protocol_client_driver_times_out_and_scoped_thread_joins() {
+        let (client_stream, silent_peer) =
+            UnixStream::pair().expect("UnixStream::pair 必须创建静默 Wayland peer");
+        let started_at = Instant::now();
+        let deadline = started_at + Duration::from_millis(50);
+        let (client_result, join_result) = thread::scope(|scope| {
+            let (client_result_sender, client_result_receiver) = mpsc::channel();
+            let client_thread = scope.spawn(move || {
+                let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    drive_external_protocol_client(client_stream, deadline)
+                }))
+                .unwrap_or_else(|_| {
+                    Err("静默 peer 的外部 protocol client thread panic".to_owned())
+                });
+                let _ = client_result_sender.send(result);
+            });
+            let client_result = match client_result_receiver
+                .recv_timeout(Duration::from_millis(250))
+            {
+                Ok(result) => Ok(result),
+                Err(first_error) => {
+                    // 若未来回归到无界 socket wait，先关闭对端以触发 HUP/readiness，再给
+                    // worker 第二个有限窗口回传；因此本测试不会仅因回归而永久卡在 join。
+                    drop(silent_peer);
+                    client_result_receiver.recv_timeout(Duration::from_millis(250)).map_err(
+                        |after_close_error| {
+                            format!(
+                                "静默 peer worker 超时且关闭 peer 后仍未结束: {first_error}; {after_close_error}"
+                            )
+                        },
+                    )
+                }
+            };
+            let join_result = client_thread
+                .join()
+                .map_err(|_| "静默 peer 的外部 protocol client thread panic".to_owned());
+            (client_result, join_result)
+        });
+
+        // peer 始终保持打开却永不发送 Wayland 响应。driver 必须通过 fd readiness poll
+        // 在自己的 deadline 返回，随后 scoped join 真实回收 worker；这拒绝了“超时后
+        // 仅 drop JoinHandle”的假完成，也让同步 poll(None) 回归立即可见。
+        let error = client_result
+            .expect("静默 peer worker 必须在有限 result wait 内结束")
+            .expect_err("静默 peer 不得被误报为 registry/bind 成功");
+        join_result.expect("静默 peer client thread 必须真实 join");
+        assert!(
+            error.contains("deadline"),
+            "静默 peer 错误必须说明 deadline: {error}"
+        );
+        assert!(
+            started_at.elapsed() <= PRODUCTION_PROTOCOL_TEST_TIMEOUT,
+            "静默 peer deadline driver 不得超过测试硬上限"
+        );
+    }
+
+    #[test]
+    fn production_protocol_cleanup_error_records_socket_residue() {
+        assert_eq!(
+            append_socket_cleanup_error("protocol failure".to_owned(), true),
+            "protocol failure"
+        );
+        assert_eq!(
+            append_socket_cleanup_error("protocol failure".to_owned(), false),
+            "protocol failure; orchestrator drop 后测试 socket path 仍残留"
+        );
+    }
+
+    #[test]
     fn production_orchestrator_external_registry_roundtrip() {
-        let (evidence, server_report, pump_iterations) =
+        let (evidence, server_report, lifecycle_report, pump_iterations) =
             production_orchestrator_external_registry_roundtrip_evidence()
                 .expect("外部 registry roundtrip harness 必须在固定 deadline 内完成并清理 socket");
 
         assert!((1..=PRODUCTION_PROTOCOL_MAX_PUMPS).contains(&pump_iterations));
         println!(
-            "phase56p production protocol roundtrip: actual_pumps={pump_iterations}/{} test_timeout={:?} pump_timeout={:?} join_poll={:?} external={evidence:?} server={server_report:?}",
+            "phase56p production protocol roundtrip: actual_pumps={pump_iterations}/{} test_timeout={:?} pump_timeout={:?} max_client_readiness_polls={} actual_client_readiness_polls=({}, {}) external={evidence:?} lifecycle_clean={} lifecycle_final_state={:?} lifecycle_errors={} lifecycle_clients={}/{} server={server_report:?}",
             PRODUCTION_PROTOCOL_MAX_PUMPS,
             PRODUCTION_PROTOCOL_TEST_TIMEOUT,
             PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
-            PRODUCTION_PROTOCOL_JOIN_POLL,
+            PRODUCTION_PROTOCOL_CLIENT_MAX_READINESS_POLLS,
+            evidence.registry_readiness_polls,
+            evidence.bind_readiness_polls,
+            lifecycle_report.is_clean_shutdown(),
+            lifecycle_report.final_state,
+            lifecycle_report.errors.len(),
+            lifecycle_report.registered_clients,
+            lifecycle_report.closed_clients,
         );
         assert!(evidence.client_connected);
         assert!(evidence.registry_roundtrip_completed);
+        assert!(
+            (1..=PRODUCTION_PROTOCOL_CLIENT_MAX_READINESS_POLLS)
+                .contains(&evidence.registry_readiness_polls)
+        );
+        assert!(evidence.bind_roundtrip_completed);
+        assert!(
+            (1..=PRODUCTION_PROTOCOL_CLIENT_MAX_READINESS_POLLS)
+                .contains(&evidence.bind_readiness_polls)
+        );
         assert!(evidence.wl_compositor_discovered);
         assert!(evidence.xdg_wm_base_discovered);
         assert!(evidence.wl_compositor_bound);
@@ -796,6 +1206,12 @@ mod tests {
         assert!(evidence.client_finished_before_deadline);
         assert!(evidence.server_finished_before_deadline);
         assert!(evidence.socket_removed_after_drop);
+        assert!(lifecycle_report.is_clean_shutdown());
+        assert_eq!(
+            lifecycle_report.final_state,
+            NestedRuntimeLifecycleState::Stopped
+        );
+        assert!(lifecycle_report.errors.is_empty());
         assert!(server_report.bootstrap_attempted);
         assert!(server_report.wl_compositor_initialized);
         assert!(server_report.xdg_wm_base_initialized);
