@@ -567,27 +567,13 @@ const PRODUCTION_PROTOCOL_WATCHDOG_MAX_POLLS: usize = 1_500;
 
 - [x] **Step 4: 写最小 forwarding 实现**
 
-  coordinator 抽取接收 flow 的私有 constructor，loop 抽取接收 coordinator 的私有
-  constructor；各自新增 production forwarding 与 report getter。orchestrator
-  `start()` 只替换 constructor 调用，并新增 crate-private getter。
-
-  coordinator/loop 的 common assembly 必须分别采用以下形状，既有 owner 初始化字段
-  原值移动到 common function，不新增 capability：
-
-  ```rust
-  fn with_flow_and_admission_surface_start(
-      flow: NestedRealAcceptFlow,
-      next_core_surface_id: SurfaceId,
-  ) -> Self;
-
-  fn with_coordinator(coordinator: NestedRuntimeCoordinator) -> Self {
-      let stop_handle = NestedRuntimeLoopStopHandle::new(coordinator.loop_signal());
-      Self {
-          coordinator,
-          stop_handle,
-      }
-  }
-  ```
+  coordinator 复用现有私有 with_flow 完成 flow 与其 owner 的组装；production
+  forwarding 仅负责创建已完成 bootstrap 的 flow 并交给该 helper。loop 的 legacy
+  with_socket_name 与 production with_production_protocol_bootstrap constructors
+  分别创建对应 coordinator，并各自组装相同的 stop_handle/coordinator owner
+  生命周期边界。上述私有 helper 与组装形状属于实现细节，不构成 public contract。
+  orchestrator start() 仅切换到 production constructor，并新增 crate-private
+  report getter；不新增 capability，也不改变已验证的 bootstrap 顺序或兼容性结论。
 
 - [x] **Step 5: 运行目标 Green**
 
