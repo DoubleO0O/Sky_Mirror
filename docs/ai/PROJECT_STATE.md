@@ -2,24 +2,21 @@
 
 ## 元数据
 
-- 记录时间：2026-07-30 00:02:29 +08:00
+- 状态基线更新时间：2026-07-30 00:44:21 +08:00
 - 仓库：DoubleO0O/Sky_Mirror
 - 分支：main
-- HEAD：21916d9af92ef94dc1bc8b69baf5d17636179c4a
-- origin/main：21916d9af92ef94dc1bc8b69baf5d17636179c4a
-- 工作区：创建本文档前为 clean
 - 最近完成阶段：Phase 56P
+- Phase 56P 基线提交：21916d9af92ef94dc1bc8b69baf5d17636179c4a
+- 基线含义：Phase 56P 完成并合并时的权威基线提交，不表示当前实时 HEAD。
 - 候选阶段：Phase 56Q
 - 候选阶段权限：NOT APPROVED
-- 本轮本地 Cargo 验证：NOT RUN
 
 ## 失效条件
 
-- HEAD 或 `origin/main` 移动后，本状态必须重新核对。
-- 相关源码存在未提交修改后，本状态不能作为干净基线。
-- 阶段状态发生变化后，本状态必须更新。
-- 依赖、Cargo features 或构建边界发生变化后，相关结论失效。
-- 权威 PR 或 CI 状态发生变化后，历史证据必须重新分类。
+- 仓库 HEAD 变化时先进行轻量核对。
+- 只有变更影响阶段能力、架构边界、依赖、Cargo features、测试事实、权威 PR/CI 或候选阶段状态时，才需要更新本文件。
+- 纯文档、注释或不影响本文件结论的提交，不会仅因 SHA 变化而自动使本文件失效。
+- 未提交工作区状态属于本机事实，不在本文件中持久化。
 - 使用 Codebase Memory 前，必须在当前工作区重新验证 canonical root、branch 和 HEAD。
 - 本机工具链、索引和 EOL 状态不由本项目状态文档持久化。
 
@@ -43,16 +40,17 @@
 
 ## 权威历史测试和外部客户端证据
 
-- PR #92 已合并，合并提交为当前记录的 HEAD。
+- PR #92 已合并，对应的 Phase 56P 权威基线提交为 `21916d9af92ef94dc1bc8b69baf5d17636179c4a`。
 - `main` CI 运行 30459769481 的历史结果为 success。
 - external registry discovery 提供了外部客户端历史证据。
 - external bind 曾绑定 `wl_compositor` 与 `xdg_wm_base` 两个 globals。
 - bounded protocol harness、watchdog 与 socket cleanup 有历史测试证据。
 - 九项矩阵和相关测试数量只属于历史证据。
-- 上述历史证据本轮均未重新运行。
 - external client evidence 不能写回 server runtime report。
 - 这些证据不能用于宣称当前 `main` 已成为 production compositor。
-- 本轮未运行 Cargo 测试，不得把历史 CI 绿色表述为当前本地验证通过。
+- 历史 CI 和矩阵仅证明对应提交和对应验证环境。
+- 每次新 Phase 的完成声明必须附带本阶段的新鲜验证。
+- 历史 CI 不得替代当前阶段要求的本地或远端验证。
 
 ## 受控证明、骨架与 Mock
 
@@ -101,10 +99,12 @@
 
 ## 下一步安全顺序
 
-1. 用户审阅并明确批准本次两个基础文档进入 Git。
-2. 单独审批 Phase 56Q 的目标和高风险边界。
-3. 获批后重新确认 baseline 与 allow / deny 范围。
-4. 仅在审批后按 Q1-Q5 创建 worktree 并建立正确 Red。
+1. 在包含本文件的最新 main 上核验 Git baseline。
+2. 重建或更新 Codebase Memory，并验证 canonical root、branch、HEAD 全部一致。
+3. 设计并审批 Sky Mirror 专用 Skill 和低 Token 辅助工具。
+4. 提交 Phase 56Q 精确审批材料。
+5. 只有 Phase 56Q 的目标、allowlist、denylist、Red/Green 和 production core mutation 风险全部获批后，才创建独立 worktree。
+6. worktree 中严格执行 Red -> Green -> Review -> Verify。
 
 ## 使用说明
 
