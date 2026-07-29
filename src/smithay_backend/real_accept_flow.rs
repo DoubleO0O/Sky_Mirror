@@ -5,9 +5,10 @@
 //! [`NestedClientInsertCompileBoundary`]；成功 insertion 产生的纯数据 `Connected`
 //! event 随后由 [`NestedClientSessionCoreBridge`] 提交到既有 core seam。
 //!
-//! 当前代码建立真实 callback 的 compile/runtime boundary，但在新的 Linux test/CI
-//! 通过前，readiness 仍故意保持全部 runtime capability 为 `false`。本模块不注册
-//! protocol global、不 dispatch protocol request，也不处理 surface、shell 或 render。
+//! 当前代码建立真实 callback 的 compile/runtime boundary，并为 production 路径按
+//! owner 生命周期初始化 `wl_compositor` 与 `xdg_wm_base` globals。旧 constructor
+//! 继续保持 controlled/probe 语义；无论走哪条路径，既有 readiness 与 render/input/
+//! core capability 都不会因为 server-side global bootstrap 而被推高。
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -36,13 +37,116 @@ use crate::{
             NestedClientSessionId,
         },
         linux_live_toplevel_admission_owner::LiveToplevelAdmissionOwnerObservation,
+        linux_wl_compositor::LinuxWlCompositorGlobalInitError,
         linux_wl_surface_identity::{AdapterSurfaceCommitObservation, SurfaceIdentityError},
+        linux_xdg_shell::LinuxXdgShellGlobalInitError,
         real_disconnect_flow::{NestedRealDisconnectCallbackReport, bridge_disconnected_events},
         wayland_display::SmithayWaylandDisplayProbe,
         wayland_socket::SmithayWaylandSocketProbe,
         xdg_lifecycle_observation::XdgToplevelLifecycleObservationReport,
     },
 };
+
+/// Production protocol bootstrap 在 server owner 边界上的只读事实快照。
+///
+/// 这个报告只描述 flow 持有的 Display 已注册哪些 globals，以及 socket 是否在两项
+/// 注册都成功之后才绑定。它不把“server 已发布 global”外推成“外部 client 已发现/
+/// bind”，更不能外推到 buffer、renderer、damage、frame callback、input 或 core。
+#[must_use = "production protocol bootstrap report 必须按 server/client 观察边界解释"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ProductionProtocolBootstrapReport {
+    /// production owner 已实际进入 bootstrap helper。
+    pub(crate) bootstrap_attempted: bool,
+    /// owner 已成功注册 `wl_compositor` global。
+    pub(crate) wl_compositor_initialized: bool,
+    /// owner 已在 compositor 之后成功注册 `xdg_wm_base` global。
+    pub(crate) xdg_wm_base_initialized: bool,
+    /// socket 仅在两个 globals 都成功之后才完成绑定。
+    pub(crate) socket_bound_after_bootstrap: bool,
+    /// 尚无外部 registry roundtrip 证明同时发现两个 globals。
+    pub(crate) external_registry_discovered_both_globals: bool,
+    /// 尚无外部 client 成功 bind 两个 globals 的证明。
+    pub(crate) external_client_bound_both_globals: bool,
+    /// bootstrap 不读取或导入 client buffer。
+    pub(crate) buffer_import_attempted: bool,
+    /// bootstrap 不声称已有 buffer import 成功。
+    pub(crate) buffer_imported: bool,
+    /// bootstrap 不创建 renderer texture。
+    pub(crate) texture_created: bool,
+    /// bootstrap 不调用 renderer。
+    pub(crate) renderer_called: bool,
+    /// bootstrap 不提交 damage。
+    pub(crate) damage_submitted: bool,
+    /// bootstrap 不发送 frame callback done。
+    pub(crate) frame_callback_done_sent: bool,
+    /// globals 可见性不等于 input 支持。
+    pub(crate) input_support: bool,
+    /// bootstrap 与 socket/source assembly 都不得修改 core state。
+    pub(crate) core_mutation_invoked: bool,
+}
+
+/// Production global 初始化失败的精确阶段与底层结构化原因。
+///
+/// 两个 variant 的顺序语义与 bootstrap 顺序一致：compositor 失败会立即短路，只有
+/// compositor 成功后才可能出现 `XdgWmBase` 错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProductionProtocolBootstrapError {
+    /// 第一阶段 `wl_compositor` 初始化失败。
+    WlCompositor {
+        source: LinuxWlCompositorGlobalInitError,
+    },
+    /// 第二阶段 `xdg_wm_base` 初始化失败。
+    XdgWmBase {
+        source: LinuxXdgShellGlobalInitError,
+    },
+}
+
+impl std::fmt::Display for ProductionProtocolBootstrapError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WlCompositor { source } => {
+                write!(formatter, "wl_compositor global 初始化失败: {source:?}")
+            }
+            Self::XdgWmBase { source } => {
+                write!(formatter, "xdg_wm_base global 初始化失败: {source:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProductionProtocolBootstrapError {}
+
+/// 在同一个 Display owner 上严格按 compositor → xdg 的顺序注册 production globals。
+///
+/// helper 不接触 socket 或 calloop，因此任一阶段失败时，尚不存在可被外部 client
+/// 观察的 socket path；按值持有 Display 的上层 constructor 随错误返回并完成清理。
+fn bootstrap_production_protocol_globals(
+    display: &mut SmithayWaylandDisplayProbe,
+) -> Result<ProductionProtocolBootstrapReport, ProductionProtocolBootstrapError> {
+    let compositor = display
+        .initialize_wl_compositor_global()
+        .map_err(|source| ProductionProtocolBootstrapError::WlCompositor { source })?;
+    let xdg = display
+        .initialize_xdg_shell_global()
+        .map_err(|source| ProductionProtocolBootstrapError::XdgWmBase { source })?;
+
+    Ok(ProductionProtocolBootstrapReport {
+        bootstrap_attempted: true,
+        wl_compositor_initialized: compositor.wl_compositor_global_initialized,
+        xdg_wm_base_initialized: xdg.xdg_shell_global_initialized,
+        socket_bound_after_bootstrap: false,
+        external_registry_discovered_both_globals: false,
+        external_client_bound_both_globals: false,
+        buffer_import_attempted: false,
+        buffer_imported: false,
+        texture_created: false,
+        renderer_called: false,
+        damage_submitted: false,
+        frame_callback_done_sent: false,
+        input_support: false,
+        core_mutation_invoked: false,
+    })
+}
 
 /// 真实 accept-connected runtime 仍缺失的可独立诊断前置条件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -394,40 +498,111 @@ pub struct NestedRealAcceptFlow {
     loop_data: NestedRealAcceptLoopData,
     display: SmithayWaylandDisplayProbe,
     socket_name: String,
+    /// `Some` 只属于 production bootstrap 路径；旧 controlled/probe 路径保持 `None`。
+    production_protocol_bootstrap_report: Option<ProductionProtocolBootstrapReport>,
     event_log: NestedClientSessionEventLog,
     core_bridge: NestedClientSessionCoreBridge,
+}
+
+/// 消费一个已创建的 Display owner，先完成 production globals，再进入 socket assembly。
+///
+/// Display 按值进入本函数，保证 bootstrap 失败时 owner 在返回 `Err` 前被销毁；由于
+/// common assembly 尚未运行，失败路径不会绑定 socket，也不会留下 calloop source。
+fn with_production_protocol_display(
+    name: &str,
+    mut display: SmithayWaylandDisplayProbe,
+) -> Result<NestedRealAcceptFlow, Box<dyn std::error::Error>> {
+    let report = bootstrap_production_protocol_globals(&mut display)?;
+    assemble_real_accept_flow(name, display, Some(report))
+}
+
+/// 把 calloop source insertion 失败映射成不再持有 listening socket 的错误。
+///
+/// `InsertError<ListeningSocketSource>` 的 `inserted` 字段会把注册失败后退回的 source
+/// 交还调用者；若直接把整个 `InsertError` 装箱，调用者只要保留返回的 `Err`，socket
+/// 与 lock path 就会继续存活。这里显式拆开错误并在返回前 drop source，只传播内部
+/// `calloop::Error`，因此错误值的生命周期不再延长 socket owner 的生命周期。
+fn map_listening_socket_insert_error(
+    error: calloop::InsertError<ListeningSocketSource>,
+) -> Box<dyn std::error::Error> {
+    let calloop::InsertError { inserted, error } = error;
+    drop(inserted);
+    Box::new(error)
+}
+
+/// 组装两条 constructor 共用的 socket、source 与 flow owner。
+///
+/// 两条路径都先从 Display owner 建立 persistent insert boundary，再尝试真实绑定
+/// socket，保持旧 controlled constructor 的内部 owner 顺序。production 调用者必须
+/// 已完成两个 globals；socket bind 成功后才记录 `socket_bound_after_bootstrap`，随后
+/// 消费 socket 生成 source 并插入 calloop。controlled/probe 的 report 保持 `None`。
+fn assemble_real_accept_flow(
+    name: &str,
+    display: SmithayWaylandDisplayProbe,
+    mut production_protocol_bootstrap_report: Option<ProductionProtocolBootstrapReport>,
+) -> Result<NestedRealAcceptFlow, Box<dyn std::error::Error>> {
+    let insert_boundary = NestedClientInsertCompileBoundary::new(display.display_handle());
+    let socket = SmithayWaylandSocketProbe::with_name(name)?;
+    let socket_name = socket.socket_name_string();
+
+    // 此赋值发生在真实 bind 成功之后、socket 被消费成 source 之前，精确记录暴露边界。
+    if let Some(report) = production_protocol_bootstrap_report.as_mut() {
+        report.socket_bound_after_bootstrap = true;
+    }
+
+    let socket_source: ListeningSocketSource = socket.into_source();
+    let event_loop: EventLoop<'static, NestedRealAcceptLoopData> = EventLoop::try_new()?;
+
+    event_loop
+        .handle()
+        .insert_source(socket_source, |stream, _, data| data.accept_stream(stream))
+        .map_err(map_listening_socket_insert_error)?;
+
+    Ok(NestedRealAcceptFlow {
+        event_loop,
+        loop_data: NestedRealAcceptLoopData::new(insert_boundary),
+        display,
+        socket_name,
+        production_protocol_bootstrap_report,
+        event_log: NestedClientSessionEventLog::new(),
+        core_bridge: NestedClientSessionCoreBridge::new(),
+    })
 }
 
 impl NestedRealAcceptFlow {
     /// 使用指定 Wayland socket 名称创建真实 callback boundary。
     ///
     /// 构造过程会真实绑定 listening socket 并把 source 注册到 Smithay re-export 的
-    /// calloop 0.14，但不会自行运行循环、注册 globals 或 dispatch protocol requests。
+    /// calloop 0.14，但不会自行运行循环、注册 globals 或 dispatch protocol requests；
+    /// 因此它继续作为既有 controlled/probe seam，不产生 production bootstrap report。
     ///
     /// # Errors
     ///
     /// Display、socket、event loop 初始化或 source 注册失败时返回原始错误链。
     pub fn with_socket_name(name: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let display = SmithayWaylandDisplayProbe::new()?;
-        let insert_boundary = NestedClientInsertCompileBoundary::new(display.display_handle());
-        let socket = SmithayWaylandSocketProbe::with_name(name)?;
-        let socket_name = socket.socket_name_string();
-        let socket_source: ListeningSocketSource = socket.into_source();
-        let event_loop: EventLoop<'static, NestedRealAcceptLoopData> = EventLoop::try_new()?;
+        assemble_real_accept_flow(name, display, None)
+    }
 
-        event_loop
-            .handle()
-            .insert_source(socket_source, |stream, _, data| data.accept_stream(stream))
-            .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+    /// 创建 production flow，并在 socket 对外可见之前注册两个 server globals。
+    ///
+    /// owner 顺序固定为 Display → `wl_compositor` → `xdg_wm_base` → socket bind →
+    /// calloop source；任一 global 失败都会在 socket bind 之前返回结构化错误。
+    pub(crate) fn with_production_protocol_bootstrap(
+        name: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let display = SmithayWaylandDisplayProbe::new()?;
+        with_production_protocol_display(name, display)
+    }
 
-        Ok(Self {
-            event_loop,
-            loop_data: NestedRealAcceptLoopData::new(insert_boundary),
-            display,
-            socket_name,
-            event_log: NestedClientSessionEventLog::new(),
-            core_bridge: NestedClientSessionCoreBridge::new(),
-        })
+    /// 返回 production server bootstrap 的只读事实；旧 constructor 永远返回 `None`。
+    ///
+    /// 即使报告为 `Some`，client discovery/bind 与 buffer/render/input/core 字段仍保持
+    /// `false`，直到各自边界取得独立运行时证明。
+    pub(crate) fn production_protocol_bootstrap_report(
+        &self,
+    ) -> Option<ProductionProtocolBootstrapReport> {
+        self.production_protocol_bootstrap_report
     }
 
     /// 返回已真实绑定的 Wayland socket 名称。
@@ -509,9 +684,12 @@ impl NestedRealAcceptFlow {
     /// 让 coordinator 执行一次 Display backend client dispatch。
     ///
     /// 本 seam 只观察 socket readiness/EOF；callback 仍只写 session event，不能直接
-    /// 接触 core。一次调用不代表长期 protocol dispatch loop 已启动。
+    /// 接触 core。dispatch 成功后立即 flush pending client events，但一次调用仍不代表
+    /// 长期 protocol dispatch loop 已启动，也不会抬高既有 readiness。
     pub(crate) fn dispatch_wayland_clients_once(&mut self) -> std::io::Result<usize> {
-        self.display.dispatch_clients_once()
+        let dispatched = self.display.dispatch_clients_once()?;
+        self.display.flush_clients_once()?;
+        Ok(dispatched)
     }
 
     /// 读取 display owner 中最近一次 live toplevel admission observation 的纯数据快照。
@@ -638,12 +816,15 @@ impl NestedRealAcceptFlow {
 mod tests {
     use std::{os::unix::net::UnixStream, path::Path, time::Duration};
 
-    use smithay::reexports::wayland_server::Display;
+    use smithay::reexports::{calloop, wayland_server::Display};
 
     use super::{
         NestedAcceptedClientFailureReason, NestedAcceptedClientMapping,
         NestedRealAcceptConnectedBridgeBlocker, NestedRealAcceptFlow, NestedRealAcceptLoopData,
-        bridge_connected_events, nested_real_accept_connected_bridge_readiness_report,
+        ProductionProtocolBootstrapError, ProductionProtocolBootstrapReport,
+        bootstrap_production_protocol_globals, bridge_connected_events,
+        map_listening_socket_insert_error, nested_real_accept_connected_bridge_readiness_report,
+        with_production_protocol_display,
     };
     use crate::{
         core::{
@@ -656,12 +837,163 @@ mod tests {
                 NestedClientSessionEvent, NestedClientSessionEventKind,
                 NestedClientSessionEventLog, NestedClientSessionId,
             },
+            linux_wl_compositor::LinuxWlCompositorGlobalInitError,
+            linux_xdg_shell::LinuxXdgShellGlobalInitError,
             test_support::{assert_runtime_dir, unique_socket_name},
+            wayland_display::SmithayWaylandDisplayProbe,
+            wayland_socket::SmithayWaylandSocketProbe,
         },
     };
 
     fn session(value: u64) -> NestedClientSessionId {
         NestedClientSessionId::new(value).expect("测试 session ID 必须非零")
+    }
+
+    /// compositor 是 production bootstrap 的第一阶段；该阶段失败必须阻止 xdg 初始化。
+    #[test]
+    fn production_protocol_bootstrap_compositor_error_is_structured_and_short_circuits_xdg() {
+        let mut display = SmithayWaylandDisplayProbe::new().expect("测试 Display 必须能构造");
+        display
+            .initialize_wl_compositor_global()
+            .expect("预置 compositor global 必须成功");
+
+        let error = bootstrap_production_protocol_globals(&mut display)
+            .expect_err("重复 compositor 初始化必须返回结构化错误");
+
+        assert_eq!(
+            error,
+            ProductionProtocolBootstrapError::WlCompositor {
+                source: LinuxWlCompositorGlobalInitError::AlreadyInitialized,
+            }
+        );
+        assert!(!display.is_xdg_shell_global_initialized());
+    }
+
+    /// xdg 是 production bootstrap 的第二阶段；其失败前 compositor 必须已成功初始化。
+    #[test]
+    fn production_protocol_bootstrap_xdg_error_occurs_after_compositor_initialization() {
+        let mut display = SmithayWaylandDisplayProbe::new().expect("测试 Display 必须能构造");
+        display
+            .initialize_xdg_shell_global()
+            .expect("预置 xdg_wm_base global 必须成功");
+
+        let error = bootstrap_production_protocol_globals(&mut display)
+            .expect_err("重复 xdg 初始化必须返回结构化错误");
+
+        assert_eq!(
+            error,
+            ProductionProtocolBootstrapError::XdgWmBase {
+                source: LinuxXdgShellGlobalInitError::AlreadyInitialized,
+            }
+        );
+        assert!(display.is_wl_compositor_global_initialized());
+    }
+
+    /// fresh Display 只允许一次完整 bootstrap，production constructor 也只执行一次。
+    #[test]
+    fn production_protocol_bootstrap_is_exactly_once_and_constructor_reports_server_state() {
+        assert_runtime_dir();
+        let mut display = SmithayWaylandDisplayProbe::new().expect("测试 Display 必须能构造");
+
+        let report = bootstrap_production_protocol_globals(&mut display)
+            .expect("fresh Display 的 production globals 必须初始化成功");
+        assert_eq!(
+            report,
+            ProductionProtocolBootstrapReport {
+                bootstrap_attempted: true,
+                wl_compositor_initialized: true,
+                xdg_wm_base_initialized: true,
+                ..ProductionProtocolBootstrapReport::default()
+            }
+        );
+        assert_eq!(
+            bootstrap_production_protocol_globals(&mut display),
+            Err(ProductionProtocolBootstrapError::WlCompositor {
+                source: LinuxWlCompositorGlobalInitError::AlreadyInitialized,
+            })
+        );
+
+        let socket_name = unique_socket_name("production-protocol-bootstrap-once");
+        let flow = NestedRealAcceptFlow::with_production_protocol_bootstrap(&socket_name)
+            .expect("production constructor 必须完成一次 globals bootstrap 后再绑定 socket");
+        assert_eq!(
+            flow.production_protocol_bootstrap_report(),
+            Some(ProductionProtocolBootstrapReport {
+                bootstrap_attempted: true,
+                wl_compositor_initialized: true,
+                xdg_wm_base_initialized: true,
+                socket_bound_after_bootstrap: true,
+                ..ProductionProtocolBootstrapReport::default()
+            })
+        );
+    }
+
+    /// bootstrap 失败时 Display owner 必须销毁，且 socket/source 从未对外暴露或残留。
+    #[test]
+    fn production_protocol_bootstrap_failure_cleans_up_before_socket_exposure() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("production-protocol-bootstrap-cleanup");
+        let runtime_dir =
+            std::env::var_os("XDG_RUNTIME_DIR").expect("Linux Smithay 测试需要 XDG_RUNTIME_DIR");
+        let socket_path = Path::new(&runtime_dir).join(&socket_name);
+        let mut display = SmithayWaylandDisplayProbe::new().expect("测试 Display 必须能构造");
+        display
+            .initialize_xdg_shell_global()
+            .expect("预置 xdg_wm_base global 必须成功");
+
+        let result = with_production_protocol_display(&socket_name, display);
+
+        assert!(result.is_err());
+        assert!(
+            !socket_path.exists(),
+            "bootstrap 失败发生在 socket bind 之前，不得暴露 socket path"
+        );
+
+        let flow = NestedRealAcceptFlow::with_production_protocol_bootstrap(&socket_name)
+            .expect("失败 owner/source 清理后，同名 fresh production flow 必须可启动");
+        assert!(socket_path.exists());
+        drop(flow);
+        assert!(
+            !socket_path.exists(),
+            "成功 flow drop 后 socket owner 必须移除 path"
+        );
+    }
+
+    /// source insertion 失败的返回值即使被调用者保留，也不能继续持有 socket/lock。
+    #[test]
+    fn production_protocol_bootstrap_insert_source_failure_releases_socket_before_returning_error()
+    {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("production-protocol-source-insert-failure");
+        let runtime_dir =
+            std::env::var_os("XDG_RUNTIME_DIR").expect("Linux Smithay 测试需要 XDG_RUNTIME_DIR");
+        let socket_path = Path::new(&runtime_dir).join(&socket_name);
+        let socket = SmithayWaylandSocketProbe::with_name(&socket_name)
+            .expect("失败注入前必须真实绑定唯一 socket");
+        assert!(socket_path.exists());
+        let injected_error = calloop::InsertError {
+            inserted: socket.into_source(),
+            error: calloop::Error::InvalidToken,
+        };
+
+        // Act：模拟 calloop insert_source 失败，并故意把返回 Err 保留到重试之后。
+        let retained_error: Result<(), Box<dyn std::error::Error>> =
+            Err(map_listening_socket_insert_error(injected_error));
+
+        // Assert：Err 本身不得继续拥有 source；path/lock 释放后同名 socket 必须立即可重绑。
+        assert!(retained_error.is_err());
+        assert!(
+            !socket_path.exists(),
+            "错误映射必须在返回前释放 InsertError 中的 ListeningSocketSource"
+        );
+        let retry_socket = SmithayWaylandSocketProbe::with_name(&socket_name)
+            .expect("调用者仍保留 Err 时，同名 socket 必须可立即重试");
+        assert!(socket_path.exists());
+        drop(retry_socket);
+        assert!(!socket_path.exists());
+
+        // 保持到测试末尾，防止测试仅因提前 drop Err 而偶然通过。
+        assert!(retained_error.is_err());
     }
 
     /// 验证 B 路线报告保留全部真实 runtime blockers 和 capability false。

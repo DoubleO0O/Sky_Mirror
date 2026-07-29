@@ -43,7 +43,7 @@ use crate::{
         linux_wl_surface_identity::{
             AdapterSurfaceCommitObservation, SurfaceIdentityError, SurfaceIdentityKey,
         },
-        real_accept_flow::NestedRealAcceptFlow,
+        real_accept_flow::{NestedRealAcceptFlow, ProductionProtocolBootstrapReport},
         surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId},
     },
 };
@@ -4610,8 +4610,28 @@ impl NestedRuntimeCoordinator {
         name: &str,
         next_core_surface_id: SurfaceId,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self {
-            flow: NestedRealAcceptFlow::with_socket_name(name)?,
+        Ok(Self::with_flow(
+            NestedRealAcceptFlow::with_socket_name(name)?,
+            next_core_surface_id,
+        ))
+    }
+
+    /// 按 production owner 顺序创建 coordinator：flow 先独占 Display 并完成
+    /// `wl_compositor`、`xdg_wm_base` bootstrap，随后才绑定 socket/source；失败时 flow
+    /// owner 随错误释放，不会把半初始化 socket 交给有限并发的 loop。此处只接通构造链，
+    /// 不把 server 可证明的 globals 外推为外部 client truth，也不启动 buffer、render 或 core 工作。
+    pub(crate) fn with_production_protocol_bootstrap(
+        name: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self::with_flow(
+            NestedRealAcceptFlow::with_production_protocol_bootstrap(name)?,
+            1,
+        ))
+    }
+
+    fn with_flow(flow: NestedRealAcceptFlow, next_core_surface_id: SurfaceId) -> Self {
+        Self {
+            flow,
             admission_queue_owner: RuntimeToplevelAdmissionQueueOwner::new(next_core_surface_id),
             render_dirty_intent_queue_owner: RuntimeSurfaceCommitRenderDirtyIntentQueueOwner::new(),
             renderer_admission_owner: RuntimeSurfaceCommitRendererAdmissionOwner::new(),
@@ -4645,12 +4665,21 @@ impl NestedRuntimeCoordinator {
                 RuntimeSurfaceCommitBufferImportActualAttemptRecorder::new(),
             shm_first_buffer_import_adapter: LinuxShmFirstBufferImportAdapterSkeleton::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
-        })
+        }
     }
 
     /// 返回 coordinator 已绑定的 Wayland socket 名称。
     pub fn socket_name(&self) -> &str {
         self.flow.socket_name()
+    }
+
+    /// 转发 flow owner 可直接证明的 production bootstrap 事实。外部 registry discovery
+    /// 与 client bind 必须由独立 client roundtrip 记录，不能在这里设为 true；同理本 getter
+    /// 不暗示 buffer import、texture/renderer、damage、frame callback 或 core mutation 已发生。
+    pub(crate) fn production_protocol_bootstrap_report(
+        &self,
+    ) -> Option<ProductionProtocolBootstrapReport> {
+        self.flow.production_protocol_bootstrap_report()
     }
 
     /// 返回只用于唤醒 accept-source poll 的 cloneable calloop signal。

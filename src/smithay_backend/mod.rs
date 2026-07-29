@@ -811,15 +811,100 @@ mod nested_socket_probe_gate_tests {
     /// 验证 orchestrator 只编排现有 loop，并保守描述完整 runtime 能力。
     #[test]
     fn runtime_orchestrator_source_preserves_loop_seam() {
+        // 全文件 `contains` 会被无关函数或注释中的同名 token 误满足，无法证明 owner
+        // constructor 的真实转交关系。这个局部 helper 只用于 test-only source guard：先按
+        // 稳定签名定位函数，再用花括号深度取得该函数体，因此 `if`、`match`、闭包和 struct
+        // literal 的嵌套块不会让 guard 提前截断，也不依赖脆弱的固定行号。
+        //
+        // 这里刻意不实现完整 Rust lexer；只移除以 `//` 开头的整行注释。当前被检查的
+        // constructors 不含带花括号的块注释、raw string 或字面量。若将来出现该情形，应
+        // 专门收紧此 test-only guard，不能把它宣称为完整 Rust 解析器。
+        fn source_code_without_line_comments(source: &str) -> String {
+            source
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        fn function_body_by_signature(source: &str, signature: &str) -> String {
+            let code = source_code_without_line_comments(source);
+            let signature_start = code
+                .find(signature)
+                .unwrap_or_else(|| panic!("source guard 未找到函数签名: {signature}"));
+            let brace_search_start = signature_start + signature.len();
+            let opening_brace = code[brace_search_start..]
+                .find('{')
+                .map(|offset| brace_search_start + offset)
+                .unwrap_or_else(|| panic!("函数签名后未找到开花括号: {signature}"));
+
+            let mut brace_depth = 0_usize;
+            for (relative_offset, character) in code[opening_brace..].char_indices() {
+                match character {
+                    '{' => brace_depth += 1,
+                    '}' => {
+                        brace_depth -= 1;
+                        if brace_depth == 0 {
+                            return code[opening_brace..=opening_brace + relative_offset]
+                                .to_owned();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            panic!("函数体花括号未闭合: {signature}");
+        }
+
         let source = include_str!("nested_runtime_orchestrator.rs");
         let production = source
             .split_once("#[cfg(test)]")
             .map_or(source, |(production, _)| production);
-        let production_code = production
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let production_code = source_code_without_line_comments(production);
+        let loop_source = include_str!("nested_runtime_loop.rs");
+        let loop_production = source_code_without_line_comments(
+            loop_source
+                .split_once("#[cfg(test)]")
+                .map_or(loop_source, |(production, _)| production),
+        );
+        let coordinator_source = include_str!("nested_runtime_coordinator.rs");
+        let coordinator_production = source_code_without_line_comments(
+            coordinator_source
+                .split_once("#[cfg(test)]")
+                .map_or(coordinator_source, |(production, _)| production),
+        );
+        let flow_source = include_str!("real_accept_flow.rs");
+        let flow_production = source_code_without_line_comments(
+            flow_source
+                .split_once("#[cfg(test)]")
+                .map_or(flow_source, |(production, _)| production),
+        );
+
+        let start_body = function_body_by_signature(production, "pub fn start(&mut self)");
+        let loop_legacy_body =
+            function_body_by_signature(&loop_production, "pub fn with_socket_name(");
+        let loop_production_body = function_body_by_signature(
+            &loop_production,
+            "pub(crate) fn with_production_protocol_bootstrap(",
+        );
+        let coordinator_legacy_body =
+            function_body_by_signature(&coordinator_production, "pub fn with_socket_name(");
+        let coordinator_legacy_admission_body = function_body_by_signature(
+            &coordinator_production,
+            "pub fn with_socket_name_and_admission_surface_start(",
+        );
+        let coordinator_production_body = function_body_by_signature(
+            &coordinator_production,
+            "pub(crate) fn with_production_protocol_bootstrap(",
+        );
+        let flow_legacy_body =
+            function_body_by_signature(&flow_production, "pub fn with_socket_name(");
+        let flow_production_body = function_body_by_signature(
+            &flow_production,
+            "pub(crate) fn with_production_protocol_bootstrap(",
+        );
+        let flow_production_display_body =
+            function_body_by_signature(&flow_production, "fn with_production_protocol_display(");
 
         for required in [
             "pub struct NestedRuntimeOrchestrator",
@@ -835,7 +920,6 @@ mod nested_socket_probe_gate_tests {
             "pub fn run",
             "pub fn stop",
             "pub fn stop_handle",
-            "NestedRuntimeLoop::with_socket_name",
             ".run_for_iterations(state, self.config.loop_config)",
             ".request_stop_and_wakeup()",
             "validation_is_clean",
@@ -845,6 +929,124 @@ mod nested_socket_probe_gate_tests {
                 "runtime orchestrator 缺少必要 seam token: {required}"
             );
         }
+
+        // 小型 fixture 验证 helper 不会把 sibling function 的 token 带入目标函数体，且能
+        // 穿过嵌套块；实际构造链仍全部在下方真实 production source 中断言。
+        let brace_fixture =
+            "fn target() { if true { nested(); } }\nfn sibling() { sibling_token(); }";
+        let fixture_body = function_body_by_signature(brace_fixture, "fn target()");
+        assert!(fixture_body.contains("nested("));
+        assert!(!fixture_body.contains("sibling_token("));
+
+        // Phase 56P 的 start() 只能停在 loop owner 边界。以下调用语法断言只作用于
+        // start() 函数体，不能由其它函数、文件级说明或旧 constructor 名称误满足。
+        assert!(
+            start_body.contains("NestedRuntimeLoop::with_production_protocol_bootstrap("),
+            "runtime orchestrator 的 start 必须调用 production loop constructor"
+        );
+        for forbidden in [
+            "NestedRuntimeLoop::with_socket_name(",
+            "NestedRuntimeCoordinator::",
+            "NestedRealAcceptFlow::",
+            "SmithayWaylandDisplayProbe",
+            "initialize_wl_compositor_global",
+            "initialize_xdg_shell_global",
+            ".coordinator",
+            ".flow",
+            ".display",
+        ] {
+            assert!(
+                !start_body.contains(forbidden),
+                "runtime orchestrator 的 start 不得直接穿透 owner boundary: {forbidden}"
+            );
+        }
+
+        // production 链逐段检查直接 callee：start → loop → coordinator → flow。每段都
+        // 只检查 constructor 自己的函数体，以防无关 helper 或注释制造假阳性。
+        assert!(
+            loop_production_body
+                .contains("NestedRuntimeCoordinator::with_production_protocol_bootstrap("),
+            "production loop constructor 必须转交给 coordinator production constructor"
+        );
+        for forbidden in [
+            "NestedRuntimeCoordinator::with_socket_name(",
+            "NestedRealAcceptFlow",
+        ] {
+            assert!(
+                !loop_production_body.contains(forbidden),
+                "production loop constructor 不得越过 coordinator owner: {forbidden}"
+            );
+        }
+        assert!(
+            coordinator_production_body
+                .contains("NestedRealAcceptFlow::with_production_protocol_bootstrap("),
+            "production coordinator constructor 必须转交给 flow production constructor"
+        );
+        assert!(
+            !coordinator_production_body.contains("NestedRealAcceptFlow::with_socket_name("),
+            "production coordinator constructor 不得回退到 legacy flow constructor"
+        );
+        assert!(
+            flow_production_body.contains("with_production_protocol_display(name, display)"),
+            "production flow constructor 必须进入 globals bootstrap assembly"
+        );
+        assert!(
+            !flow_production_body.contains("assemble_real_accept_flow(name, display, None)"),
+            "production flow constructor 不得直接采用 legacy 无 report assembly"
+        );
+        assert!(
+            flow_production_display_body
+                .contains("bootstrap_production_protocol_globals(&mut display)"),
+            "production flow assembly helper 必须先完成 globals bootstrap"
+        );
+        assert!(
+            flow_production_display_body
+                .contains("assemble_real_accept_flow(name, display, Some(report))"),
+            "production flow assembly helper 必须把 bootstrap report 交给 socket assembly"
+        );
+        assert!(
+            !flow_production_display_body
+                .contains("assemble_real_accept_flow(name, display, None)"),
+            "production flow assembly helper 不得退回 legacy 无 report assembly"
+        );
+
+        // legacy 入口仍是 additive compatibility seam。coordinator 的公开 wrapper 目前经
+        // admission-surface helper 再交给 flow；分别检查两段，既不把 helper 误写成直接
+        // 调用，也能阻止 legacy 路径悄然改接 production bootstrap。
+        assert!(
+            loop_legacy_body.contains("NestedRuntimeCoordinator::with_socket_name("),
+            "legacy loop constructor 必须继续转交给 legacy coordinator constructor"
+        );
+        assert!(
+            !loop_legacy_body
+                .contains("NestedRuntimeCoordinator::with_production_protocol_bootstrap("),
+            "legacy loop constructor 不得改接 production coordinator constructor"
+        );
+        assert!(
+            coordinator_legacy_body.contains("Self::with_socket_name_and_admission_surface_start("),
+            "legacy coordinator wrapper 必须保留 admission-surface compatibility seam"
+        );
+        assert!(
+            !coordinator_legacy_body.contains("Self::with_production_protocol_bootstrap("),
+            "legacy coordinator wrapper 不得改接 production constructor"
+        );
+        assert!(
+            coordinator_legacy_admission_body.contains("NestedRealAcceptFlow::with_socket_name("),
+            "legacy coordinator helper 必须继续转交给 legacy flow constructor"
+        );
+        assert!(
+            !coordinator_legacy_admission_body
+                .contains("NestedRealAcceptFlow::with_production_protocol_bootstrap("),
+            "legacy coordinator helper 不得转交给 production flow constructor"
+        );
+        assert!(
+            flow_legacy_body.contains("assemble_real_accept_flow(name, display, None)"),
+            "legacy flow constructor 必须继续使用无 production report 的 assembly"
+        );
+        assert!(
+            !flow_legacy_body.contains("with_production_protocol_display("),
+            "legacy flow constructor 不得改接 production globals bootstrap"
+        );
 
         for conservative in [
             "long_running_loop_available: false",
@@ -1862,6 +2064,31 @@ mod nested_socket_probe_gate_tests {
             );
         }
 
+        // `frame_callback_done_sent` 是 server owner 的 capability truth：false 表示 bootstrap
+        // 没有发送 completion。旧 guard 用 `frame_callback` plain substring，会把该字段、
+        // false 初始化和准确的 deferred 注释误判为执行路径；真正危险的是 WlCallback owner、
+        // callback collection，以及 Smithay 当前实际使用的 `callback.done(...)` completion。
+        for required in [
+            "pub(crate) frame_callback_done_sent: bool",
+            "frame_callback_done_sent: false",
+        ] {
+            assert!(
+                production_code.contains(required),
+                "real accept flow 缺少准确的 frame callback capability truth: {required}"
+            );
+        }
+        // 除 struct literal 初始化外，也禁止 bootstrap 之后把该 capability 回写为 true；
+        // 当前阶段没有真实 completion，因此两种源码形状都必须保持 false truth。
+        for forbidden_truth in [
+            "frame_callback_done_sent: true",
+            "frame_callback_done_sent = true",
+        ] {
+            assert!(
+                !production_code.contains(forbidden_truth),
+                "real accept flow 不得把未实现的 frame callback completion 写成 true: {forbidden_truth}"
+            );
+        }
+
         // flow 可以借用 State 交给既有 bridge，但不能直接写 registry 或新增同义事件。
         for forbidden in [
             ["Backend", "Event::ClientAccepted"].concat(),
@@ -1874,7 +2101,9 @@ mod nested_socket_probe_gate_tests {
             ["Global", "Dispatch"].concat(),
             ["impl ", "Dispatch"].concat(),
             ["xdg", "_toplevel"].concat(),
-            ["frame", "_callback"].concat(),
+            "WlCallback".to_owned(),
+            "frame_callbacks".to_owned(),
+            "callback.done(".to_owned(),
         ] {
             assert!(
                 !production_code.contains(&forbidden),
