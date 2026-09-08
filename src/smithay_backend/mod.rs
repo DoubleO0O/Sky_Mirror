@@ -785,6 +785,180 @@ mod tests {
 
 #[cfg(test)]
 mod nested_socket_probe_gate_tests {
+    const EXPECTED_REPLACED_DOCUMENT_PATHS: [&str; 86] = [
+        "archive/handoff/phase45_46/phase45_46_handoff_README.txt",
+        "archive/handoff/phase45_47m/phase45_47m_handoff_README.txt",
+        "archive/handoff/phase45_47n/phase45_47n_handoff_README.txt",
+        "archive/handoff/phase45_47o/phase45_47o_handoff_README.txt",
+        "archive/handoff/phase45_47p/phase45_47p_handoff_README.txt",
+        "archive/handoff/phase45_47q/phase45_47q_handoff_README.txt",
+        "archive/handoff/phase45_47r/phase45_47r_handoff_README.txt",
+        "docs/CODEX_ENVIRONMENT_RULES.md",
+        "docs/CODEX_PHASE_PROMPT_TEMPLATE.md",
+        "docs/CODEX_REBUILD_REPORT.md",
+        "docs/ai/PROJECT_STATE.md",
+        "docs/audit/SKY_PROJECT_AUDIT.md",
+        "docs/phases/PHASE_51A_NESTED_CLIENT_CONNECTION_PLAN.md",
+        "docs/phases/PHASE_51N_MAIN_BASELINE_AUDIT.md",
+        "docs/phases/PHASE_52A_SURFACE_XDG_ADMISSION_PLAN.md",
+        "docs/phases/PHASE_52B_B_SURFACE_XDG_LEDGER_REMOVAL_PLAN.md",
+        "docs/phases/PHASE_52C_CORE_TOPLEVEL_UNMAP_DETACH_PLAN.md",
+        "docs/phases/PHASE_52D_LINUX_XDG_TOPLEVEL_UNMAP_CALLBACK_PLAN.md",
+        "docs/phases/PHASE_52E_LINUX_XDG_SHELL_COMPILE_SEAM_PLAN.md",
+        "docs/phases/PHASE_52F_XDG_TOPLEVEL_IDENTITY_MAPPING_PLAN.md",
+        "docs/phases/PHASE_52G_XDG_LIFECYCLE_CALLBACK_IDENTITY_LOOKUP_PLAN.md",
+        "docs/phases/PHASE_52H_RUNTIME_CALLBACK_OBSERVED_PROOF_PLAN.md",
+        "docs/phases/PHASE_52I_XDG_SHELL_GLOBAL_OWNER_BOUNDARY_PLAN.md",
+        "docs/phases/PHASE_52J_CONTROLLED_CLIENT_TOPLEVEL_HARNESS_PLAN.md",
+        "docs/phases/PHASE_52K_WAYLAND_CLIENT_ENDPOINT_DECISION.md",
+        "docs/phases/PHASE_52L_LINUX_CLIENT_COMPILE_SEAM_PLAN.md",
+        "docs/phases/PHASE_52M_B_LINUX_WL_COMPOSITOR_STATE_OWNER_PLAN.md",
+        "docs/phases/PHASE_52M_LINUX_WL_COMPOSITOR_OWNER_PLAN.md",
+        "docs/phases/PHASE_52N_CONTROLLED_WL_COMPOSITOR_BIND_PROOF_PLAN.md",
+        "docs/phases/PHASE_52O_CONTROLLED_WL_SURFACE_IDENTITY_PROOF_PLAN.md",
+        "docs/phases/PHASE_52P_CONTROLLED_XDG_WM_BASE_BIND_PROOF_PLAN.md",
+        "docs/phases/PHASE_52Q_CONTROLLED_XDG_SURFACE_CREATION_PROOF_PLAN.md",
+        "docs/phases/PHASE_52R_CONTROLLED_XDG_TOPLEVEL_CREATION_PROOF_PLAN.md",
+        "docs/phases/PHASE_52S_NEW_TOPLEVEL_CALLBACK_OBSERVATION_PROOF_PLAN.md",
+        "docs/phases/PHASE_52T_ADAPTER_TOPLEVEL_IDENTITY_REGISTRATION_PLAN.md",
+        "docs/phases/PHASE_52U_LEDGER_ADMISSION_OWNER_PLAN.md",
+        "docs/phases/PHASE_52W_PENDING_ADMISSION_CONSUMER_OWNER_PLAN.md",
+        "docs/phases/PHASE_52X_CONTROLLED_ADMISSION_PUMP_PLAN.md",
+        "docs/phases/PHASE_52Y_RUNTIME_ADMISSION_QUEUE_OWNER_PLAN.md",
+        "docs/phases/PHASE_52Z_NESTED_RUNTIME_ADMISSION_DRAIN_PLAN.md",
+        "docs/phases/PHASE_53A_LIVE_CALLBACK_ADMISSION_OWNER_PLAN.md",
+        "docs/phases/PHASE_53B_LIVE_ADMISSION_PUMP_SEAM_PLAN.md",
+        "docs/phases/PHASE_53C_LOOP_LIVE_ADMISSION_PUMP_PLAN.md",
+        "docs/phases/PHASE_53D_ORCHESTRATOR_LIVE_ADMISSION_PROOF.md",
+        "docs/phases/PHASE_53E_LIVE_ADMISSION_RUN_REPORT.md",
+        "docs/phases/PHASE_53F_LIVE_ADMISSION_CALLBACK_DEDUPE.md",
+        "docs/phases/PHASE_53G_MULTIPLE_LIVE_ADMISSIONS.md",
+        "docs/phases/PHASE_53H_LIVE_OBSERVATION_BACKLOG.md",
+        "docs/phases/PHASE_53I_LOOP_IDLE_LIVE_BACKLOG.md",
+        "docs/phases/PHASE_53J_ORCHESTRATOR_IDLE_BACKLOG.md",
+        "docs/phases/PHASE_53K_LIVE_UNMAP_OWNER.md",
+        "docs/phases/PHASE_53L_LOOP_LIVE_UNMAP_DRAIN.md",
+        "docs/phases/PHASE_53M_ORCHESTRATOR_LIVE_UNMAP_REPORT.md",
+        "docs/phases/PHASE_54A_WL_SURFACE_COMMIT_OBSERVATION.md",
+        "docs/phases/PHASE_54B_WL_SURFACE_COMMIT_BACKLOG.md",
+        "docs/phases/PHASE_54R_RENDER_PIPELINE_READINESS_AUDIT.md",
+        "docs/phases/PHASE_55B_RENDER_BACKEND_CAPABILITY_REPORT.md",
+        "docs/phases/PHASE_55C_RENDERER_BACKEND_REGISTRATION_DESCRIPTOR.md",
+        "docs/phases/PHASE_55D_RENDERER_BACKEND_OWNER_SHELL.md",
+        "docs/phases/PHASE_55E_BUFFER_IMPORT_RESOURCE_OWNER_BOUNDARY.md",
+        "docs/phases/PHASE_55F_BUFFER_IMPORT_PLANNING_REPORT.md",
+        "docs/phases/PHASE_55G_BUFFER_IMPORT_IMPLEMENTATION_DESCRIPTOR.md",
+        "docs/phases/PHASE_55H_BUFFER_IMPORT_ADAPTER_PROOF_BOUNDARY.md",
+        "docs/phases/PHASE_55I_BUFFER_IMPORT_PRECONDITION_GATE.md",
+        "docs/phases/PHASE_55J_BUFFER_IMPORT_EXECUTION_DRY_RUN.md",
+        "docs/phases/PHASE_55K_BUFFER_IMPORT_IMPLEMENTATION_OWNER_SHELL.md",
+        "docs/phases/PHASE_55L_BUFFER_IMPORT_ACTUAL_ATTEMPT_RECORD.md",
+        "docs/phases/PHASE_55M_REAL_BUFFER_IMPORT_BOUNDARY_AUDIT.md",
+        "docs/phases/PHASE_55N_REAL_IMPORT_ROUTE_DECISION_MATRIX.md",
+        "docs/phases/PHASE_56A_SHM_FIRST_BUFFER_IMPORT_ADAPTER_SKELETON.md",
+        "docs/phases/PHASE_56B_SHM_BUFFER_METADATA_EVIDENCE.md",
+        "docs/phases/PHASE_56C_SHM_METADATA_BLOCKER_REFINEMENT.md",
+        "docs/phases/PHASE_56D_SHM_METADATA_VALIDATION_HARNESS.md",
+        "docs/phases/PHASE_56E_TEXTURE_CREATION_PRECONDITION_AUDIT.md",
+        "docs/phases/PHASE_56F_TEXTURE_CREATION_NOOP_SKELETON.md",
+        "docs/phases/PHASE_56G_TEXTURE_OWNER_BOUNDARY.md",
+        "docs/phases/PHASE_56H_RENDERER_BACKEND_INSTANCE_AUDIT.md",
+        "docs/phases/PHASE_56I_TEXTURE_IMPORT_ROUTE_DECISION.md",
+        "docs/phases/PHASE_56J_DAMAGE_TO_TEXTURE_MAPPING_AUDIT.md",
+        "docs/phases/PHASE_56K_FRAME_CALLBACK_COMPLETION_POLICY.md",
+        "docs/phases/PHASE_56L_REAL_TEXTURE_CREATION_READINESS_DECISION.md",
+        "docs/phases/PHASE_56M_REAL_RENDERER_BACKEND_OWNER_BOUNDARY.md",
+        "docs/phases/PHASE_56N_RENDERER_BACKEND_CONCRETE_ROUTE_DECISION.md",
+        "docs/phases/PHASE_56O_RENDERER_BACKEND_CONSTRUCTION_ROUTE_PROOF.md",
+        "docs/phases/PHASE_56P_PRODUCTION_NESTED_PROTOCOL_GLOBAL_BOOTSTRAP.md",
+        "docs/recovery/RECOVERY_NOTES.md",
+    ];
+
+    /// 验证合并后的两份根文档仍保存阶段事实与旧路径 provenance。
+    fn assert_consolidated_phase_documentation(
+        root: &std::path::Path,
+        phase: &str,
+        history_section: &str,
+        former_path: &str,
+    ) {
+        let guide = std::fs::read_to_string(root.join("PROJECT_GUIDE.md"))
+            .expect("合并后的 PROJECT_GUIDE.md 必须存在");
+        let history = std::fs::read_to_string(root.join("PROJECT_HISTORY.md"))
+            .expect("合并后的 PROJECT_HISTORY.md 必须存在");
+
+        assert!(
+            guide.contains("PROJECT_HISTORY.md") && guide.contains("## 12. 文档权威顺序"),
+            "PROJECT_GUIDE.md 必须声明历史入口与文档权威顺序"
+        );
+
+        let section_start = history
+            .find(history_section)
+            .unwrap_or_else(|| panic!("PROJECT_HISTORY.md 缺少对应章节: {history_section}"));
+        let section = &history[section_start..];
+        let section_end = section[1..]
+            .find("\n## ")
+            .map_or(section.len(), |offset| offset + 1);
+        let section = &section[..section_end];
+        let phase_entry = format!("- {phase}：");
+        assert!(
+            section.contains(&phase_entry),
+            "{history_section} 缺少阶段条目: {phase_entry}"
+        );
+
+        let provenance_rows = history
+            .lines()
+            .filter_map(|line| {
+                let mut cells = line.split('|');
+                cells.next()?;
+                let number = cells.next()?.trim().parse::<usize>().ok()?;
+                let path = cells.next()?.trim();
+                Some((number, path))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            provenance_rows.len(),
+            EXPECTED_REPLACED_DOCUMENT_PATHS.len(),
+            "PROJECT_HISTORY.md provenance 必须保持 86/86"
+        );
+
+        let row_numbers = provenance_rows
+            .iter()
+            .map(|(number, _)| *number)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row_numbers,
+            (1..=EXPECTED_REPLACED_DOCUMENT_PATHS.len()).collect::<Vec<_>>(),
+            "PROJECT_HISTORY.md provenance 序号必须连续且唯一"
+        );
+
+        let documented_paths = provenance_rows
+            .iter()
+            .map(|(_, path)| *path)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            documented_paths, EXPECTED_REPLACED_DOCUMENT_PATHS,
+            "PROJECT_HISTORY.md provenance 必须精确覆盖获批删除清单"
+        );
+        assert_eq!(
+            documented_paths
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            EXPECTED_REPLACED_DOCUMENT_PATHS.len(),
+            "PROJECT_HISTORY.md provenance 路径不得重复"
+        );
+        assert!(
+            documented_paths.contains(&former_path),
+            "PROJECT_HISTORY.md provenance 缺少旧路径: {former_path}"
+        );
+        for replaced_path in EXPECTED_REPLACED_DOCUMENT_PATHS {
+            assert!(
+                !root.join(replaced_path).exists(),
+                "已合并的旧说明文件不得继续存在: {replaced_path}"
+            );
+        }
+    }
+
     /// 验证 runtime orchestrator 的声明与公共导出都保持 Linux-only。
     #[test]
     fn runtime_orchestrator_is_linux_only() {
@@ -4808,10 +4982,12 @@ mod nested_socket_probe_gate_tests {
     #[test]
     fn render_pipeline_readiness_audit_doc_exists() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let audit = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_54R_RENDER_PIPELINE_READINESS_AUDIT.md"),
-        )
-        .expect("Phase 54R render pipeline readiness audit doc 必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "54R",
+            "## 7. Phase 54",
+            "docs/phases/PHASE_54R_RENDER_PIPELINE_READINESS_AUDIT.md",
+        );
         let coordinator =
             std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
                 .expect("Phase 54R coordinator source 必须存在");
@@ -4822,42 +4998,6 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 54R orchestrator source 必须存在");
-
-        for required in [
-            "Phase 54R - Render Pipeline Readiness Audit",
-            "Phase 54G",
-            "Phase 54H",
-            "Phase 54I",
-            "Phase 54J",
-            "Phase 54K",
-            "Phase 54L",
-            "Phase 54M",
-            "Phase 54N",
-            "Phase 54O",
-            "Phase 54P",
-            "Phase 54Q",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-            "real renderer owner",
-            "buffer importer implementation",
-            "texture creation path",
-            "damage submit path",
-            "frame callback done path",
-            "Phase 55A minimal safe entry point",
-            "Do not import buffer in Phase 54R",
-            "Do not create texture in Phase 54R",
-            "Do not call renderer in Phase 54R",
-        ] {
-            assert!(
-                audit.contains(required),
-                "Phase 54R audit doc 缺少必需内容: {required}"
-            );
-        }
 
         for forbidden in [
             "buffer_imported: true",
@@ -4999,10 +5139,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55B orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55B_RENDER_BACKEND_CAPABILITY_REPORT.md"),
-        )
-        .expect("Phase 55B 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55B",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55B_RENDER_BACKEND_CAPABILITY_REPORT.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitRenderBackendCapabilityOwner",
@@ -5088,23 +5230,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55B render backend capability 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "renderer_backend_registered = false",
-            "renderer_backend_kind = None",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55B doc 缺少 capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55C 必须建立 renderer backend registration descriptor seam。
@@ -5121,10 +5246,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55C orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55C_RENDERER_BACKEND_REGISTRATION_DESCRIPTOR.md"),
-        )
-        .expect("Phase 55C 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55C",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55C_RENDERER_BACKEND_REGISTRATION_DESCRIPTOR.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitRendererBackendRegistrationOwner",
@@ -5210,23 +5337,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55C renderer backend registration 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "renderer_backend_registered = true",
-            "registered_renderer_backend_kind = Some(SmithayLinux)",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55C doc 缺少 capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55D 必须建立 renderer backend owner shell readiness seam。
@@ -5243,10 +5353,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55D orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55D_RENDERER_BACKEND_OWNER_SHELL.md"),
-        )
-        .expect("Phase 55D 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55D",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55D_RENDERER_BACKEND_OWNER_SHELL.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitRendererBackendOwnerShell",
@@ -5334,24 +5446,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55D renderer backend owner shell 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "renderer_backend_owner_shell_available = true",
-            "renderer_backend_owner_shell_bound = true",
-            "registered_renderer_backend_kind = Some(SmithayLinux)",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55D doc 缺少 capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55E 必须建立 buffer importer resource owner boundary / handoff seam。
@@ -5368,10 +5462,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55E orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55E_BUFFER_IMPORT_RESOURCE_OWNER_BOUNDARY.md"),
-        )
-        .expect("Phase 55E 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55E",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55E_BUFFER_IMPORT_RESOURCE_OWNER_BOUNDARY.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitBufferImportResourceOwnerBoundary",
@@ -5463,25 +5559,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55E buffer import resource owner boundary 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "buffer_importer_owner_available = true",
-            "buffer_importer_owner_bound = true",
-            "renderer_backend_descriptor_evidence_available = true",
-            "registered_renderer_backend_kind = Some(SmithayLinux)",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55E doc 缺少 capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55F 必须建立 buffer import planning/report seam。
@@ -5498,10 +5575,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55F orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55F_BUFFER_IMPORT_PLANNING_REPORT.md"),
-        )
-        .expect("Phase 55F 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55F",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55F_BUFFER_IMPORT_PLANNING_REPORT.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitBufferImportPlanner",
@@ -5595,25 +5674,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55F buffer import planning 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "buffer_import_plan_available = true",
-            "buffer_import_plan_built = true",
-            "buffer_import_candidate_observed = true",
-            "buffer_import_required = true",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55F doc 缺少 capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55G 必须建立 buffer import implementation descriptor / adapter boundary seam。
@@ -5630,10 +5690,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55G orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55G_BUFFER_IMPORT_IMPLEMENTATION_DESCRIPTOR.md"),
-        )
-        .expect("Phase 55G 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55G",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55G_BUFFER_IMPORT_IMPLEMENTATION_DESCRIPTOR.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitBufferImportImplementationDescriptor",
@@ -5725,26 +5787,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55G buffer import implementation descriptor 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "implementation_descriptor_available = true",
-            "implementation_descriptor_registered = true",
-            "candidate_evidence_observed = true",
-            "actual_import_required = true",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55G doc 缺少 descriptor/capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55H 必须建立 buffer import adapter proof boundary seam。
@@ -5761,10 +5803,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55H orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55H_BUFFER_IMPORT_ADAPTER_PROOF_BOUNDARY.md"),
-        )
-        .expect("Phase 55H 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55H",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55H_BUFFER_IMPORT_ADAPTER_PROOF_BOUNDARY.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitBufferImportAdapterProof",
@@ -5853,25 +5897,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55H buffer import adapter proof boundary 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "adapter_proof_boundary_available = true",
-            "adapter_proof_registered = true",
-            "actual_import_required = true",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55H doc 缺少 adapter proof/capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55I 必须建立 buffer import precondition gate seam。
@@ -5888,10 +5913,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55I orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55I_BUFFER_IMPORT_PRECONDITION_GATE.md"),
-        )
-        .expect("Phase 55I 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55I",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55I_BUFFER_IMPORT_PRECONDITION_GATE.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitBufferImportPreconditionGate",
@@ -5976,26 +6003,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55I buffer import precondition gate 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "import_precondition_gate_available = true",
-            "import_preconditions_met = true",
-            "future_import_preconditions_met = true",
-            "actual_import_required = true",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55I doc 缺少 precondition/capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55J 必须建立 buffer import execution dry-run / no-op guard seam。
@@ -6012,10 +6019,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55J orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55J_BUFFER_IMPORT_EXECUTION_DRY_RUN.md"),
-        )
-        .expect("Phase 55J 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55J",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55J_BUFFER_IMPORT_EXECUTION_DRY_RUN.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitBufferImportExecutionDryRun",
@@ -6105,26 +6114,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55J buffer import execution dry-run 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "execution_guard_available = true",
-            "execution_attempted = false",
-            "execution_noop = true",
-            "execution_blocked = true",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55J doc 缺少 dry-run/capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55K 必须建立 buffer import implementation owner shell / actual import owner boundary。
@@ -6141,10 +6130,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55K orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55K_BUFFER_IMPORT_IMPLEMENTATION_OWNER_SHELL.md"),
-        )
-        .expect("Phase 55K 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55K",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55K_BUFFER_IMPORT_IMPLEMENTATION_OWNER_SHELL.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitBufferImportImplementationOwnerShell",
@@ -6237,26 +6228,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55K buffer import implementation owner shell 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "implementation_owner_shell_available = true",
-            "real_importer_implementation_available = false",
-            "actual_import_attempt_admitted = false",
-            "actual_import_attempt_blocked = true",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55K doc 缺少 owner shell/capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55L 必须建立 actual buffer import attempt admission / record 纯数据 seam。
@@ -6273,10 +6244,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55L orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55L_BUFFER_IMPORT_ACTUAL_ATTEMPT_RECORD.md"),
-        )
-        .expect("Phase 55L 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55L",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55L_BUFFER_IMPORT_ACTUAL_ATTEMPT_RECORD.md",
+        );
 
         for required in [
             "pub struct RuntimeSurfaceCommitBufferImportActualAttemptRecorder",
@@ -6370,27 +6343,6 @@ mod nested_socket_probe_gate_tests {
                 "Phase 55L actual attempt record 包含禁止 token: {forbidden}"
             );
         }
-
-        for required in [
-            "actual_attempt_record_available = true",
-            "actual_attempt_recorded = true",
-            "actual_attempt_admission_checked = true",
-            "actual_attempt_admitted = false",
-            "actual_attempt_blocked = true",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55L doc 缺少 attempt record/capability truth: {required}"
-            );
-        }
     }
 
     /// Phase 55M 必须审计真实 buffer import 边界，并防止把 shell/record/dry-run 误报为真实 import。
@@ -6407,68 +6359,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55M orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55M_REAL_BUFFER_IMPORT_BOUNDARY_AUDIT.md"),
-        )
-        .expect("Phase 55M 文档必须存在");
-
-        for required in [
-            "Phase 55M - Real Buffer Import Boundary Audit",
-            "Phase 55E",
-            "Phase 55F",
-            "Phase 55G",
-            "Phase 55H",
-            "Phase 55I",
-            "Phase 55J",
-            "Phase 55K",
-            "Phase 55L",
-            "pure-data",
-            "readiness",
-            "dry-run",
-            "record",
-            "No real buffer import has happened",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-            "Smithay and renderer resource types must remain in src/smithay_backend",
-            "Linux-only adapter layer",
-            "core remains abstract",
-            "WindowId",
-            "Geometry",
-            "State",
-            "Action",
-            "Command",
-            "wl_buffer::WlBuffer",
-            "BufferHandler",
-            "Renderer",
-            "Texture",
-            "Dmabuf",
-            "EGL",
-            "GLES",
-            "WGPU",
-            "MissingRealBufferImportImplementation",
-            "MissingAttemptAdmission",
-            "MissingTextureCreation",
-            "MissingRendererCall",
-            "MissingDamageSubmit",
-            "MissingFrameCallbackDone",
-            "Phase 55N",
-            "Phase 56A",
-            "Stop before choosing a real backend",
-            "shell / record / dry-run reports are not real import",
-            "Do not claim renderable window",
-            "Do not claim real compositor runtime ready",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55M audit doc 缺少真实 buffer import 边界证据: {required}"
-            );
-        }
+        assert_consolidated_phase_documentation(
+            root,
+            "55M",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55M_REAL_BUFFER_IMPORT_BOUNDARY_AUDIT.md",
+        );
 
         for required in [
             "buffer_import_attempted: false",
@@ -6540,58 +6436,14 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 55N orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_55N_REAL_IMPORT_ROUTE_DECISION_MATRIX.md"),
-        )
-        .expect("Phase 55N 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "55N",
+            "## 8. Phase 55",
+            "docs/phases/PHASE_55N_REAL_IMPORT_ROUTE_DECISION_MATRIX.md",
+        );
 
         // 文档必须证明 Phase 55N 只提供决策矩阵和非执行 contract，不进入真实资源实现。
-        for required in [
-            "Phase 55N - Real Import Route Decision Matrix",
-            "SHM-first nested MVP route",
-            "dmabuf route",
-            "EGL/GLES/GBM route",
-            "WGPU route",
-            "hybrid staged route",
-            "Non-executing Adapter Contract",
-            "input evidence",
-            "output evidence",
-            "adapter surface id",
-            "commit sequence",
-            "buffer presence evidence",
-            "buffer candidate evidence",
-            "actual import required",
-            "precondition gate evidence",
-            "execution dry-run evidence",
-            "implementation owner shell evidence",
-            "route selected",
-            "adapter contract available",
-            "real importer missing",
-            "execution allowed = false",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-            "Phase 56A: minimal SHM-first buffer import adapter skeleton",
-            "WindowId",
-            "Geometry",
-            "State",
-            "Layout",
-            "Action",
-            "Command",
-            "smithay_backend / Linux-only adapter",
-            "This is a recommendation, not an implementation",
-            "waiting for user authorization on Phase 56A",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 55N decision matrix 文档缺少非执行 contract 证据: {required}"
-            );
-        }
 
         // 生产 source 仍必须保持真实执行 capability 为 false；测试字符串本身不作为生产证据。
         for required in [
@@ -6668,41 +6520,18 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56A orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56A_SHM_FIRST_BUFFER_IMPORT_ADAPTER_SKELETON.md"),
-        )
-        .expect("Phase 56A 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56A",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56A_SHM_FIRST_BUFFER_IMPORT_ADAPTER_SKELETON.md",
+        );
         let mod_source = std::fs::read_to_string(root.join("src/smithay_backend/mod.rs"))
             .expect("smithay_backend mod source 必须存在");
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56A - SHM-first Buffer Import Adapter Skeleton",
-            "Linux-only adapter skeleton",
-            "WlBuffer",
-            "evidence-only",
-            "blocked",
-            "unsupported",
-            "no-texture",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-            "Phase 56B",
-            "requires separate user",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56A 文档缺少 SHM-first skeleton 证据: {required}"
-            );
-        }
 
         for required in [
             "#[cfg(all(feature = \"smithay-linux\", target_os = \"linux\"))]\npub mod linux_shm_buffer_import_adapter;",
@@ -6846,40 +6675,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56B orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56B_SHM_BUFFER_METADATA_EVIDENCE.md"),
-        )
-        .expect("Phase 56B 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56B",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56B_SHM_BUFFER_METADATA_EVIDENCE.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56B - SHM Buffer Metadata Evidence",
-            "SHM buffer metadata evidence",
-            "offset",
-            "width",
-            "height",
-            "stride",
-            "format",
-            "unavailable / unsupported blocker",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-            "Phase 56C",
-            "requires separate",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56B 文档缺少 metadata evidence 证据: {required}"
-            );
-        }
 
         for required in [
             "pub struct LinuxShmBufferMetadataEvidence",
@@ -7006,39 +6811,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56C orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56C_SHM_METADATA_BLOCKER_REFINEMENT.md"),
-        )
-        .expect("Phase 56C 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56C",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56C_SHM_METADATA_BLOCKER_REFINEMENT.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56C - SHM Metadata Unsupported / Blocker Refinement",
-            "no real WlBuffer available",
-            "WlBuffer available but not SHM",
-            "SHM-like candidate but missing safe Smithay metadata accessor",
-            "metadata observable but insufficient for texture precondition",
-            "missing buffer lifetime / cleanup ownership policy",
-            "runtime report only has evidence, not import execution",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-            "Phase 56D",
-            "requires separate",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56C 文档缺少 refined blocker taxonomy 证据: {required}"
-            );
-        }
 
         for required in [
             "NoRealWlBufferAvailable",
@@ -7143,40 +6925,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56D orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56D_SHM_METADATA_VALIDATION_HARNESS.md"),
-        )
-        .expect("Phase 56D 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56D",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56D_SHM_METADATA_VALIDATION_HARNESS.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56D - SHM Metadata Validation Harness",
-            "no real WlBuffer path",
-            "non-SHM path",
-            "metadata unavailable path",
-            "metadata partially available path",
-            "metadata insufficient for texture precondition path",
-            "missing lifetime / cleanup ownership policy path",
-            "runtime evidence without import execution path",
-            "buffer_import_attempted = false",
-            "buffer_imported = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "input_support = false",
-            "core_mutation_invoked = false",
-            "Phase 56E",
-            "requires separate",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56D 文档缺少 validation harness 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitShmMetadataValidationPath",
@@ -7291,40 +7049,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56E orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56E_TEXTURE_CREATION_PRECONDITION_AUDIT.md"),
-        )
-        .expect("Phase 56E 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56E",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56E_TEXTURE_CREATION_PRECONDITION_AUDIT.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56E - Texture Creation Precondition Audit",
-            "Texture Creation Precondition Audit",
-            "texture_created = false",
-            "renderer_called = false",
-            "frame_callback_done_sent = false",
-            "Texture Precondition Checklist",
-            "metadata_validation_passed",
-            "metadata_sufficient_for_texture_precondition",
-            "renderer_backend_instance_available",
-            "texture_import_route_available",
-            "frame_callback_completion_policy_available",
-            "texture_precondition_allowed",
-            "Blocker Taxonomy",
-            "missing_renderer_backend_instance",
-            "missing_texture_import_route",
-            "missing_frame_callback_completion_policy",
-            "Phase 56F",
-            "requires separate",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56E 文档缺少 texture precondition audit 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitTextureCreationPreconditionBlocker",
@@ -7439,37 +7173,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56F orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56F_TEXTURE_CREATION_NOOP_SKELETON.md"),
-        )
-        .expect("Phase 56F 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56F",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56F_TEXTURE_CREATION_NOOP_SKELETON.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56F - Texture Creation Blocker / No-op Skeleton",
-            "Texture Creation Blocker / No-op Skeleton",
-            "texture_created = false",
-            "renderer_called = false",
-            "frame_callback_done_sent = false",
-            "Texture Creation Blocker Taxonomy",
-            "texture_creation_noop_available",
-            "texture_creation_attempted = false",
-            "texture_creation_blocked = true",
-            "texture_precondition_allowed = false",
-            "missing_renderer_backend_instance",
-            "missing_texture_import_route",
-            "missing_frame_callback_completion_policy",
-            "Phase 56G",
-            "requires separate",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56F 文档缺少 texture creation no-op skeleton 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitTextureCreationBlocker",
@@ -7590,38 +7303,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56G orchestrator source 必须存在");
-        let phase_doc =
-            std::fs::read_to_string(root.join("docs/phases/PHASE_56G_TEXTURE_OWNER_BOUNDARY.md"))
-                .expect("Phase 56G 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56G",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56G_TEXTURE_OWNER_BOUNDARY.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56G - Texture Owner Boundary",
-            "Texture Owner Boundary",
-            "texture_created = false",
-            "renderer_called = false",
-            "frame_callback_done_sent = false",
-            "Texture Owner Boundary Blocker Taxonomy",
-            "texture_owner_boundary_available",
-            "texture_owner_boundary_blocked",
-            "texture_creation_request_owner_defined",
-            "future_texture_handle_owner_defined",
-            "future_texture_cleanup_owner_defined",
-            "missing_renderer_backend_instance",
-            "missing_texture_import_route",
-            "missing_future_texture_cleanup_policy",
-            "ImportAll::import_buffer",
-            "TextureId",
-            "Phase 56H",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56G 文档缺少 texture owner boundary 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitTextureOwnerBoundaryOperation",
@@ -7753,37 +7444,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56H orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56H_RENDERER_BACKEND_INSTANCE_AUDIT.md"),
-        )
-        .expect("Phase 56H 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56H",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56H_RENDERER_BACKEND_INSTANCE_AUDIT.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56H - Renderer Backend Instance Audit",
-            "No-Brake Goal Mode",
-            "renderer_backend_instance_audit_available = true",
-            "renderer_backend_instance_available = false",
-            "renderer_backend_instance_owner_defined = false",
-            "renderer_backend_instance_lifecycle_owner_defined = false",
-            "renderer_backend_instance_cleanup_owner_defined = false",
-            "renderer_backend_instance_availability_owner_defined = false",
-            "texture_owner_boundary_still_blocked = true",
-            "buffer_import_attempted = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "ImportAll::import_buffer",
-            "TextureId",
-            "Phase 56I",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56H 文档缺少 renderer backend instance audit 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitRendererBackendInstanceAuditOperation",
@@ -7918,35 +7588,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56I orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56I_TEXTURE_IMPORT_ROUTE_DECISION.md"),
-        )
-        .expect("Phase 56I 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56I",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56I_TEXTURE_IMPORT_ROUTE_DECISION.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56I - Texture Import Route Decision",
-            "No-Brake Goal Mode",
-            "texture_import_route_decision_available = true",
-            "texture_import_route_available = false",
-            "texture_import_route_owner_defined = true",
-            "import_buffer_call_allowed = false",
-            "texture_id_owner_defined = false",
-            "buffer_import_attempted = false",
-            "texture_created = false",
-            "renderer_called = false",
-            "ImportAll::import_buffer",
-            "TextureId",
-            "Phase 56J",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56I 文档缺少 texture import route decision 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitTextureImportRouteDecisionOperation",
@@ -8082,32 +7733,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56J orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56J_DAMAGE_TO_TEXTURE_MAPPING_AUDIT.md"),
-        )
-        .expect("Phase 56J 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56J",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56J_DAMAGE_TO_TEXTURE_MAPPING_AUDIT.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56J - Damage-to-Texture Mapping Audit",
-            "No-Brake Goal Mode",
-            "damage_to_texture_mapping_audit_available = true",
-            "damage_to_texture_mapping_audit_blocked = true",
-            "damage_mapping_owner_defined = true",
-            "texture_import_route_available = false",
-            "damage_submission_allowed = false",
-            "damage_submitted = false",
-            "frame_callback_done_sent = false",
-            "Phase 56K",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56J 文档缺少 damage mapping audit 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitDamageToTextureMappingAuditOperation",
@@ -8239,31 +7874,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56K orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56K_FRAME_CALLBACK_COMPLETION_POLICY.md"),
-        )
-        .expect("Phase 56K 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56K",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56K_FRAME_CALLBACK_COMPLETION_POLICY.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56K - Frame Callback Completion Policy",
-            "No-Brake Goal Mode",
-            "frame_callback_completion_policy_available = true",
-            "frame_callback_completion_policy_blocked = true",
-            "frame_callback_completion_owner_defined = true",
-            "render_success_required_before_done = true",
-            "frame_callback_done_allowed = false",
-            "frame_callback_done_sent = false",
-            "Phase 56L",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56K 文档缺少 frame callback completion policy 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitFrameCallbackCompletionPolicyOperation",
@@ -8391,30 +8011,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56L orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56L_REAL_TEXTURE_CREATION_READINESS_DECISION.md"),
-        )
-        .expect("Phase 56L 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56L",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56L_REAL_TEXTURE_CREATION_READINESS_DECISION.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56L - Real Texture Creation Readiness Decision",
-            "No-Brake Goal Mode",
-            "real_texture_creation_readiness_decision_available = true",
-            "real_texture_creation_readiness_blocked = true",
-            "real_texture_creation_ready = false",
-            "real_texture_creation_allowed = false",
-            "minimum_renderability_checklist_defined = true",
-            "frame_callback_done_sent = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56L 文档缺少 real texture creation readiness decision 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitRealTextureCreationReadinessDecisionOperation",
@@ -8547,31 +8153,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56M orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56M_REAL_RENDERER_BACKEND_OWNER_BOUNDARY.md"),
-        )
-        .expect("Phase 56M 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56M",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56M_REAL_RENDERER_BACKEND_OWNER_BOUNDARY.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56M - Real Renderer Backend Owner Boundary",
-            "No-Brake Goal Mode",
-            "renderer_backend_owner_boundary_available = true",
-            "renderer_backend_owner_boundary_blocked = true",
-            "renderer_backend_owner_defined = true",
-            "minimal_renderer_path_selected = true",
-            "renderer_backend_instance_available = false",
-            "renderer_backend_creation_allowed = false",
-            "renderer_called = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56M 文档缺少 renderer backend owner boundary 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitRendererBackendOwnerBoundaryOperation",
@@ -8709,10 +8300,12 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56N orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56N_RENDERER_BACKEND_CONCRETE_ROUTE_DECISION.md"),
-        )
-        .expect("Phase 56N 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56N",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56N_RENDERER_BACKEND_CONCRETE_ROUTE_DECISION.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
@@ -8722,23 +8315,6 @@ mod nested_socket_probe_gate_tests {
                 "pub enum RuntimeSurfaceCommitRendererBackendConstructionRouteProofOperation",
             )
             .map_or(production_module, |(phase56n, _)| phase56n);
-
-        for required in [
-            "Phase 56N - Renderer Backend Concrete Route Decision",
-            "No-Brake Goal Mode",
-            "renderer_backend_concrete_route_decision_available = true",
-            "renderer_backend_concrete_route_decision_blocked = true",
-            "renderer_backend_concrete_type_candidate_defined = true",
-            "renderer_backend_concrete_type_compiled = false",
-            "renderer_backend_construction_route_available = false",
-            "renderer_backend_instance_created = false",
-            "renderer_called = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56N 文档缺少 renderer backend concrete route decision 证据: {required}"
-            );
-        }
 
         for required in [
             "pub enum RuntimeSurfaceCommitRendererBackendConcreteRouteDecisionOperation",
@@ -8874,33 +8450,16 @@ mod nested_socket_probe_gate_tests {
             root.join("src/smithay_backend/nested_runtime_orchestrator.rs"),
         )
         .expect("Phase 56O orchestrator source 必须存在");
-        let phase_doc = std::fs::read_to_string(
-            root.join("docs/phases/PHASE_56O_RENDERER_BACKEND_CONSTRUCTION_ROUTE_PROOF.md"),
-        )
-        .expect("Phase 56O 文档必须存在");
+        assert_consolidated_phase_documentation(
+            root,
+            "56O",
+            "## 9. Phase 56",
+            "docs/phases/PHASE_56O_RENDERER_BACKEND_CONSTRUCTION_ROUTE_PROOF.md",
+        );
 
         let production_module = module
             .split_once("#[cfg(test)]")
             .map_or(module.as_str(), |(production, _)| production);
-
-        for required in [
-            "Phase 56O - Renderer Backend Construction Route Proof",
-            "No-Brake Goal Mode",
-            "DummyRenderer",
-            "renderer_backend_construction_route_proof_available = true",
-            "renderer_backend_concrete_type_compiled = true",
-            "renderer_backend_construction_route_available = true",
-            "renderer_backend_runtime_storage_available = true",
-            "renderer_backend_cleanup_policy_available = true",
-            "renderer_backend_instance_created = true",
-            "renderer_called = false",
-            "texture_created = false",
-        ] {
-            assert!(
-                phase_doc.contains(required),
-                "Phase 56O 文档缺少 renderer backend construction proof 证据: {required}"
-            );
-        }
 
         for required in [
             "\"smithay/renderer_test\"",
