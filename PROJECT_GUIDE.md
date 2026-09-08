@@ -1,6 +1,6 @@
 # Sky Mirror 项目指南
 
-> 当前真值入口。最后按 main@c6f1fd6 与 Ubuntu 26.04.1 本地验证整理。
+> 当前真值入口。动态代码基线以 Git 的当前 HEAD 与 CI 为准；本指南按 Ubuntu 26.04.1 环境整理。
 > 历史演进与旧文档来源见 PROJECT_HISTORY.md；代理工程约束以 AGENTS.md 为准。
 
 本文件是 Sky Mirror 的唯一项目主入口。后续项目说明、提交说明、当前状态和未来改动规划优先集中写入本文件；PROJECT_HISTORY.md 仅作为不可丢失的历史证据、旧文档来源映射与演进背景，不承担日常主入口职责。

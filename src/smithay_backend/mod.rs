@@ -905,7 +905,12 @@ mod nested_socket_probe_gate_tests {
             "{history_section} 缺少阶段条目: {phase_entry}"
         );
 
-        let provenance_rows = history
+        let provenance_section = history
+            .split_once("## 12. Source provenance：86/86")
+            .and_then(|(_, remainder)| remainder.split_once("## 13."))
+            .map(|(section, _)| section)
+            .unwrap_or_else(|| panic!("PROJECT_HISTORY.md 缺少 86/86 provenance 章节"));
+        let provenance_rows = provenance_section
             .lines()
             .filter_map(|line| {
                 let mut cells = line.split('|');

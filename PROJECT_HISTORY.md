@@ -240,9 +240,44 @@ RECOVERY_NOTES 记录 transferred working tree 缺失 .git、预期旧基线 934
 
 Coverage：待删除说明文件 86；provenance 条目 86；未映射 0；重复映射 0。
 
-## 13. 保留的原始归档
+## 13. 原始交接归档审计与删除覆盖
 
-以下 14 个文件不属于说明文档删除范围，继续作为原始源码/交付证据保留：
+本轮逐个读取了 7 个 patch 和 7 个 zip。7 个 zip 均为标准 Zip archive，内容严格只有同名 patch 与已被本文件吸收的同名 README；每个 zip 内 patch 与外部同名 patch 逐字节一致，没有额外源码、文档、二进制或隐藏文件。因此 zip 的唯一独特历史信息是 README，patch 的源码差异由当前源码、Git 历史和本文件的阶段章节共同覆盖。7 组交接包都在 Darwin arm64（aarch64-apple-darwin）生成，基于缺失历史前的 9348b21 Phase 45.6 基线；生成端没有运行 smithay-linux，不能把它们的 Mac 验证写成 Linux 通过。
+
+逐包覆盖关系如下；表中 14 个路径是本轮获批删除清单，删除前每一项都已完成历史吸收核对：
+
+| 归档包 | patch 独特覆盖 | README 独特事实 | zip 处理 |
+|---|---|---|---|
+| phase45_46 | Phase 45 Final Seal 的 Display/socket/XDG_RUNTIME_DIR 资源测试与旧 runtime API 兼容；Phase 46 runtime report/capabilities/diagnostics/facade | 9348b21 基线、Darwin 生成、未运行 smithay-linux、Arch/Linux 验收命令和 default=[] 边界 | patch 差异已由第 2 节与当前源码覆盖；zip README 已吸收 |
+| phase45_47m | 在 45/46 之上加入 Mac-safe 纯数据 surface lifecycle、registry、结构化错误 | 明确不保存 wl_surface、不接 xdg_toplevel、不进 GPU/compositor；Linux 阻塞未解除 | 同上 |
+| phase45_47n | 在 47M 之上加入 surface trace runner、执行报告、mock adapter、scenario | supports_surface_lifecycle_boundary/trace_harness=true，real_wayland/gpu=false；trace 仍只经 registry apply_event | 同上 |
+| phase45_47o | 在 47N 之上加入 surface→window candidate intent 纯数据规划 | candidate intent 不进 Core、不构造 BackendEvent/CoreCommand、不修改 workspace/slot/stack/focus | 同上 |
+| phase45_47p | 在 47O 之上加入 window admission preview 纯数据预检 | preview 不创建 Core window、不分配真实 workspace/slot；Mac default/probe 验证 131/344 | 同上 |
+| phase45_47q | 在 47P 之上加入 surface admission pipeline | pipeline 只编排 trace、candidate intent、preview，不进 Core；Mac probe 验证 383 | 同上 |
+| phase45_47r | 在 47Q 之上加入 surface admission contract golden snapshot | golden scenario 只冻结纯数据模型，不代表真实 Wayland 时序；Mac probe 验证 413 | 同上 |
+
+归档删除 provenance（14/14）：
+
+| # | 已删除归档路径 | 覆盖去处 |
+|---:|---|---|
+| 1 | archive/handoff/phase45_46/phase45_46_handoff.patch | 本节 phase45_46 行及第 2 节 |
+| 2 | archive/handoff/phase45_46/phase45_46_handoff.zip | 本节 phase45_46 行；zip 内 README 已吸收 |
+| 3 | archive/handoff/phase45_47m/phase45_47m_handoff.patch | 本节 phase45_47m 行及第 2 节 |
+| 4 | archive/handoff/phase45_47m/phase45_47m_handoff.zip | 本节 phase45_47m 行；zip 内 README 已吸收 |
+| 5 | archive/handoff/phase45_47n/phase45_47n_handoff.patch | 本节 phase45_47n 行及第 2 节 |
+| 6 | archive/handoff/phase45_47n/phase45_47n_handoff.zip | 本节 phase45_47n 行；zip 内 README 已吸收 |
+| 7 | archive/handoff/phase45_47o/phase45_47o_handoff.patch | 本节 phase45_47o 行及第 2、5 节 |
+| 8 | archive/handoff/phase45_47o/phase45_47o_handoff.zip | 本节 phase45_47o 行；zip 内 README 已吸收 |
+| 9 | archive/handoff/phase45_47p/phase45_47p_handoff.patch | 本节 phase45_47p 行及第 2、5 节 |
+| 10 | archive/handoff/phase45_47p/phase45_47p_handoff.zip | 本节 phase45_47p 行；zip 内 README 已吸收 |
+| 11 | archive/handoff/phase45_47q/phase45_47q_handoff.patch | 本节 phase45_47q 行及第 2、5 节 |
+| 12 | archive/handoff/phase45_47q/phase45_47q_handoff.zip | 本节 phase45_47q 行；zip 内 README 已吸收 |
+| 13 | archive/handoff/phase45_47r/phase45_47r_handoff.patch | 本节 phase45_47r 行及第 2、5 节 |
+| 14 | archive/handoff/phase45_47r/phase45_47r_handoff.zip | 本节 phase45_47r 行；zip 内 README 已吸收 |
+
+所有包的共同限制是：不能通过删除 feature、early return、静默跳过或放松断言来掩盖 Linux 资源失败；default feature 必须保持空集；Core/backend 不得依赖这些 runtime facade 或纯数据预览类型；真实 wl_surface、xdg_toplevel、GPU 渲染和输入均未由这些包完成。当前 Ubuntu 的后续验证已由本仓库新鲜 all-features 测试取代历史 Mac 计数，但不改变这些包当时的历史边界。
+
+本轮删除以下 14 个原始交接归档文件；删除后 patch/zip 不再作为当前仓库入口：
 
 - archive/handoff/phase45_46/phase45_46_handoff.patch 与 .zip
 - archive/handoff/phase45_47m/phase45_47m_handoff.patch 与 .zip
@@ -252,4 +287,4 @@ Coverage：待删除说明文件 86；provenance 条目 86；未映射 0；重�
 - archive/handoff/phase45_47q/phase45_47q_handoff.patch 与 .zip
 - archive/handoff/phase45_47r/phase45_47r_handoff.patch 与 .zip
 
-这些 patch 是累积差异，zip 仅包含同名 patch 与已被本文吸收的 README。它们不是当前 main 的应用说明，除非专门做历史复原，不应在现仓再次 git apply。
+这些归档的完整历史信息已由本节及第 2、4、5 节吸收；它们不是当前 main 的应用说明，除非从外部备份专门做历史复原，不应在现仓再次 git apply。
