@@ -6,6 +6,8 @@
 
 use std::collections::VecDeque;
 
+use crate::core::client::ClientId as CoreClientId;
+
 use super::{
     linux_toplevel_identity_registration::AdapterToplevelIdentityRegistrationReport,
     surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId},
@@ -30,6 +32,9 @@ pub struct PendingXdgToplevelAdmission {
     pub adapter_toplevel_identity_registered: bool,
     /// callback observation 序号；只是 proof/report 字段，不代表真实 runtime ready。
     pub source_callback_sequence: Option<u64>,
+    /// coordinator 已由 active session bridge 解析出的 Core client；adapter session
+    /// 本身不写入这里，未知 session 必须在入队前拒绝。
+    pub core_client: Option<CoreClientId>,
 }
 
 impl PendingXdgToplevelAdmission {
@@ -46,7 +51,14 @@ impl PendingXdgToplevelAdmission {
             adapter_surface_identity_available: true,
             adapter_toplevel_identity_registered: true,
             source_callback_sequence,
+            core_client: None,
         }
+    }
+
+    /// 将 coordinator 已确认的 Core client 归属附加到 immutable pending intent。
+    pub const fn with_core_client(mut self, core_client: CoreClientId) -> Self {
+        self.core_client = Some(core_client);
+        self
     }
 }
 

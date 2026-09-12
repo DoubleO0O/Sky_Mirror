@@ -66,6 +66,14 @@ pub enum RuntimeToplevelUnmapOperation {
 pub enum RuntimeToplevelAdmissionQueueBlocker {
     /// queue 中没有 pending admission intent。
     MissingPendingAdmission,
+    /// tick metadata 与由 production session bridge 已确认的 pending Core client 冲突。
+    /// 两者属于不同身份来源，不能任选其一覆盖 immutable intent。
+    ConflictingCoreClient {
+        /// pending intent 中的已确认 Core client。
+        pending_core_client: ClientId,
+        /// 本轮 tick 携带的冲突 metadata client。
+        tick_core_client: ClientId,
+    },
     /// Phase 52W consumer 返回了 blocker。
     ConsumerBlocked(Vec<PendingToplevelAdmissionConsumerBlocker>),
 }
@@ -338,11 +346,56 @@ impl RuntimeToplevelAdmissionQueueOwner {
             };
         }
 
+        let pending_core_client = self.queue.front().and_then(|pending| pending.core_client);
+        if let (Some(pending_core_client), Some(tick_core_client)) =
+            (pending_core_client, tick.client)
+            && pending_core_client != tick_core_client
+        {
+            // session bridge 已将真实 callback 归属冻结在 pending intent 中。冲突的
+            // tick metadata 既不能覆盖该值，也不能让 owner 继续消费 queue；否则会在
+            // Core/ledger 建立错绑后无法由单纯 validation 回滚。
+            operations.push(RuntimeToplevelAdmissionQueueOperation::BuildReport);
+            return RuntimeToplevelAdmissionDrainReport {
+                tick_index: tick.tick_index,
+                runtime_queue_owned: true,
+                runtime_ledger_owned: true,
+                drain_invoked: true,
+                pending_admission_count_before,
+                pending_admission_count_after: self.queue.pending_count(),
+                consumer_report: None,
+                ledger_consume_attempted: false,
+                pending_admission_consumed: false,
+                ledger_admit_surface_invoked: false,
+                ledger_admit_invoked: false,
+                core_register_invoked: false,
+                window_id_allocated: false,
+                core_surface_id: None,
+                core_window_id: None,
+                next_core_surface_id_after: self.next_core_surface_id,
+                handler_state_touched: false,
+                ledger_bypassed: false,
+                render_support: false,
+                input_support: false,
+                real_compositor_runtime_available: false,
+                real_xdg_shell_runtime_available: false,
+                operations,
+                blockers: vec![
+                    RuntimeToplevelAdmissionQueueBlocker::ConflictingCoreClient {
+                        pending_core_client,
+                        tick_core_client,
+                    },
+                ],
+            };
+        }
+
         let core_surface_id = self.next_core_surface_id;
         operations.push(RuntimeToplevelAdmissionQueueOperation::BuildConsumerInput);
         let consumer_input = PendingToplevelAdmissionConsumerInput {
             core_surface_id,
-            client: tick.client,
+            // production coordinator 已在入队前将 source session 解析为 Core client；
+            // tick 的可选 metadata 只兼容旧 controlled proof，不能覆盖 immutable intent
+            // 中已经确认的归属。
+            client: pending_core_client.or(tick.client),
             role: SurfaceRole::XdgToplevel,
             title: tick.title,
             app_id: tick.app_id,
@@ -574,7 +627,7 @@ impl RuntimeToplevelAdmissionQueueOwner {
 #[cfg(test)]
 mod tests {
     use crate::{
-        core::state::State,
+        core::{client::ClientKind, state::State},
         smithay_backend::{
             linux_toplevel_admission_bridge::PendingXdgToplevelAdmission,
             linux_toplevel_admission_runtime_queue::{
@@ -642,6 +695,46 @@ mod tests {
         assert_eq!(owner.next_core_surface_id(), 6_001);
         assert!(state.validate().is_clean());
         assert!(report.blockers.is_empty());
+    }
+
+    /// Red：production session bridge 已写入 pending intent 的 Core client 是不可覆盖的
+    /// 生命周期归属。若 tick 携带不同 client metadata，owner 必须结构化拒绝，而不能
+    /// 任选其一创建污染的 surface/window 或消费 queue。
+    #[test]
+    fn runtime_owner_rejects_conflicting_tick_core_client_without_consuming_pending_intent() {
+        let adapter_surface = surface(711);
+        let adapter_toplevel = toplevel(811);
+        let mut owner = RuntimeToplevelAdmissionQueueOwner::new(6_100);
+        let mut state = State::new();
+        let source_session_client = state.clients.register_client(
+            ClientKind::WaylandPlaceholder,
+            Some("source-session".to_owned()),
+        );
+        let conflicting_tick_client = state.clients.register_client(
+            ClientKind::WaylandPlaceholder,
+            Some("tick-metadata".to_owned()),
+        );
+        let pending = PendingXdgToplevelAdmission::new(adapter_surface, adapter_toplevel, Some(13))
+            .with_core_client(source_session_client);
+        owner.enqueue_pending_toplevel_admission(pending);
+        let mut tick = RuntimeToplevelAdmissionDrainTick::phase52y_default(13);
+        tick.client = Some(conflicting_tick_client);
+
+        let report = owner.drain_pending_toplevel_admission_once(&mut state, tick);
+
+        assert!(!report.pending_admission_consumed);
+        assert!(!report.ledger_consume_attempted);
+        assert!(!report.core_register_invoked);
+        assert_eq!(report.pending_admission_count_after, 1);
+        assert!(state.surfaces.get(6_100).is_none());
+        assert!(owner.toplevel_mapping(adapter_toplevel).is_none());
+        assert!(report.blockers.contains(
+            &RuntimeToplevelAdmissionQueueBlocker::ConflictingCoreClient {
+                pending_core_client: source_session_client,
+                tick_core_client: conflicting_tick_client,
+            }
+        ));
+        assert!(state.validate().is_clean());
     }
 
     /// 空 queue 的 drain 不调用 ledger，也不推进 core surface id。

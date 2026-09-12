@@ -492,9 +492,14 @@ mod tests {
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle,
         backend::WaylandError,
-        protocol::{wl_callback::WlCallback, wl_compositor::WlCompositor, wl_registry::WlRegistry},
+        protocol::{
+            wl_buffer::WlBuffer, wl_callback::WlCallback, wl_compositor::WlCompositor,
+            wl_registry::WlRegistry, wl_shm::WlShm, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
+        },
     };
-    use wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
+    use wayland_protocols::xdg::shell::client::{
+        xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel, xdg_wm_base::XdgWmBase,
+    };
 
     use super::{
         NestedRuntimeLifecycleState, NestedRuntimeOrchestrator, NestedRuntimeOrchestratorBlocker,
@@ -576,8 +581,24 @@ mod tests {
         bind_readiness_polls: usize,
         wl_compositor_discovered: bool,
         xdg_wm_base_discovered: bool,
+        wl_shm_discovered: bool,
         wl_compositor_bound: bool,
         xdg_wm_base_bound: bool,
+        wl_shm_bound: bool,
+        shm_pool_created: bool,
+        shm_buffer_created: bool,
+        shm_buffer_attached: bool,
+        shm_buffer_commit_sent: bool,
+        wl_surface_created: bool,
+        xdg_surface_created: bool,
+        xdg_toplevel_created: bool,
+        second_toplevel_created: bool,
+        second_toplevel_destroyed_before_admission: bool,
+        initial_configure_acknowledged: bool,
+        configured_surface_committed: bool,
+        toplevel_destroyed: bool,
+        wl_surface_alive_after_toplevel_destroy: bool,
+        wl_surface_destroyed: bool,
         client_finished_before_deadline: bool,
         server_finished_before_deadline: bool,
         socket_removed_after_drop: bool,
@@ -593,14 +614,32 @@ mod tests {
     enum ProductionProtocolRoundtripStage {
         Registry,
         Bind,
+        Lifecycle,
     }
 
     #[derive(Default)]
     struct ProductionProtocolClientState {
         wl_compositor: Option<RegisteredProtocolGlobal>,
         xdg_wm_base: Option<RegisteredProtocolGlobal>,
+        wl_shm: Option<RegisteredProtocolGlobal>,
+        /// 生产 socket client 在 bind 后持有的 proxy。它们只存在于测试中的真实外部
+        /// client driver，不能流入 server/Core；后续对象请求必须从这些已 bind 的 proxy
+        /// 发出，而不是重新 discovery 或伪造 object identity。
+        bound_wl_compositor: Option<WlCompositor>,
+        bound_xdg_wm_base: Option<XdgWmBase>,
+        bound_wl_shm: Option<WlShm>,
+        /// 三个 client protocol object 的所有权必须覆盖整个 configure/ack/commit
+        /// 循环。它们不是 adapter/core identity，绝不被 handler 直接保存。
+        lifecycle_surfaces: Vec<(XdgSurface, WlSurface)>,
+        lifecycle_toplevels: Vec<XdgToplevel>,
+        /// B 在 client 发出 destroy 后不再接受其先前可能已排队的 configure；该 configure
+        /// 不再是该已销毁 role 的合法 ack 前置条件，不能误 ack 成 protocol error。
+        destroyed_before_configure: Vec<XdgSurface>,
         registry_sync_done: bool,
         bind_sync_done: bool,
+        lifecycle_sync_done: bool,
+        initial_configure_acknowledged: bool,
+        configured_surface_committed: bool,
     }
 
     impl Dispatch<WlRegistry, ()> for ProductionProtocolClientState {
@@ -627,6 +666,13 @@ mod tests {
                 } if interface == "xdg_wm_base" => {
                     state.xdg_wm_base = Some(RegisteredProtocolGlobal { name, version });
                 }
+                wayland_client::protocol::wl_registry::Event::Global {
+                    name,
+                    interface,
+                    version,
+                } if interface == "wl_shm" => {
+                    state.wl_shm = Some(RegisteredProtocolGlobal { name, version });
+                }
                 wayland_client::protocol::wl_registry::Event::GlobalRemove { name } => {
                     if state
                         .wl_compositor
@@ -636,6 +682,9 @@ mod tests {
                     }
                     if state.xdg_wm_base.is_some_and(|global| global.name == name) {
                         state.xdg_wm_base = None;
+                    }
+                    if state.wl_shm.is_some_and(|global| global.name == name) {
+                        state.wl_shm = None;
                     }
                 }
                 _ => {}
@@ -660,13 +709,85 @@ mod tests {
                     ProductionProtocolRoundtripStage::Bind => {
                         state.bind_sync_done = true;
                     }
+                    ProductionProtocolRoundtripStage::Lifecycle => {
+                        state.lifecycle_sync_done = true;
+                    }
                 }
             }
         }
     }
 
     wayland_client::delegate_noop!(ProductionProtocolClientState: ignore WlCompositor);
-    wayland_client::delegate_noop!(ProductionProtocolClientState: ignore XdgWmBase);
+    wayland_client::delegate_noop!(ProductionProtocolClientState: ignore WlSurface);
+    wayland_client::delegate_noop!(ProductionProtocolClientState: ignore WlShm);
+    wayland_client::delegate_noop!(ProductionProtocolClientState: ignore WlShmPool);
+    wayland_client::delegate_noop!(ProductionProtocolClientState: ignore WlBuffer);
+
+    impl Dispatch<XdgWmBase, ()> for ProductionProtocolClientState {
+        fn event(
+            _state: &mut Self,
+            xdg_wm_base: &XdgWmBase,
+            event: wayland_protocols::xdg::shell::client::xdg_wm_base::Event,
+            _data: &(),
+            _connection: &Connection,
+            _queue_handle: &QueueHandle<Self>,
+        ) {
+            if let wayland_protocols::xdg::shell::client::xdg_wm_base::Event::Ping { serial } =
+                event
+            {
+                xdg_wm_base.pong(serial);
+            }
+        }
+    }
+
+    impl Dispatch<XdgSurface, ()> for ProductionProtocolClientState {
+        fn event(
+            state: &mut Self,
+            xdg_surface: &XdgSurface,
+            event: wayland_protocols::xdg::shell::client::xdg_surface::Event,
+            _data: &(),
+            _connection: &Connection,
+            _queue_handle: &QueueHandle<Self>,
+        ) {
+            if let wayland_protocols::xdg::shell::client::xdg_surface::Event::Configure { serial } =
+                event
+            {
+                if state
+                    .destroyed_before_configure
+                    .iter()
+                    .any(|destroyed| destroyed == xdg_surface)
+                {
+                    return;
+                }
+                // 初始 configure 是 xdg 角色提交的协议前置条件。ack 后只提交无 buffer
+                // surface；本阶段明确不 attach/import/damage/render/frame-done。
+                xdg_surface.ack_configure(serial);
+                state.initial_configure_acknowledged = true;
+                if let Some((_, wl_surface)) = state
+                    .lifecycle_surfaces
+                    .iter()
+                    .find(|(known_xdg_surface, _)| known_xdg_surface == xdg_surface)
+                {
+                    wl_surface.commit();
+                    state.configured_surface_committed = true;
+                }
+            }
+        }
+    }
+
+    impl Dispatch<XdgToplevel, ()> for ProductionProtocolClientState {
+        fn event(
+            _state: &mut Self,
+            _xdg_toplevel: &XdgToplevel,
+            _event: wayland_protocols::xdg::shell::client::xdg_toplevel::Event,
+            _data: &(),
+            _connection: &Connection,
+            _queue_handle: &QueueHandle<Self>,
+        ) {
+            // 本切片不接入 close policy、popup 或 seat；这里只完整消费 client event
+            // dispatch trait，以保留真实 toplevel proxy 的 protocol ownership。
+        }
+    }
 
     #[derive(Default)]
     struct ProductionProtocolReadiness {
@@ -833,7 +954,10 @@ mod tests {
         let xdg_wm_base = client_state
             .xdg_wm_base
             .ok_or_else(|| "外部 client registry 未发现 xdg_wm_base".to_owned())?;
-        if wl_compositor.version == 0 || xdg_wm_base.version == 0 {
+        let wl_shm = client_state
+            .wl_shm
+            .ok_or_else(|| "外部 client registry 未发现 wl_shm".to_owned())?;
+        if wl_compositor.version == 0 || xdg_wm_base.version == 0 || wl_shm.version == 0 {
             return Err("外部 client 收到 version=0 的 required global".to_owned());
         }
         let mut evidence = ExternalProtocolRoundtripEvidence {
@@ -841,6 +965,7 @@ mod tests {
             registry_readiness_polls,
             wl_compositor_discovered: true,
             xdg_wm_base_discovered: true,
+            wl_shm_discovered: true,
             ..ExternalProtocolRoundtripEvidence::default()
         };
 
@@ -862,6 +987,14 @@ mod tests {
         if !xdg_wm_base.is_alive() {
             return Err("外部 client bind xdg_wm_base 后得到 inert proxy".to_owned());
         }
+        let shm =
+            registry.bind::<WlShm, _, _>(wl_shm.name, wl_shm.version.min(1), &queue_handle, ());
+        if !shm.is_alive() {
+            return Err("外部 client bind wl_shm 后得到 inert proxy".to_owned());
+        }
+        client_state.bound_wl_compositor = Some(compositor);
+        client_state.bound_xdg_wm_base = Some(xdg_wm_base);
+        client_state.bound_wl_shm = Some(shm);
         let bind_sync = display.sync(&queue_handle, ProductionProtocolRoundtripStage::Bind);
         if !bind_sync.is_alive() {
             return Err("外部 client 创建 bind sync 后得到 inert proxy".to_owned());
@@ -875,13 +1008,155 @@ mod tests {
             "global bind",
             |state| state.bind_sync_done,
         )?;
-        if !compositor.is_alive() || !xdg_wm_base.is_alive() {
+        if !client_state
+            .bound_wl_compositor
+            .as_ref()
+            .is_some_and(Proxy::is_alive)
+            || !client_state
+                .bound_xdg_wm_base
+                .as_ref()
+                .is_some_and(Proxy::is_alive)
+            || !client_state
+                .bound_wl_shm
+                .as_ref()
+                .is_some_and(Proxy::is_alive)
+        {
             return Err("外部 client bind sync 后 required proxy 已失效".to_owned());
         }
         evidence.bind_roundtrip_completed = true;
         evidence.bind_readiness_polls = bind_readiness_polls;
         evidence.wl_compositor_bound = true;
         evidence.xdg_wm_base_bound = true;
+        evidence.wl_shm_bound = true;
+
+        let first_wl_surface = client_state
+            .bound_wl_compositor
+            .as_ref()
+            .expect("bind sync 后 wl_compositor proxy 必须仍由 client state 持有")
+            .create_surface(&queue_handle, ());
+        let first_xdg_surface = client_state
+            .bound_xdg_wm_base
+            .as_ref()
+            .expect("bind sync 后 xdg_wm_base proxy 必须仍由 client state 持有")
+            .get_xdg_surface(&first_wl_surface, &queue_handle, ());
+        let first_xdg_toplevel = first_xdg_surface.get_toplevel(&queue_handle, ());
+        first_xdg_toplevel.set_title("Sky Mirror Phase 56Q external lifecycle A".to_owned());
+        let second_wl_surface = client_state
+            .bound_wl_compositor
+            .as_ref()
+            .expect("bind sync 后 wl_compositor proxy 必须仍由 client state 持有")
+            .create_surface(&queue_handle, ());
+        let second_xdg_surface = client_state
+            .bound_xdg_wm_base
+            .as_ref()
+            .expect("bind sync 后 xdg_wm_base proxy 必须仍由 client state 持有")
+            .get_xdg_surface(&second_wl_surface, &queue_handle, ());
+        let second_xdg_toplevel = second_xdg_surface.get_toplevel(&queue_handle, ());
+        second_xdg_toplevel.set_title("Sky Mirror Phase 56Q external lifecycle B".to_owned());
+        // 两个 role 建立后在同一 client flush 前做初始无 buffer 提交；B 随即 destroy。
+        // 真实 server dispatch 会观察 A(new) -> B(new) -> B(destroy)，该顺序是
+        // lifecycle owner 必须保留的跨对象因果关系，不能由分离 FIFO 重排。
+        first_wl_surface.commit();
+        second_wl_surface.commit();
+        second_xdg_toplevel.destroy();
+        client_state
+            .destroyed_before_configure
+            .push(second_xdg_surface.clone());
+        client_state
+            .lifecycle_surfaces
+            .push((first_xdg_surface, first_wl_surface));
+        client_state
+            .lifecycle_surfaces
+            .push((second_xdg_surface, second_wl_surface));
+        client_state.lifecycle_toplevels.push(first_xdg_toplevel);
+        client_state.lifecycle_toplevels.push(second_xdg_toplevel);
+        evidence.wl_surface_created = true;
+        evidence.xdg_surface_created = true;
+        evidence.xdg_toplevel_created = true;
+        evidence.second_toplevel_created = true;
+        evidence.second_toplevel_destroyed_before_admission = true;
+
+        let lifecycle_readiness_polls = drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "xdg initial configure",
+            |state| state.initial_configure_acknowledged && state.configured_surface_committed,
+        )?;
+        let lifecycle_sync =
+            display.sync(&queue_handle, ProductionProtocolRoundtripStage::Lifecycle);
+        if !lifecycle_sync.is_alive() {
+            return Err("外部 client 创建 lifecycle sync 后得到 inert proxy".to_owned());
+        }
+        let _lifecycle_sync_polls = drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "xdg ack/commit",
+            |state| state.lifecycle_sync_done,
+        )?;
+        if lifecycle_readiness_polls == 0 {
+            return Err(
+                "外部 client 未经 fd readiness 就声称收到 xdg initial configure".to_owned(),
+            );
+        }
+        evidence.initial_configure_acknowledged = client_state.initial_configure_acknowledged;
+        evidence.configured_surface_committed = client_state.configured_surface_committed;
+
+        // 先销毁 xdg_toplevel，再验证底层 wl_surface 仍存活；这是协议对象的两个
+        // 不同生命周期。随后显式销毁 xdg_surface 与 wl_surface，并用 bounded sync
+        // 让 production server 在 client thread 请求 stop 前真正 dispatch 这些 requests。
+        client_state
+            .lifecycle_toplevels
+            .first()
+            .expect("真实第一个 xdg_toplevel proxy 必须由 client state 持有")
+            .destroy();
+        evidence.toplevel_destroyed = true;
+        evidence.wl_surface_alive_after_toplevel_destroy = client_state
+            .lifecycle_surfaces
+            .first()
+            .map(|(_, wl_surface)| wl_surface)
+            .is_some_and(Proxy::is_alive);
+        client_state.lifecycle_sync_done = false;
+        let toplevel_destroy_sync =
+            display.sync(&queue_handle, ProductionProtocolRoundtripStage::Lifecycle);
+        if !toplevel_destroy_sync.is_alive() {
+            return Err("外部 client 创建 toplevel destroy sync 后得到 inert proxy".to_owned());
+        }
+        drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "xdg toplevel destroy",
+            |state| state.lifecycle_sync_done,
+        )?;
+
+        for (xdg_surface, wl_surface) in &client_state.lifecycle_surfaces {
+            xdg_surface.destroy();
+            wl_surface.destroy();
+        }
+        evidence.wl_surface_destroyed = true;
+        client_state.lifecycle_sync_done = false;
+        let surface_destroy_sync =
+            display.sync(&queue_handle, ProductionProtocolRoundtripStage::Lifecycle);
+        if !surface_destroy_sync.is_alive() {
+            return Err("外部 client 创建 surface destroy sync 后得到 inert proxy".to_owned());
+        }
+        drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "wl surface destroy",
+            |state| state.lifecycle_sync_done,
+        )?;
         Ok(evidence)
     }
 
@@ -1737,6 +2012,23 @@ mod tests {
         assert!(evidence.xdg_wm_base_discovered);
         assert!(evidence.wl_compositor_bound);
         assert!(evidence.xdg_wm_base_bound);
+        assert!(evidence.wl_surface_created);
+        assert!(evidence.xdg_surface_created);
+        assert!(evidence.xdg_toplevel_created);
+        assert!(evidence.second_toplevel_created);
+        assert!(evidence.second_toplevel_destroyed_before_admission);
+        // Red：Phase 56Q 只证明无 buffer 的 XDG lifecycle。初始 configure/ack 之前
+        // 创建、attach 或 commit SHM buffer 都会违反 xdg-shell 的角色配置顺序；真实
+        // SHM 首帧由独立 R2 controlled binary 覆盖。
+        assert!(!evidence.shm_pool_created);
+        assert!(!evidence.shm_buffer_created);
+        assert!(!evidence.shm_buffer_attached);
+        assert!(!evidence.shm_buffer_commit_sent);
+        assert!(evidence.initial_configure_acknowledged);
+        assert!(evidence.configured_surface_committed);
+        assert!(evidence.toplevel_destroyed);
+        assert!(evidence.wl_surface_alive_after_toplevel_destroy);
+        assert!(evidence.wl_surface_destroyed);
         assert!(evidence.client_finished_before_deadline);
         assert!(evidence.server_finished_before_deadline);
         assert!(evidence.socket_removed_after_drop);
@@ -1746,6 +2038,19 @@ mod tests {
             NestedRuntimeLifecycleState::Stopped
         );
         assert!(lifecycle_report.errors.is_empty());
+        // Red：xdg_toplevel destroy 必须先经 live unmap，且只 retire toplevel mapping；
+        // wl_surface 仍需由后续 surface destroy/client disconnect cleanup 负责。
+        assert_eq!(
+            lifecycle_report.live_unmap.core_detaches, 2,
+            "真实 A/B toplevel destroy 必须各由 production unmap owner 消费，不能留下 ghost window"
+        );
+        // Production socket 上真实 external client 创建并配置 xdg_toplevel 后，
+        // 同一 active session 的 coordinator 消费 handler 发布的 lifecycle observation，
+        // 并且只经既有 admission bridge 写入 Core。
+        assert_eq!(
+            lifecycle_report.live_admission.admissions_consumed, 2,
+            "真实同会话 A/B xdg_toplevel 必须按 callback arrival order admission 到 Core"
+        );
         assert!(server_report.bootstrap_attempted);
         assert!(server_report.wl_compositor_initialized);
         assert!(server_report.xdg_wm_base_initialized);
@@ -2079,7 +2384,8 @@ mod tests {
         assert!(report.is_clean_shutdown());
     }
 
-    /// Linux-only proof：orchestrator run 通过 loop live admission pump 完成 xdg_toplevel admission。
+    /// Linux-only proof：production bootstrap 不得把 controlled helper 的缺失 session
+    /// 冒充为真实 client；owner 必须 fail closed 而不 admission。
     #[test]
     fn runtime_orchestrator_run_drains_live_toplevel_admission() {
         assert_runtime_dir();
@@ -2105,10 +2411,10 @@ mod tests {
         assert_eq!(report.final_state, NestedRuntimeLifecycleState::Stopped);
         assert!(report.loop_report.is_successful());
         assert_eq!(report.live_admission.owner_invocations, 1);
-        assert_eq!(report.live_admission.enqueue_invocations, 1);
-        assert_eq!(report.live_admission.admissions_enqueued, 1);
+        assert_eq!(report.live_admission.enqueue_invocations, 0);
+        assert_eq!(report.live_admission.admissions_enqueued, 0);
         assert_eq!(report.live_admission.drain_invocations, 1);
-        assert_eq!(report.live_admission.admissions_consumed, 1);
+        assert_eq!(report.live_admission.admissions_consumed, 0);
         assert_eq!(report.live_admission.pending_admissions_after, 0);
         assert_eq!(report.live_admission, report.loop_report.live_admission);
         assert_eq!(report.live_unmap, report.loop_report.live_unmap);
@@ -2119,22 +2425,19 @@ mod tests {
             .expect("Stopped orchestrator 保留 runtime loop report owner");
         assert_eq!(
             runtime_loop.admission_surface_mapping(registration.adapter_surface_id),
-            Some(1)
+            None
         );
-        let toplevel_mapping =
-            runtime_loop.admission_toplevel_mapping(registration.adapter_toplevel_id);
-        if report.live_unmap.ledger_unmaps > 0 {
-            assert_eq!(toplevel_mapping, None);
-            assert!(report.live_unmap.core_detaches > 0);
-        } else {
-            assert!(toplevel_mapping.is_some());
-        }
+        assert_eq!(
+            runtime_loop.admission_toplevel_mapping(registration.adapter_toplevel_id),
+            None
+        );
         assert_eq!(runtime_loop.admission_pending_count(), 0);
-        assert!(state.surfaces.get(1).is_some());
+        assert!(state.surfaces.get(1).is_none());
         assert!(state.validate().is_clean());
     }
 
-    /// Linux-only proof：orchestrator report 直接暴露 loop live unmap drain 事实。
+    /// Linux-only proof：被 production fail-closed 拒绝的 controlled callback 不得在
+    /// 后续 destroy observation 中创建或 detach 虚构 Core window。
     #[test]
     fn runtime_orchestrator_run_reports_live_toplevel_unmap() {
         assert_runtime_dir();
@@ -2160,24 +2463,26 @@ mod tests {
         assert_eq!(report.live_unmap, report.loop_report.live_unmap);
         assert_eq!(report.live_unmap.drain_invocations, 2);
         assert_eq!(report.live_unmap.live_unmap_observations, 1);
+        // destroy observation 仍会到达 ledger owner；由于前序 admission 已被
+        // production fail-closed 拒绝，这里只能记录一次无 Core 映射的 unmap 尝试。
         assert_eq!(report.live_unmap.ledger_unmaps, 1);
-        assert_eq!(report.live_unmap.core_detaches, 1);
-        assert_eq!(report.live_unmap.surface_mappings_retained, 1);
-        assert_eq!(report.live_unmap.toplevel_mappings_removed, 1);
+        assert_eq!(report.live_unmap.core_detaches, 0);
+        assert_eq!(report.live_unmap.surface_mappings_retained, 0);
+        assert_eq!(report.live_unmap.toplevel_mappings_removed, 0);
         let runtime_loop = orchestrator
             .runtime_loop
             .as_ref()
             .expect("Stopped orchestrator 保留 runtime loop report owner");
         assert_eq!(
             runtime_loop.admission_surface_mapping(registration.adapter_surface_id),
-            Some(1)
+            None
         );
         assert_eq!(
             runtime_loop.admission_toplevel_mapping(registration.adapter_toplevel_id),
             None
         );
-        assert!(state.surfaces.is_alive(1));
-        assert!(state.registry.records().iter().any(|record| !record.alive));
+        assert!(state.surfaces.get(1).is_none());
+        assert!(!state.registry.records().iter().any(|record| !record.alive));
         assert!(state.validate().is_clean());
     }
 
@@ -2185,7 +2490,7 @@ mod tests {
     #[test]
     fn runtime_orchestrator_stop_when_idle_drains_live_admission_backlog() {
         assert_runtime_dir();
-        let mut config = config("orchestrator-live-idle-backlog", 3);
+        let mut config = config("orchestrator-live-idle-backlog", 5);
         config.loop_config.stop_when_idle = true;
         let mut orchestrator = NestedRuntimeOrchestrator::new(config);
         let mut state = State::new();
@@ -2207,16 +2512,16 @@ mod tests {
 
         let report = orchestrator.run(&mut state).expect("Started 必须允许 run");
 
-        assert_eq!(report.pump_iterations, 3);
+        assert_eq!(report.pump_iterations, 5);
         assert_eq!(report.loop_exit_reason, NestedRuntimeLoopExitReason::Idle);
         assert!(report.is_clean_shutdown());
         assert_eq!(report.final_state, NestedRuntimeLifecycleState::Stopped);
         assert!(report.loop_report.is_successful());
-        assert_eq!(report.live_admission.owner_invocations, 3);
-        assert_eq!(report.live_admission.enqueue_invocations, 2);
-        assert_eq!(report.live_admission.admissions_enqueued, 2);
-        assert_eq!(report.live_admission.drain_invocations, 3);
-        assert_eq!(report.live_admission.admissions_consumed, 2);
+        assert_eq!(report.live_admission.owner_invocations, 5);
+        assert_eq!(report.live_admission.enqueue_invocations, 0);
+        assert_eq!(report.live_admission.admissions_enqueued, 0);
+        assert_eq!(report.live_admission.drain_invocations, 5);
+        assert_eq!(report.live_admission.admissions_consumed, 0);
         assert_eq!(report.live_admission.pending_admissions_after, 0);
         assert_eq!(report.live_admission, report.loop_report.live_admission);
         let runtime_loop = orchestrator
@@ -2225,16 +2530,16 @@ mod tests {
             .expect("Stopped orchestrator 保留 runtime loop report owner");
         assert_eq!(
             runtime_loop.admission_surface_mapping(first_registration.adapter_surface_id),
-            Some(1)
+            None
         );
         assert_eq!(
             runtime_loop.admission_surface_mapping(second_registration.adapter_surface_id),
-            Some(2)
+            None
         );
         assert_eq!(runtime_loop.admission_pending_count(), 0);
-        assert!(state.surfaces.get(1).is_some());
-        assert!(state.surfaces.get(2).is_some());
-        assert_eq!(state.surfaces.records().len(), 2);
+        assert!(state.surfaces.get(1).is_none());
+        assert!(state.surfaces.get(2).is_none());
+        assert_eq!(state.surfaces.records().len(), 0);
         assert!(state.validate().is_clean());
     }
 

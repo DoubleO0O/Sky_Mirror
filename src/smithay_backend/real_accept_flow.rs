@@ -37,9 +37,14 @@ use crate::{
             NestedClientSessionId,
         },
         linux_live_toplevel_admission_owner::LiveToplevelAdmissionOwnerObservation,
+        linux_shm_render_admission::RuntimeShmRenderCommitToken,
         linux_wl_compositor::LinuxWlCompositorGlobalInitError,
         linux_wl_surface_identity::{AdapterSurfaceCommitObservation, SurfaceIdentityError},
-        linux_xdg_shell::LinuxXdgShellGlobalInitError,
+        linux_xdg_shell::{
+            LinuxShmGlobalInitError, LinuxXdgShellGlobalInitError,
+            PendingLiveToplevelLifecycleObservation, PendingShmBufferResource,
+            ShmBufferResourceDiscardReason,
+        },
         real_disconnect_flow::{NestedRealDisconnectCallbackReport, bridge_disconnected_events},
         wayland_display::SmithayWaylandDisplayProbe,
         wayland_socket::SmithayWaylandSocketProbe,
@@ -61,6 +66,8 @@ pub(crate) struct ProductionProtocolBootstrapReport {
     pub(crate) wl_compositor_initialized: bool,
     /// owner 已在 compositor 之后成功注册 `xdg_wm_base` global。
     pub(crate) xdg_wm_base_initialized: bool,
+    /// owner 已在同一 Display 上注册只允许 SHM 的 `wl_shm` global。
+    pub(crate) wl_shm_initialized: bool,
     /// socket 仅在两个 globals 都成功之后才完成绑定。
     pub(crate) socket_bound_after_bootstrap: bool,
     /// 尚无外部 registry roundtrip 证明同时发现两个 globals。
@@ -87,15 +94,17 @@ pub(crate) struct ProductionProtocolBootstrapReport {
 
 /// Production global 初始化失败的精确阶段与底层结构化原因。
 ///
-/// 两个 variant 的顺序语义与 bootstrap 顺序一致：compositor 失败会立即短路，只有
-/// compositor 成功后才可能出现 `XdgWmBase` 错误。
+/// variant 的顺序语义与 bootstrap 顺序一致：compositor 失败会立即短路；SHM 失败
+/// 不会进入 xdg 初始化；只有前两项成功后才可能出现 `XdgWmBase` 错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProductionProtocolBootstrapError {
     /// 第一阶段 `wl_compositor` 初始化失败。
     WlCompositor {
         source: LinuxWlCompositorGlobalInitError,
     },
-    /// 第二阶段 `xdg_wm_base` 初始化失败。
+    /// 第二阶段仅 SHM `wl_shm` 初始化失败。
+    WlShm { source: LinuxShmGlobalInitError },
+    /// 第三阶段 `xdg_wm_base` 初始化失败。
     XdgWmBase {
         source: LinuxXdgShellGlobalInitError,
     },
@@ -107,6 +116,7 @@ impl std::fmt::Display for ProductionProtocolBootstrapError {
             Self::WlCompositor { source } => {
                 write!(formatter, "wl_compositor global 初始化失败: {source:?}")
             }
+            Self::WlShm { source } => write!(formatter, "wl_shm global 初始化失败: {source:?}"),
             Self::XdgWmBase { source } => {
                 write!(formatter, "xdg_wm_base global 初始化失败: {source:?}")
             }
@@ -116,7 +126,7 @@ impl std::fmt::Display for ProductionProtocolBootstrapError {
 
 impl std::error::Error for ProductionProtocolBootstrapError {}
 
-/// 在同一个 Display owner 上严格按 compositor → xdg 的顺序注册 production globals。
+/// 在同一个 Display owner 上严格按 compositor → SHM → xdg 的顺序注册 production globals。
 ///
 /// helper 不接触 socket 或 calloop，因此任一阶段失败时，尚不存在可被外部 client
 /// 观察的 socket path；按值持有 Display 的上层 constructor 随错误返回并完成清理。
@@ -126,6 +136,9 @@ fn bootstrap_production_protocol_globals(
     let compositor = display
         .initialize_wl_compositor_global()
         .map_err(|source| ProductionProtocolBootstrapError::WlCompositor { source })?;
+    let shm = display
+        .initialize_wl_shm_global()
+        .map_err(|source| ProductionProtocolBootstrapError::WlShm { source })?;
     let xdg = display
         .initialize_xdg_shell_global()
         .map_err(|source| ProductionProtocolBootstrapError::XdgWmBase { source })?;
@@ -133,6 +146,7 @@ fn bootstrap_production_protocol_globals(
     Ok(ProductionProtocolBootstrapReport {
         bootstrap_attempted: true,
         wl_compositor_initialized: compositor.wl_compositor_global_initialized,
+        wl_shm_initialized: shm.wl_shm_global_initialized,
         xdg_wm_base_initialized: xdg.xdg_shell_global_initialized,
         socket_bound_after_bootstrap: false,
         external_registry_discovered_both_globals: false,
@@ -702,20 +716,29 @@ impl NestedRealAcceptFlow {
         LiveToplevelAdmissionOwnerObservation::from_display(&self.display)
     }
 
-    /// 消费 display owner 中下一条 live toplevel admission observation。
+    /// 消费 callback 到达顺序中的下一条纯数据 toplevel lifecycle event。
     ///
-    /// 该 seam 维持 callback arrival order：多个 callback 在一次 coordinator pump 前到达时，
-    /// runtime pump 每次只读取并处理最早的一条。
+    /// flow 不按 admission/unmap 分类重排；runtime coordinator 必须是唯一消费者，
+    /// 从而保持跨对象 callback 因果顺序。
+    pub(crate) fn take_next_live_toplevel_lifecycle_observation(
+        &mut self,
+    ) -> Option<PendingLiveToplevelLifecycleObservation> {
+        self.display.take_next_live_toplevel_lifecycle_observation()
+    }
+
+    /// 返回统一 lifecycle FIFO 的剩余 event 数量；flow 不消费或重排它。
+    pub(crate) fn pending_live_toplevel_lifecycle_count(&self) -> usize {
+        self.display.pending_live_toplevel_lifecycle_count()
+    }
+
+    /// 专用 admission pump 的兼容 seam；只在 admission 位于 lifecycle FIFO 队首时消费。
     pub(crate) fn take_next_live_toplevel_admission_observation(
         &mut self,
-    ) -> LiveToplevelAdmissionOwnerObservation {
+    ) -> Option<LiveToplevelAdmissionOwnerObservation> {
         self.display.take_next_live_toplevel_admission_observation()
     }
 
-    /// 消费 display owner 中下一条 live toplevel unmap observation。
-    ///
-    /// flow 只转发纯数据 lifecycle report；ledger/core detach 仍必须由 runtime owner
-    /// 在同时持有 admission ledger 与 `State` 时执行。
+    /// 专用 unmap pump 的兼容 seam；只在 destroy 位于 lifecycle FIFO 队首时消费。
     pub(crate) fn take_next_live_toplevel_unmap_observation(
         &mut self,
     ) -> Option<XdgToplevelLifecycleObservationReport> {
@@ -732,6 +755,65 @@ impl NestedRealAcceptFlow {
         self.display.take_next_wl_surface_commit_observation()
     }
 
+    /// 将匹配的 backend-only SHM resource 从 display 转给 coordinator。
+    ///
+    /// flow 只执行 FIFO token 转发；它不读取 Core/ledger、不会 import/render，也不会为
+    /// 缺失 session 或 identity 建立回退 mapping。
+    pub(crate) fn take_shm_buffer_resource_for_commit(
+        &mut self,
+        observation: &AdapterSurfaceCommitObservation,
+    ) -> Option<PendingShmBufferResource> {
+        self.display
+            .take_shm_buffer_resource_for_commit(observation)
+    }
+
+    /// 不转移 resource 地查看与 commit token 精确匹配的队首项。
+    ///
+    /// coordinator 利用这条只读 seam 在 FIFO 保持原样时完成 session/ledger/Core 验证；
+    /// flow 绝不借此建立身份映射或调用 renderer。
+    pub(crate) fn peek_shm_buffer_resource_for_commit(
+        &self,
+        observation: &AdapterSurfaceCommitObservation,
+    ) -> Option<&PendingShmBufferResource> {
+        self.display
+            .peek_shm_buffer_resource_for_commit(observation)
+    }
+
+    /// 返回 display resource FIFO 队首 token，不暴露 `WlBuffer`。
+    pub(crate) fn shm_buffer_resource_front_token(&self) -> Option<RuntimeShmRenderCommitToken> {
+        self.display.shm_buffer_resource_front_token()
+    }
+
+    /// 查询 token 是否已经由真实 destroy/cleanup owner tombstone。
+    pub(crate) fn shm_buffer_resource_is_tombstoned(
+        &self,
+        token: RuntimeShmRenderCommitToken,
+    ) -> bool {
+        self.display.shm_buffer_resource_is_tombstoned(token)
+    }
+
+    /// 回收 coordinator 已确认不可恢复的精确 token resource。
+    ///
+    /// 未匹配 token 固定保留队首，调用者必须把未知 admission 作为 defer 而非 discard。
+    pub(crate) fn discard_shm_buffer_resource_for_commit(
+        &mut self,
+        observation: &AdapterSurfaceCommitObservation,
+        reason: ShmBufferResourceDiscardReason,
+    ) -> bool {
+        self.display
+            .discard_shm_buffer_resource_for_commit(observation, reason)
+    }
+
+    /// 按 exact resource 队首 token 回收 stale resource；flow 不搜索后续项。
+    pub(crate) fn discard_shm_buffer_resource_token(
+        &mut self,
+        token: RuntimeShmRenderCommitToken,
+        reason: ShmBufferResourceDiscardReason,
+    ) -> bool {
+        self.display
+            .discard_shm_buffer_resource_token(token, reason)
+    }
+
     /// 只读访问 persistent backend-client/session mapping。
     pub fn mapping(&self) -> &NestedAcceptedClientMapping {
         &self.loop_data.mapping
@@ -740,6 +822,15 @@ impl NestedRealAcceptFlow {
     /// 返回 core bridge 当前保存的 active session 数量。
     pub fn active_core_session_count(&self) -> usize {
         self.core_bridge.active_session_count()
+    }
+
+    /// 查询已由本 flow 的 connected bridge 显式注册的 Core client。
+    ///
+    /// session 属于 `NestedClientDataOwner`；Core client 只由既有
+    /// `BackendEvent -> CoreCommand -> State` 注册后写入 bridge。这个只读查询不猜
+    /// backend ID、不保存第二份 mapping，也不会在未知或已断开 session 上补建状态。
+    pub fn core_client_for_session(&self, session: NestedClientSessionId) -> Option<CoreClientId> {
+        self.core_bridge.lookup_client(session)
     }
 
     /// 返回 Display 是否仍由 flow 持有并保持 probe-only protocol 状态。
@@ -903,6 +994,9 @@ mod tests {
                 bootstrap_attempted: true,
                 wl_compositor_initialized: true,
                 xdg_wm_base_initialized: true,
+                // R2 的真实 SHM buffer owner 依赖同一 production bootstrap 中的 wl_shm
+                // global；这只表示 server global 已建立，不表示 import/render 已发生。
+                wl_shm_initialized: true,
                 ..ProductionProtocolBootstrapReport::default()
             }
         );
@@ -922,6 +1016,7 @@ mod tests {
                 bootstrap_attempted: true,
                 wl_compositor_initialized: true,
                 xdg_wm_base_initialized: true,
+                wl_shm_initialized: true,
                 socket_bound_after_bootstrap: true,
                 ..ProductionProtocolBootstrapReport::default()
             })
@@ -1206,6 +1301,28 @@ mod tests {
         assert!(state.clients.is_alive(core_clients[0]));
         assert!(!report.readiness.accepts_clients);
         assert!(!report.readiness.real_accept_loop_available);
+    }
+
+    /// Red：真实 accept 产生的 adapter session 必须可由 flow 显式解析为同一 bridge
+    /// 注册的 Core client，不能从 backend ID 或报告位置猜测。
+    #[test]
+    fn real_accepted_session_resolves_registered_core_client() {
+        assert_runtime_dir();
+        let socket_name = unique_socket_name("real-accept-session-core");
+        let mut flow = NestedRealAcceptFlow::with_socket_name(&socket_name)
+            .expect("真实 accept flow 必须绑定 socket");
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").expect("需要 runtime dir");
+        let _client_stream = UnixStream::connect(Path::new(&runtime_dir).join(flow.socket_name()))
+            .expect("测试 client 必须连接真实 socket");
+        let mut state = State::new();
+        let report = flow
+            .pump_once(&mut state, Duration::from_secs(1))
+            .expect("真实 accept pump 必须成功");
+        let client = report.registered_core_clients()[0];
+        assert_eq!(
+            flow.core_client_for_session(NestedClientSessionId::new(1).expect("session 1 有效")),
+            Some(client)
+        );
     }
 
     /// Linux-only 真实证明：peer close 经 Display dispatch 触发 callback 并关闭 core client。

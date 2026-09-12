@@ -89,6 +89,9 @@ pub mod linux_runtime;
 /// Linux-only SHM-first buffer import adapter skeleton；不 import buffer 或创建 texture。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_shm_buffer_import_adapter;
+/// Linux-only SHM commit/resource 原子 admission gate；只处理纯数据身份与 FIFO 决策。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub(crate) mod linux_shm_render_admission;
 /// Linux-only live callback 到 pending ledger admission intent 的桥接 seam。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_toplevel_admission_bridge;
@@ -107,6 +110,10 @@ pub mod linux_toplevel_identity_registration;
 /// Linux-only Wayland client 依赖与类型 import 编译边界。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_wayland_client_endpoint;
+/// Linux-only nested Winit/EGL/GLES 输出 target owner；只服务 R2 受控 SHM 首帧，
+/// 不代表长期 compositor 或默认产品输出。
+#[cfg(all(feature = "smithay-linux", target_os = "linux"))]
+pub(crate) mod linux_winit_output;
 /// Linux-only `wl_compositor` state owner 与 per-client compositor data seam。
 #[cfg(all(feature = "smithay-linux", target_os = "linux"))]
 pub mod linux_wl_compositor;
@@ -1402,7 +1409,8 @@ mod nested_socket_probe_gate_tests {
             "let (first_registration, second_registration) =",
             "report.loop_exit_reason, NestedRuntimeLoopExitReason::Idle",
             "report.live_admission.admissions_consumed, 2",
-            "state.surfaces.records().len(), 2",
+            "report.live_admission.admissions_enqueued, 0",
+            "state.surfaces.get(1).is_none()",
         ] {
             assert!(
                 source.contains(required),
@@ -1423,6 +1431,7 @@ mod nested_socket_probe_gate_tests {
             "fn runtime_orchestrator_run_reports_live_toplevel_unmap()",
             "assert_eq!(report.live_unmap, report.loop_report.live_unmap)",
             "assert_eq!(report.live_unmap.ledger_unmaps, 1)",
+            "assert_eq!(report.live_unmap.core_detaches, 0)",
         ] {
             assert!(
                 source.contains(required),
@@ -1657,7 +1666,10 @@ mod nested_socket_probe_gate_tests {
         assert_eq!(lines[reexport_lines[0].0 - 1], required_gate);
     }
 
-    /// 验证 single-pump coordinator 只编排已有 flow，并保守描述长期能力。
+    /// 验证 single-pump coordinator 保持既有 lifecycle seam，并保守描述长期能力。
+    ///
+    /// R2 允许 coordinator 对不可变 `State` 做 session/ledger/Core identity 读取，作为
+    /// 真实 WlBuffer 转移前的 fail-closed admission；它仍不得直接写 Core registry。
     #[test]
     fn nested_runtime_coordinator_source_preserves_lifecycle_seams() {
         let source = include_str!("nested_runtime_coordinator.rs");
@@ -1705,8 +1717,6 @@ mod nested_socket_probe_gate_tests {
         for forbidden in [
             ["State", "::handle_command"].concat(),
             [".", "clients"].concat(),
-            [".", "surfaces"].concat(),
-            [".", "registry"].concat(),
             ["Backend", "Event::NestedClient"].concat(),
             ["Core", "Command::PumpClient"].concat(),
         ] {
@@ -1934,7 +1944,7 @@ mod nested_socket_probe_gate_tests {
             "pub fn has_seen_live_toplevel_callback_sequence(",
             "pub fn mark_live_toplevel_callback_sequence_seen(",
             "let lifecycle_report = self.pump_once(state, timeout);",
-            "let observation = self.flow.take_next_live_toplevel_admission_observation();",
+            "take_next_live_toplevel_admission_observation()",
             "enqueue_live_toplevel_admission_from_observation(observation, self)",
             ".drain_pending_toplevel_admission_once(state, tick)",
         ] {
@@ -2001,7 +2011,8 @@ mod nested_socket_probe_gate_tests {
         let coordinator_source = include_str!("nested_runtime_coordinator.rs");
 
         for required in [
-            "pending_live_toplevel_admission_observations",
+            "pending_live_toplevel_lifecycle_observations",
+            "PendingLiveToplevelLifecycleObservation",
             ".push_back(",
             ".pop_front()",
             "take_next_live_toplevel_admission_observation",
@@ -2013,8 +2024,8 @@ mod nested_socket_probe_gate_tests {
         }
 
         for required in [
-            "take_next_live_toplevel_admission_observation",
-            "self.display.take_next_live_toplevel_admission_observation()",
+            "take_next_live_toplevel_lifecycle_observation",
+            "self.display.take_next_live_toplevel_lifecycle_observation()",
         ] {
             assert!(
                 flow_source.contains(required),
@@ -2023,7 +2034,7 @@ mod nested_socket_probe_gate_tests {
         }
 
         for required in [
-            "self.flow.take_next_live_toplevel_admission_observation()",
+            "self.flow.take_next_live_toplevel_lifecycle_observation()",
             "nested_runtime_live_admission_pump_drains_backlogged_callback_observations",
         ] {
             assert!(
@@ -3386,9 +3397,9 @@ mod nested_socket_probe_gate_tests {
         for required in [
             "fn commit(&mut self, surface: &WlSurface)",
             ".observe_surface_commit(surface)",
-            "不检查 buffer/damage",
-            "不发 frame callback",
-            "不触发 admission ledger/core",
+            "先保持既有 immutable pure-data observation FIFO",
+            "随后 backend-only resource owner",
+            "仍不接触 ledger/Core/render",
         ] {
             assert!(
                 xdg_shell.contains(required),
@@ -3805,7 +3816,6 @@ mod nested_socket_probe_gate_tests {
         }
 
         for forbidden in [
-            ".done(",
             "frame_callback_requested: true",
             "render_invoked: true",
             "input_invoked: true",
@@ -3927,7 +3937,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "texture_created: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4029,7 +4038,6 @@ mod nested_socket_probe_gate_tests {
             "render_submitted: true",
             "frame_callback_done_sent: true",
             "input_support: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4133,7 +4141,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4246,7 +4253,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4354,7 +4360,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4464,7 +4469,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4570,7 +4574,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4669,7 +4672,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4766,7 +4768,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4866,7 +4867,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -4968,7 +4968,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5012,7 +5011,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5115,7 +5113,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5222,7 +5219,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5329,7 +5325,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5438,7 +5433,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5551,7 +5545,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5666,7 +5659,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5779,7 +5771,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5889,7 +5880,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -5995,7 +5985,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -6106,7 +6095,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -6220,7 +6208,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -6335,7 +6322,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "render_invoked: true",
             "input_invoked: true",
             "damage_submitted: true",
@@ -6410,7 +6396,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_sent: true",
             "input_support: true",
             "core_mutation_invoked: true",
-            ".done(",
             "renderable_buffer: true",
             "real_compositor_runtime_ready: true",
         ] {
@@ -6645,8 +6630,6 @@ mod nested_socket_probe_gate_tests {
             "core_mutation_invoked: true",
             "renderable_buffer: true",
             "real_compositor_runtime_ready: true",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -6784,8 +6767,6 @@ mod nested_socket_probe_gate_tests {
             "core_mutation_invoked: true",
             "renderable_buffer: true",
             "real_compositor_runtime_ready: true",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -6898,8 +6879,6 @@ mod nested_socket_probe_gate_tests {
             "core_mutation_invoked: true",
             "renderable_buffer: true",
             "real_compositor_runtime_ready: true",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -7022,8 +7001,6 @@ mod nested_socket_probe_gate_tests {
             "core_mutation_invoked: true",
             "renderable_buffer: true",
             "real_compositor_runtime_ready: true",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -7146,8 +7123,6 @@ mod nested_socket_probe_gate_tests {
             "core_mutation_invoked: true",
             "renderable_buffer: true",
             "real_compositor_runtime_ready: true",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -7276,8 +7251,6 @@ mod nested_socket_probe_gate_tests {
             "real_compositor_runtime_ready: true",
             "ImportAll::import_buffer",
             "TextureId",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -7414,8 +7387,6 @@ mod nested_socket_probe_gate_tests {
             "real_compositor_runtime_ready: true",
             "ImportAll::import_buffer",
             "TextureId",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -7558,8 +7529,6 @@ mod nested_socket_probe_gate_tests {
             "real_compositor_runtime_ready: true",
             "ImportAll::import_buffer",
             "TextureId",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -7703,8 +7672,6 @@ mod nested_socket_probe_gate_tests {
             "import_buffer_call_allowed: true",
             "texture_import_route_available: true",
             "real_compositor_runtime_ready: true",
-            "Gles",
-            "EGL",
             "WGPU",
         ] {
             assert!(
@@ -7846,7 +7813,6 @@ mod nested_socket_probe_gate_tests {
             "damage_submission_allowed: true",
             "render_invoked: true",
             ".damage(",
-            ".done(",
         ] {
             assert!(
                 !production_module.contains(forbidden)
@@ -7983,7 +7949,6 @@ mod nested_socket_probe_gate_tests {
             "frame_callback_done_allowed: true",
             "render_invoked: true",
             ".damage(",
-            ".done(",
         ] {
             assert!(
                 !production_module.contains(forbidden)
@@ -8125,7 +8090,6 @@ mod nested_socket_probe_gate_tests {
             "render_invoked: true",
             "import_buffer(",
             ".damage(",
-            ".done(",
         ] {
             assert!(
                 !production_module.contains(forbidden)
@@ -8272,7 +8236,6 @@ mod nested_socket_probe_gate_tests {
             "render_invoked: true",
             "import_buffer(",
             ".damage(",
-            ".done(",
         ] {
             assert!(
                 !production_module.contains(forbidden)
@@ -8419,7 +8382,6 @@ mod nested_socket_probe_gate_tests {
             "render_invoked: true",
             "import_buffer(",
             ".damage(",
-            ".done(",
         ] {
             assert!(
                 !phase56n_production_module.contains(forbidden)
@@ -8563,7 +8525,6 @@ mod nested_socket_probe_gate_tests {
             "core_mutation_invoked: true",
             "import_buffer(",
             ".damage(",
-            ".done(",
         ] {
             assert!(
                 !production_module.contains(forbidden)
@@ -9140,7 +9101,10 @@ mod nested_socket_probe_gate_tests {
             "fn new_toplevel(&mut self, surface: ToplevelSurface)",
             "let callback_sequence = self.record_new_toplevel_callback_observation();",
             "let registration = self.register_new_toplevel_identity(&surface);",
-            "self.record_pending_live_toplevel_admission_observation(callback_sequence, registration);",
+            "self.record_pending_live_toplevel_admission_observation(",
+            "callback_sequence,",
+            "registration,",
+            "source_session,",
         ] {
             assert!(
                 code.contains(required),
@@ -9634,5 +9598,54 @@ mod nested_socket_probe_gate_tests {
                 "Phase 52L compile seam 包含禁止 runtime token: {forbidden}"
             );
         }
+    }
+
+    /// R2 只允许在明确的 controlled owner/seam 中引入真实 texture 与 callback completion。
+    ///
+    /// 旧 Phase 54–56 的 source guard 过去扫描整个 coordinator 并禁止这些词，R2 接线后
+    /// 那会把历史 skeleton 的结论错误外推为永久能力禁令。这个契约改为验证唯一例外的
+    /// 精确位置与 gate，而旧 skeleton report 的 false 值仍由各自测试覆盖。
+    #[test]
+    fn r2_controlled_render_source_contract_is_precise() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let coordinator =
+            std::fs::read_to_string(root.join("src/smithay_backend/nested_runtime_coordinator.rs"))
+                .expect("R2 coordinator source 必须存在");
+        let output =
+            std::fs::read_to_string(root.join("src/smithay_backend/linux_winit_output.rs"))
+                .expect("R2 Winit output owner source 必须存在");
+
+        for required in [
+            "authorized_frame_callback_count(",
+            "if frame_callbacks_done > 0",
+            "callback.done(elapsed_ms)",
+            "present_validated_shm_buffer(&resource)",
+        ] {
+            assert!(
+                coordinator.contains(required),
+                "R2 coordinator 缺少受控 completion/import seam: {required}"
+            );
+        }
+        assert_eq!(
+            coordinator.match_indices("callback.done(").count(),
+            1,
+            "R2 只能保留一个由 completion gate 支配的 callback.done 调用点"
+        );
+        for required in [
+            "ImportMemWl",
+            "ExportMem",
+            "copy_texture(&texture",
+            "draw_render_elements",
+            "self.backend.submit",
+        ] {
+            assert!(
+                output.contains(required),
+                "R2 Winit output owner 缺少真实受控 renderer seam: {required}"
+            );
+        }
+        assert!(
+            !output.contains("callback.done("),
+            "R2 output owner 不得绕过 coordinator completion gate"
+        );
     }
 }

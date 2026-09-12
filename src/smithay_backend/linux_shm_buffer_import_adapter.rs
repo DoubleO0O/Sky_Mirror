@@ -4281,6 +4281,20 @@ pub fn renderer_backend_construction_route_proof_from_concrete_route_decision(
 
 #[cfg(test)]
 mod tests {
+    /// Cargo feature-gating Red：R2 的 nested 可见输出只允许使用 Winit + EGL/GLES。
+    ///
+    /// 在批准扩张前，`smithay-linux` 只有 Wayland frontend 与 DummyRenderer proof，
+    /// 此测试应因 `backend_winit` 未启用而不能解析该具体类型。它不创建窗口、EGL
+    /// context、renderer 或任何平台资源；Green 只证明允许的编译边界已打开。
+    #[test]
+    fn winit_graphics_backend_type_is_available_for_nested_visible_output_boundary() {
+        type NestedVisibleBackend = smithay::backend::winit::WinitGraphicsBackend<
+            smithay::backend::renderer::gles::GlesRenderer,
+        >;
+
+        assert!(std::any::type_name::<NestedVisibleBackend>().contains("WinitGraphicsBackend"));
+    }
+
     use super::{
         RuntimeSurfaceCommitDamageToTextureMappingAuditBlocker,
         RuntimeSurfaceCommitFrameCallbackCompletionPolicyBlocker,

@@ -11,7 +11,9 @@
 
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
 
+use super::client_session::NestedClientSessionId;
 use super::linux_live_toplevel_admission_owner::LiveToplevelAdmissionOwnerObservation;
+use super::linux_shm_render_admission::RuntimeShmRenderCommitToken;
 use super::linux_toplevel_identity_registration::AdapterToplevelIdentityRegistrationError;
 use super::linux_wl_compositor::{
     LinuxWlCompositorGlobalInitError, LinuxWlCompositorReadinessReport,
@@ -20,7 +22,10 @@ use super::linux_wl_surface_identity::{
     AdapterSurfaceCommitObservation, AdapterSurfaceIdentityMapping, SurfaceIdentityError,
 };
 use super::linux_xdg_shell::{
-    LinuxXdgShellGlobalInitError, LinuxXdgShellGlobalInitReport, LinuxXdgShellStateSkeleton,
+    LinuxShmGlobalInitError, LinuxShmGlobalInitReport, LinuxXdgShellGlobalInitError,
+    LinuxXdgShellGlobalInitReport, LinuxXdgShellStateSkeleton,
+    PendingLiveToplevelLifecycleObservation, PendingShmBufferResource,
+    ShmBufferResourceDiscardReason,
 };
 use super::xdg_lifecycle_observation::XdgToplevelLifecycleObservationReport;
 use super::xdg_toplevel_identity::XdgToplevelIdentityMapping;
@@ -122,6 +127,22 @@ impl SmithayWaylandDisplayProbe {
         self.state.is_wl_compositor_global_initialized()
     }
 
+    /// 使用当前 Display 的 handle 注册只允许 SHM 的 `wl_shm` global。
+    ///
+    /// 该 owner 只建立协议资源管理与 destroy callback；不读取 buffer 内容、不导入
+    /// texture、不提交 frame，也不触碰 Core。
+    pub(crate) fn initialize_wl_shm_global(
+        &mut self,
+    ) -> Result<LinuxShmGlobalInitReport, LinuxShmGlobalInitError> {
+        let display_handle = self.display.handle();
+        self.state.initialize_wl_shm_global(&display_handle)
+    }
+
+    /// 返回当前 Display owner 是否持有 `wl_shm` global。
+    pub(crate) fn is_wl_shm_global_initialized(&self) -> bool {
+        self.state.is_wl_shm_global_initialized()
+    }
+
     /// 返回当前 `wl_compositor` owner readiness；查询不会产生 mutation。
     pub fn wl_compositor_readiness_report(&self) -> LinuxWlCompositorReadinessReport {
         self.state.wl_compositor_readiness_report()
@@ -158,6 +179,62 @@ impl SmithayWaylandDisplayProbe {
         self.state.take_next_wl_surface_commit_observation()
     }
 
+    /// 仅以同一 pure-data commit token 从 backend resource owner 取出队首 SHM buffer。
+    ///
+    /// display 不检查 Core/ledger，也不 import/render；token 不匹配时 resource owner 保持
+    /// 队列不动，禁止 display 侧搜索、重排或猜配。
+    pub(crate) fn take_shm_buffer_resource_for_commit(
+        &mut self,
+        observation: &AdapterSurfaceCommitObservation,
+    ) -> Option<PendingShmBufferResource> {
+        self.state.take_shm_buffer_resource_for_commit(observation)
+    }
+
+    /// 只读查看与 commit token 精确匹配的队首 SHM resource。
+    ///
+    /// 此处不检查 Core/ledger，也不转移 `WlBuffer`；runtime coordinator 先完成完整
+    /// admission 验证，才能调用 take 或明确 discard。
+    pub(crate) fn peek_shm_buffer_resource_for_commit(
+        &self,
+        observation: &AdapterSurfaceCommitObservation,
+    ) -> Option<&PendingShmBufferResource> {
+        self.state.peek_shm_buffer_resource_for_commit(observation)
+    }
+
+    /// 返回 resource FIFO 队首 token，不暴露 `WlBuffer`。
+    pub(crate) fn shm_buffer_resource_front_token(&self) -> Option<RuntimeShmRenderCommitToken> {
+        self.state.shm_buffer_resource_front_token()
+    }
+
+    /// 查询 resource token 是否已经由 destroy/cleanup owner tombstone。
+    pub(crate) fn shm_buffer_resource_is_tombstoned(
+        &self,
+        token: RuntimeShmRenderCommitToken,
+    ) -> bool {
+        self.state.shm_buffer_resource_is_tombstoned(token)
+    }
+
+    /// 转发 coordinator 已确认的不可恢复 resource 回收。
+    ///
+    /// display 不自行推断该结论；token 不匹配时 state owner 保持 FIFO 不动。
+    pub(crate) fn discard_shm_buffer_resource_for_commit(
+        &mut self,
+        observation: &AdapterSurfaceCommitObservation,
+        reason: ShmBufferResourceDiscardReason,
+    ) -> bool {
+        self.state
+            .discard_shm_buffer_resource_for_commit(observation, reason)
+    }
+
+    /// 按 exact resource 队首 token 转发 stale cleanup，不搜索或重排。
+    pub(crate) fn discard_shm_buffer_resource_token(
+        &mut self,
+        token: RuntimeShmRenderCommitToken,
+        reason: ShmBufferResourceDiscardReason,
+    ) -> bool {
+        self.state.discard_shm_buffer_resource_token(token, reason)
+    }
+
     /// 返回本 display 的 server handler 收到的 `new_toplevel` callback 次数。
     pub(crate) fn new_toplevel_callback_observation_count(&self) -> u64 {
         self.state.new_toplevel_callback_observation_count()
@@ -166,6 +243,13 @@ impl SmithayWaylandDisplayProbe {
     /// 返回最近一次 `new_toplevel` callback 的纯数据观察序号。
     pub(crate) fn last_new_toplevel_callback_observation_sequence(&self) -> Option<u64> {
         self.state.last_new_toplevel_callback_observation_sequence()
+    }
+
+    /// 返回最近一次真实 `new_toplevel` callback 从其 protocol resource owner 解出的
+    /// adapter session。该 accessor 只暴露纯数据身份快照，不泄漏 Wayland client、
+    /// surface 或 Core identity，也不代表已经完成 lifecycle/Core 接入。
+    pub(crate) const fn last_toplevel_callback_session(&self) -> Option<NestedClientSessionId> {
+        self.state.last_toplevel_callback_session()
     }
 
     /// 返回最近一次 `new_toplevel` callback 产生的 adapter toplevel identity mapping。
@@ -179,30 +263,37 @@ impl SmithayWaylandDisplayProbe {
             .last_adapter_toplevel_identity_registration_observation()
     }
 
-    /// 消费 display owner 保存的下一条 live admission observation。
+    /// 消费 handler callback 到达顺序中的下一条 live toplevel lifecycle observation。
     ///
-    /// backlog 为空时保留旧的 latest snapshot 行为，让重复 callback sequence 继续由
-    /// coordinator dedupe seam 处理。
+    /// admission 与 destroy 共用同一 FIFO；display 只转发纯数据 event，runtime
+    /// coordinator 是唯一可决定 queue/ledger/Core mutation 的 owner。
+    pub(crate) fn take_next_live_toplevel_lifecycle_observation(
+        &mut self,
+    ) -> Option<PendingLiveToplevelLifecycleObservation> {
+        self.state.take_next_live_toplevel_lifecycle_observation()
+    }
+
+    /// 返回统一 lifecycle FIFO 的剩余 event 数量，供 bounded loop 防止错误 idle。
+    pub(crate) fn pending_live_toplevel_lifecycle_count(&self) -> usize {
+        self.state.pending_live_toplevel_lifecycle_count()
+    }
+
+    /// 兼容专用 admission pump：只消费 FIFO 队首的 admission，不跨越 destroy。
     pub(crate) fn take_next_live_toplevel_admission_observation(
         &mut self,
-    ) -> LiveToplevelAdmissionOwnerObservation {
-        let observation = self.state.take_next_live_toplevel_admission_observation();
-
-        match observation {
-            Some(observation) => LiveToplevelAdmissionOwnerObservation {
+    ) -> Option<LiveToplevelAdmissionOwnerObservation> {
+        self.state
+            .take_next_live_toplevel_admission_observation()
+            .map(|observation| LiveToplevelAdmissionOwnerObservation {
                 new_toplevel_callback_sequence: Some(observation.new_toplevel_callback_sequence),
                 adapter_toplevel_identity_registration: Some(
                     observation.adapter_toplevel_identity_registration,
                 ),
-            },
-            None => LiveToplevelAdmissionOwnerObservation::from_display(self),
-        }
+                source_session: observation.source_session,
+            })
     }
 
-    /// 消费 display owner 中下一条 live toplevel unmap observation。
-    ///
-    /// 返回值只包含 adapter identity lookup report；display/handler 不调用 ledger，
-    /// 也不持有 core `State`。真正 detach 只能由 runtime owner 执行。
+    /// 兼容专用 unmap pump：只消费 FIFO 队首的 destroy，不跨越 admission。
     pub(crate) fn take_next_live_toplevel_unmap_observation(
         &mut self,
     ) -> Option<XdgToplevelLifecycleObservationReport> {

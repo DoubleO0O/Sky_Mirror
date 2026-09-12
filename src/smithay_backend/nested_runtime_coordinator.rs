@@ -7,7 +7,7 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     io,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -16,7 +16,8 @@ use crate::{
     },
     smithay_backend::{
         linux_live_toplevel_admission_owner::{
-            LiveToplevelAdmissionOwnerReport, enqueue_live_toplevel_admission_from_observation,
+            LiveToplevelAdmissionOwnerObservation, LiveToplevelAdmissionOwnerReport,
+            enqueue_live_toplevel_admission_from_observation,
         },
         linux_shm_buffer_import_adapter::{
             LinuxShmFirstBufferImportAdapterSkeleton,
@@ -34,19 +35,116 @@ use crate::{
             RuntimeSurfaceCommitTextureImportRouteDecisionReport,
             RuntimeSurfaceCommitTextureOwnerBoundaryReport,
         },
+        linux_shm_render_admission::{
+            RuntimeShmFrameCompletionInput, RuntimeShmRenderAdmissionDecision,
+            RuntimeShmRenderAdmissionInput, RuntimeShmRenderAdmissionRejectReason,
+            RuntimeShmRenderCommitToken, RuntimeShmRenderIdentityOwner,
+            authorized_frame_callback_count, decide_runtime_shm_render_admission,
+        },
         linux_toplevel_admission_bridge::PendingXdgToplevelAdmission,
         linux_toplevel_admission_runtime_queue::{
             RuntimeToplevelAdmissionDrainReport, RuntimeToplevelAdmissionDrainTick,
             RuntimeToplevelAdmissionEnqueueReport, RuntimeToplevelAdmissionQueueOwner,
             RuntimeToplevelUnmapDrainReport,
         },
+        linux_winit_output::{NestedWinitOutputOwner, NestedWinitShmPresentReport},
         linux_wl_surface_identity::{
             AdapterSurfaceCommitObservation, SurfaceIdentityError, SurfaceIdentityKey,
+        },
+        linux_xdg_shell::{
+            PendingLiveToplevelLifecycleObservation, ShmBufferResourceDiscardReason,
         },
         real_accept_flow::{NestedRealAcceptFlow, ProductionProtocolBootstrapReport},
         surface_xdg_admission::{AdapterSurfaceId, AdapterToplevelId},
     },
 };
+
+/// coordinator 对一条真实 SHM commit/resource 的原子处理结果。
+///
+/// `Presented` 只表示 controlled nested Winit target 已完成 import/draw/submit；它不是
+/// DRM/KMS production output。frame done 必须同时满足真实 damage 与 callback 条件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeShmRenderAttemptOutcome {
+    /// 当前没有待处理 commit observation。
+    Idle,
+    /// Winit owner 或 lifecycle identity 尚未就绪；两侧 FIFO 均保留。
+    Deferred,
+    /// 一侧或两侧被按结构化原因拒绝并完成对应 cleanup/tombstone。
+    Rejected(RuntimeShmRenderAdmissionRejectReason),
+    /// 真实 GLES SHM import、texture draw 与 Winit/EGL submit 已成功。
+    Presented,
+    /// resource 已经转移，但真实 import/render/submit 失败并被终止回收。
+    RenderFailed,
+}
+
+/// 原子 SHM render owner 的窄范围可审计报告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeShmRenderAttemptReport {
+    /// 本轮 observation token。
+    pub token: Option<RuntimeShmRenderCommitToken>,
+    /// 原子处理结果。
+    pub outcome: RuntimeShmRenderAttemptOutcome,
+    /// 是否从 display FIFO 转移了唯一 `WlBuffer` resource。
+    pub resource_transferred: bool,
+    /// 是否完成真实 GLES SHM import。
+    pub buffer_imported: bool,
+    /// 是否把 client texture 绘制到 target。
+    pub texture_drawn: bool,
+    /// 是否从实际导入的 GLES texture 完成内存回读。
+    pub texture_read_back: bool,
+    /// 归一化到 client 行序的逐像素 RGB；只在真实回读成功时非空。
+    pub texture_readback_rgb: Vec<[u8; 3]>,
+    /// 是否成功 submit Winit/EGL backbuffer。
+    pub backbuffer_submitted: bool,
+    /// 是否提交本次 output damage；不等于完整 damage tracking。
+    pub output_damage_submitted: bool,
+    /// 只有成功呈现且 commit 有真实 damage 时才允许发送的 callback 数量。
+    pub frame_callbacks_done: usize,
+    /// renderer 错误文本；不驱动状态转换。
+    pub error: Option<String>,
+}
+
+impl RuntimeShmRenderAttemptReport {
+    fn idle() -> Self {
+        Self {
+            token: None,
+            outcome: RuntimeShmRenderAttemptOutcome::Idle,
+            resource_transferred: false,
+            buffer_imported: false,
+            texture_drawn: false,
+            texture_read_back: false,
+            texture_readback_rgb: Vec::new(),
+            backbuffer_submitted: false,
+            output_damage_submitted: false,
+            frame_callbacks_done: 0,
+            error: None,
+        }
+    }
+
+    fn from_decision(
+        token: RuntimeShmRenderCommitToken,
+        outcome: RuntimeShmRenderAttemptOutcome,
+    ) -> Self {
+        Self {
+            token: Some(token),
+            outcome,
+            ..Self::idle()
+        }
+    }
+}
+
+/// 构造没有 admission event 时传给兼容 report seam 的空 observation。
+///
+/// 组合 lifecycle pump 每轮只从统一 FIFO 消费一个 event：当队首是 destroy 或 queue
+/// 为空时，admission owner 必须得到明确的空输入，而不能读取 latest snapshot 并重复/越过
+/// 前序 callback。该值不包含任何可被解析为 adapter 或 Core identity 的数据。
+fn empty_live_toplevel_admission_observation() -> LiveToplevelAdmissionOwnerObservation {
+    LiveToplevelAdmissionOwnerObservation {
+        new_toplevel_callback_sequence: None,
+        adapter_toplevel_identity_registration: None,
+        source_session: None,
+    }
+}
 
 /// Phase 51K coordinator 尚未满足的独立能力条件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4589,6 +4687,18 @@ pub struct NestedRuntimeCoordinator {
     buffer_import_actual_attempt_recorder: RuntimeSurfaceCommitBufferImportActualAttemptRecorder,
     shm_first_buffer_import_adapter: LinuxShmFirstBufferImportAdapterSkeleton,
     seen_live_toplevel_callback_sequences: BTreeSet<u64>,
+    /// 已观察到真实 buffer 的 commit FIFO。observation 在 identity defer 时必须保留，
+    /// 否则 resource FIFO 队首会因失去配对 token 而永久阻塞。
+    pending_shm_commit_observations: VecDeque<AdapterSurfaceCommitObservation>,
+    /// 只保存 active adapter surface→toplevel 关系与 retirement tombstone；Core mapping
+    /// 每次 render 都重新查询 admission ledger/State。
+    shm_render_identity_owner: RuntimeShmRenderIdentityOwner,
+    /// 唯一 Winit/EGL/GLES owner。只能由进程主线程上的显式初始化 seam 创建。
+    winit_output_owner: Option<NestedWinitOutputOwner>,
+    /// 已经终止（成功或拒绝）的 token，阻止 duplicate/late callback 重复完成。
+    terminal_shm_render_tokens: BTreeSet<RuntimeShmRenderCommitToken>,
+    last_shm_render_attempt: RuntimeShmRenderAttemptReport,
+    shm_render_clock_started_at: Instant,
 }
 
 impl NestedRuntimeCoordinator {
@@ -4665,12 +4775,53 @@ impl NestedRuntimeCoordinator {
                 RuntimeSurfaceCommitBufferImportActualAttemptRecorder::new(),
             shm_first_buffer_import_adapter: LinuxShmFirstBufferImportAdapterSkeleton::new(),
             seen_live_toplevel_callback_sequences: BTreeSet::new(),
+            pending_shm_commit_observations: VecDeque::new(),
+            shm_render_identity_owner: RuntimeShmRenderIdentityOwner::new(),
+            winit_output_owner: None,
+            terminal_shm_render_tokens: BTreeSet::new(),
+            last_shm_render_attempt: RuntimeShmRenderAttemptReport::idle(),
+            shm_render_clock_started_at: Instant::now(),
         }
     }
 
     /// 返回 coordinator 已绑定的 Wayland socket 名称。
     pub fn socket_name(&self) -> &str {
         self.flow.socket_name()
+    }
+
+    /// 在当前线程创建唯一 nested Winit/EGL/GLES owner。
+    ///
+    /// Winit 0.30 要求 event loop 在进程主线程创建；常规 Rust test worker 不得调用。
+    /// 重复初始化会返回错误且保留原 owner，避免替换 live EGL/renderer resource。
+    pub(crate) fn initialize_winit_output_on_current_thread(
+        &mut self,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if self.winit_output_owner.is_some() {
+            return Err("nested Winit output owner 已初始化".into());
+        }
+        self.winit_output_owner = Some(NestedWinitOutputOwner::new()?);
+        Ok(())
+    }
+
+    /// 返回最近一次真实 SHM render 原子尝试；报告不持有平台 resource。
+    pub(crate) fn last_shm_render_attempt(&self) -> &RuntimeShmRenderAttemptReport {
+        &self.last_shm_render_attempt
+    }
+
+    /// 返回仍等待 lifecycle/resource 配对的真实 buffer commit 数量。
+    pub(crate) fn pending_shm_render_commit_count(&self) -> usize {
+        self.pending_shm_commit_observations.len()
+    }
+
+    /// 在同一 active accept flow 上显式解析 adapter session 到 Core client。
+    ///
+    /// 该只读查询只能返回既有 connected bridge mapping；未知或已断开的 session
+    /// 返回 `None`，调用方不得从数值 ID 猜测或补建 Core client。
+    pub(crate) fn core_client_for_session(
+        &self,
+        session: super::client_session::NestedClientSessionId,
+    ) -> Option<CoreClientId> {
+        self.flow.core_client_for_session(session)
     }
 
     /// 转发 flow owner 可直接证明的 production bootstrap 事实。外部 registry discovery
@@ -4699,6 +4850,14 @@ impl NestedRuntimeCoordinator {
     /// 返回 coordinator admission owner 中的 pending 数量。
     pub fn admission_pending_count(&self) -> usize {
         self.admission_queue_owner.pending_count()
+    }
+
+    /// 返回真实 callback lifecycle FIFO 的剩余 event 数量。
+    ///
+    /// 这个只读计数仅供 bounded loop 的 idle 判断使用；它不建立第二份 state，也不
+    /// 允许 loop 绕过 coordinator 直接消费 admission/unmap。
+    pub(crate) fn pending_live_toplevel_lifecycle_count(&self) -> usize {
+        self.flow.pending_live_toplevel_lifecycle_count()
     }
 
     /// 返回 coordinator admission owner 下一次将使用的 core surface identity。
@@ -4753,6 +4912,203 @@ impl NestedRuntimeCoordinator {
         self.pump_once_with_dispatch(state, timeout, |flow| flow.dispatch_wayland_clients_once())
     }
 
+    /// 尝试原子消费一条真实 SHM commit/resource。
+    ///
+    /// 在 `take` 真实 `WlBuffer` 前，本方法先从同一 flow 验证 session→Core client、
+    /// adapter surface/toplevel→admission ledger→live Core window 与两侧 FIFO exact token。
+    /// lifecycle 尚可能补齐时保留两侧；确定失效时只按 decision 回收旧队首并 tombstone。
+    /// renderer 失败后 resource 已被终止回收，绝不重试同 token 或发送 frame done。
+    fn try_present_pending_shm_once(&mut self, state: &State) -> RuntimeShmRenderAttemptReport {
+        let Some(observation) = self.pending_shm_commit_observations.front().copied() else {
+            return RuntimeShmRenderAttemptReport::idle();
+        };
+        let token = RuntimeShmRenderCommitToken {
+            adapter_surface: observation.adapter_surface_id,
+            commit_sequence: observation.commit_sequence,
+        };
+
+        // Winit owner 必须由进程主线程显式创建。未初始化不是 resource 失败，保持两侧
+        // FIFO 让 controlled runner 初始化后继续；普通 worker tests 不会误触 Winit panic。
+        if self.winit_output_owner.is_none() {
+            return RuntimeShmRenderAttemptReport::from_decision(
+                token,
+                RuntimeShmRenderAttemptOutcome::Deferred,
+            );
+        }
+
+        let resource_token = self.flow.shm_buffer_resource_front_token();
+        let source_session = self
+            .flow
+            .peek_shm_buffer_resource_for_commit(&observation)
+            .and_then(|resource| resource.source_session);
+        let resolved_core_client =
+            source_session.and_then(|session| self.core_client_for_session(session));
+        let adapter_toplevel = self
+            .shm_render_identity_owner
+            .active_toplevel(observation.adapter_surface_id);
+        let ledger_surface = self
+            .admission_queue_owner
+            .surface_mapping(observation.adapter_surface_id);
+        let ledger_window = adapter_toplevel.and_then(|adapter_toplevel| {
+            self.admission_queue_owner
+                .toplevel_mapping(adapter_toplevel)
+        });
+        let lifecycle_resolution_pending = self.flow.pending_live_toplevel_lifecycle_count() > 0
+            || self.admission_queue_owner.pending_count() > 0;
+        let core_surface_alive =
+            ledger_surface.is_some_and(|core_surface| state.surfaces.is_alive(core_surface));
+        let core_surface_client =
+            ledger_surface.and_then(|core_surface| state.surfaces.client_for_surface(core_surface));
+        let core_window_for_surface =
+            ledger_surface.and_then(|core_surface| state.surfaces.window_for_surface(core_surface));
+        let core_window_alive =
+            ledger_window.is_some_and(|core_window| state.registry.is_alive(core_window));
+        let decision = decide_runtime_shm_render_admission(RuntimeShmRenderAdmissionInput {
+            observation_token: token,
+            resource_token,
+            resource_tombstoned: self.flow.shm_buffer_resource_is_tombstoned(token),
+            token_already_terminal: self.terminal_shm_render_tokens.contains(&token),
+            source_session,
+            resolved_core_client,
+            lifecycle_resolution_pending,
+            adapter_toplevel,
+            ledger_surface,
+            ledger_window,
+            core_surface_alive,
+            core_surface_client,
+            core_window_for_surface,
+            core_window_alive,
+            damage_observed: observation.damage_observed,
+        });
+
+        match decision {
+            RuntimeShmRenderAdmissionDecision::DeferIdentity => {
+                RuntimeShmRenderAttemptReport::from_decision(
+                    token,
+                    RuntimeShmRenderAttemptOutcome::Deferred,
+                )
+            }
+            RuntimeShmRenderAdmissionDecision::RejectObservation { reason } => {
+                let _ = self.pending_shm_commit_observations.pop_front();
+                self.terminal_shm_render_tokens.insert(token);
+                RuntimeShmRenderAttemptReport::from_decision(
+                    token,
+                    RuntimeShmRenderAttemptOutcome::Rejected(reason),
+                )
+            }
+            RuntimeShmRenderAdmissionDecision::RejectResource { reason } => {
+                if let Some(resource_token) = resource_token {
+                    let _ = self.flow.discard_shm_buffer_resource_token(
+                        resource_token,
+                        ShmBufferResourceDiscardReason::StaleAdmissionIdentity,
+                    );
+                    self.terminal_shm_render_tokens.insert(resource_token);
+                }
+                RuntimeShmRenderAttemptReport::from_decision(
+                    token,
+                    RuntimeShmRenderAttemptOutcome::Rejected(reason),
+                )
+            }
+            RuntimeShmRenderAdmissionDecision::RejectBoth { reason } => {
+                let discard_reason = match reason {
+                    RuntimeShmRenderAdmissionRejectReason::MissingSourceSession
+                    | RuntimeShmRenderAdmissionRejectReason::UnknownSourceSession => {
+                        ShmBufferResourceDiscardReason::UnknownSourceSession
+                    }
+                    _ => ShmBufferResourceDiscardReason::StaleAdmissionIdentity,
+                };
+                let _ = self
+                    .flow
+                    .discard_shm_buffer_resource_for_commit(&observation, discard_reason);
+                let _ = self.pending_shm_commit_observations.pop_front();
+                self.terminal_shm_render_tokens.insert(token);
+                RuntimeShmRenderAttemptReport::from_decision(
+                    token,
+                    RuntimeShmRenderAttemptOutcome::Rejected(reason),
+                )
+            }
+            RuntimeShmRenderAdmissionDecision::Ready {
+                damage_observed, ..
+            } => {
+                let Some(resource) = self.flow.take_shm_buffer_resource_for_commit(&observation)
+                else {
+                    let _ = self.pending_shm_commit_observations.pop_front();
+                    self.terminal_shm_render_tokens.insert(token);
+                    return RuntimeShmRenderAttemptReport::from_decision(
+                        token,
+                        RuntimeShmRenderAttemptOutcome::Rejected(
+                            RuntimeShmRenderAdmissionRejectReason::MissingResourceForCommit,
+                        ),
+                    );
+                };
+                let present_result: Result<NestedWinitShmPresentReport, String> = self
+                    .winit_output_owner
+                    .as_mut()
+                    .expect("前置检查已确认 Winit output owner")
+                    .present_validated_shm_buffer(&resource)
+                    .map_err(|error| error.to_string());
+                let _ = self.pending_shm_commit_observations.pop_front();
+                self.terminal_shm_render_tokens.insert(token);
+
+                match present_result {
+                    Ok(present) => {
+                        let frame_callbacks_done =
+                            authorized_frame_callback_count(RuntimeShmFrameCompletionInput {
+                                presentation_succeeded: present.client_buffer_imported
+                                    && present.client_texture_drawn
+                                    && present.client_texture_read_back
+                                    && present.backbuffer_submitted
+                                    && present.output_damage_submitted,
+                                identity_authorized: true,
+                                damage_observed,
+                                callback_observed: observation.frame_callback_observed,
+                                duplicate_or_late: false,
+                                observation_callback_count: observation.frame_callback_count,
+                                captured_callback_count: resource.frame_callbacks.len(),
+                            });
+                        if frame_callbacks_done > 0 {
+                            let elapsed_ms = self
+                                .shm_render_clock_started_at
+                                .elapsed()
+                                .as_millis()
+                                .min(u128::from(u32::MAX))
+                                as u32;
+                            for callback in &resource.frame_callbacks {
+                                callback.done(elapsed_ms);
+                            }
+                        }
+                        RuntimeShmRenderAttemptReport {
+                            token: Some(token),
+                            outcome: RuntimeShmRenderAttemptOutcome::Presented,
+                            resource_transferred: true,
+                            buffer_imported: present.client_buffer_imported,
+                            texture_drawn: present.client_texture_drawn,
+                            texture_read_back: present.client_texture_read_back,
+                            texture_readback_rgb: present.client_texture_readback_rgb,
+                            backbuffer_submitted: present.backbuffer_submitted,
+                            output_damage_submitted: present.output_damage_submitted,
+                            frame_callbacks_done,
+                            error: None,
+                        }
+                    }
+                    Err(error) => RuntimeShmRenderAttemptReport {
+                        token: Some(token),
+                        outcome: RuntimeShmRenderAttemptOutcome::RenderFailed,
+                        resource_transferred: true,
+                        buffer_imported: false,
+                        texture_drawn: false,
+                        texture_read_back: false,
+                        texture_readback_rgb: Vec::new(),
+                        backbuffer_submitted: false,
+                        output_damage_submitted: false,
+                        frame_callbacks_done: 0,
+                        error: Some(error),
+                    },
+                }
+            }
+        }
+    }
+
     /// 执行一次既有 lifecycle pump，然后从 runtime admission queue drain 一条 intent。
     ///
     /// 该方法不改变 [`Self::pump_once`] 的语义；admission drain 被明确追加在
@@ -4787,7 +5143,10 @@ impl NestedRuntimeCoordinator {
         tick: RuntimeToplevelAdmissionDrainTick,
     ) -> NestedRuntimeLiveAdmissionPumpReport {
         let lifecycle_report = self.pump_once(state, timeout);
-        let observation = self.flow.take_next_live_toplevel_admission_observation();
+        let observation = self
+            .flow
+            .take_next_live_toplevel_admission_observation()
+            .unwrap_or_else(empty_live_toplevel_admission_observation);
         let live_admission_owner_report =
             enqueue_live_toplevel_admission_from_observation(observation, self);
         let admission_drain_report = self
@@ -4834,19 +5193,83 @@ impl NestedRuntimeCoordinator {
         tick: RuntimeToplevelAdmissionDrainTick,
     ) -> NestedRuntimeLiveAdmissionUnmapPumpReport {
         let lifecycle_report = self.pump_once(state, timeout);
-        let admission_observation = self.flow.take_next_live_toplevel_admission_observation();
+        let next_lifecycle_observation = self.flow.take_next_live_toplevel_lifecycle_observation();
+        let admission_identity_mapping =
+            next_lifecycle_observation
+                .as_ref()
+                .and_then(|event| match event {
+                    PendingLiveToplevelLifecycleObservation::Admission(observation) => observation
+                        .adapter_toplevel_identity_registration
+                        .as_ref()
+                        .ok()
+                        .copied(),
+                    PendingLiveToplevelLifecycleObservation::Destroyed(_) => None,
+                });
+        let (admission_observation, unmap_observation) = match next_lifecycle_observation {
+            Some(PendingLiveToplevelLifecycleObservation::Admission(observation)) => (
+                LiveToplevelAdmissionOwnerObservation {
+                    new_toplevel_callback_sequence: Some(
+                        observation.new_toplevel_callback_sequence,
+                    ),
+                    adapter_toplevel_identity_registration: Some(
+                        observation.adapter_toplevel_identity_registration,
+                    ),
+                    source_session: observation.source_session,
+                },
+                None,
+            ),
+            Some(PendingLiveToplevelLifecycleObservation::Destroyed(observation)) => (
+                empty_live_toplevel_admission_observation(),
+                Some(observation),
+            ),
+            None => (empty_live_toplevel_admission_observation(), None),
+        };
         let live_admission_owner_report =
             enqueue_live_toplevel_admission_from_observation(admission_observation, self);
         let admission_drain_report = self
             .admission_queue_owner
             .drain_pending_toplevel_admission_once(state, tick);
-        let unmap_observation = self.flow.take_next_live_toplevel_unmap_observation();
+        if admission_drain_report.pending_admission_consumed
+            && let (Some(mapping), Some(core_surface), Some(core_window)) = (
+                admission_identity_mapping,
+                admission_drain_report.core_surface_id,
+                admission_drain_report.core_window_id,
+            )
+            && self
+                .admission_queue_owner
+                .surface_mapping(mapping.adapter_surface)
+                == Some(core_surface)
+            && self
+                .admission_queue_owner
+                .toplevel_mapping(mapping.adapter_toplevel)
+                == Some(core_window)
+        {
+            let _ = self
+                .shm_render_identity_owner
+                .record_admission(mapping.adapter_surface, mapping.adapter_toplevel);
+        }
         let unmap_drain_report = self
             .admission_queue_owner
             .drain_live_toplevel_unmap_once(state, unmap_observation);
-        let surface_commit_drain_report = RuntimeSurfaceCommitDrainReport::from_observation(
-            self.flow.take_next_wl_surface_commit_observation(),
-        );
+        if unmap_drain_report.core_detach_invoked
+            && let (Some(adapter_surface), Some(adapter_toplevel)) = (
+                unmap_drain_report.adapter_surface_id,
+                unmap_drain_report.adapter_toplevel_id,
+            )
+        {
+            let _ = self
+                .shm_render_identity_owner
+                .record_unmap(adapter_surface, adapter_toplevel);
+        }
+        let next_commit_observation = self.flow.take_next_wl_surface_commit_observation();
+        if let Some(Ok(commit)) = next_commit_observation.as_ref()
+            && commit.buffer_present
+        {
+            self.pending_shm_commit_observations.push_back(*commit);
+        }
+        let surface_commit_drain_report =
+            RuntimeSurfaceCommitDrainReport::from_observation(next_commit_observation);
+        self.last_shm_render_attempt = self.try_present_pending_shm_once(state);
         let render_dirty_intent_drain_report = self
             .render_dirty_intent_queue_owner
             .enqueue_from_commit_drain_and_drain_once(&surface_commit_drain_report);
@@ -5706,35 +6129,43 @@ mod tests {
                 .initialize_wl_compositor_global()
                 .expect("测试 wl_compositor global 必须初始化");
         }
-        let first_registration = {
+        let (first_registration, second_registration) = {
             let display = coordinator
                 .flow
                 .display_mut_for_controlled_toplevel_registration();
-            adapter_toplevel_identity_registration_report(display)
-                .expect("首次 adapter identity registration proof 必须完成")
+            let first = adapter_toplevel_identity_registration_report(display)
+                .expect("首次 adapter identity registration proof 必须完成");
+            let second = adapter_toplevel_identity_registration_report(display)
+                .expect("第二次 adapter identity registration proof 必须完成");
+            (first, second)
         };
         let mut state = State::new();
 
-        let first_report = coordinator.pump_once_with_live_toplevel_admission_drain(
+        let first_admission = coordinator.pump_once_with_live_toplevel_admission_and_unmap_drain(
             &mut state,
             Duration::ZERO,
             RuntimeToplevelAdmissionDrainTick::phase52y_default(53),
         );
-        let second_registration = {
-            let display = coordinator
-                .flow
-                .display_mut_for_controlled_toplevel_registration();
-            adapter_toplevel_identity_registration_report(display)
-                .expect("第二次 adapter identity registration proof 必须完成")
-        };
-        let second_report = coordinator.pump_once_with_live_toplevel_admission_drain(
+        let first_unmap = coordinator.pump_once_with_live_toplevel_admission_and_unmap_drain(
             &mut state,
             Duration::ZERO,
             RuntimeToplevelAdmissionDrainTick::phase52y_default(54),
         );
+        let second_admission = coordinator.pump_once_with_live_toplevel_admission_and_unmap_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(55),
+        );
+        let second_unmap = coordinator.pump_once_with_live_toplevel_admission_and_unmap_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(56),
+        );
 
-        assert!(first_report.lifecycle_report.is_successful());
-        assert!(second_report.lifecycle_report.is_successful());
+        assert!(first_admission.lifecycle_report.is_successful());
+        assert!(first_unmap.lifecycle_report.is_successful());
+        assert!(second_admission.lifecycle_report.is_successful());
+        assert!(second_unmap.lifecycle_report.is_successful());
         assert_ne!(
             first_registration.new_toplevel_callback_sequence,
             second_registration.new_toplevel_callback_sequence
@@ -5748,53 +6179,53 @@ mod tests {
             second_registration.adapter_toplevel_id
         );
         assert_eq!(
-            first_report
+            first_admission
                 .live_admission_owner_report
                 .new_toplevel_callback_sequence,
             Some(first_registration.new_toplevel_callback_sequence)
         );
         assert_eq!(
-            second_report
+            second_admission
                 .live_admission_owner_report
                 .new_toplevel_callback_sequence,
             Some(second_registration.new_toplevel_callback_sequence)
         );
         assert!(
-            first_report
+            first_admission
                 .live_admission_owner_report
                 .coordinator_enqueue_invoked
         );
         assert!(
-            second_report
+            second_admission
                 .live_admission_owner_report
                 .coordinator_enqueue_invoked
         );
         assert!(
-            first_report
+            first_admission
                 .admission_drain_report
                 .pending_admission_consumed
         );
         assert!(
-            second_report
+            second_admission
                 .admission_drain_report
                 .pending_admission_consumed
         );
         assert_eq!(
-            first_report.admission_drain_report.core_surface_id,
+            first_admission.admission_drain_report.core_surface_id,
             Some(13_000)
         );
         assert_eq!(
-            second_report.admission_drain_report.core_surface_id,
+            second_admission.admission_drain_report.core_surface_id,
             Some(13_001)
         );
         assert_eq!(
-            first_report
+            first_admission
                 .admission_drain_report
                 .next_core_surface_id_after,
             13_001
         );
         assert_eq!(
-            second_report
+            second_admission
                 .admission_drain_report
                 .next_core_surface_id_after,
             13_002
@@ -5807,15 +6238,15 @@ mod tests {
             coordinator.admission_surface_mapping(second_registration.adapter_surface_id),
             Some(13_001)
         );
-        assert!(
-            coordinator
-                .admission_toplevel_mapping(first_registration.adapter_toplevel_id)
-                .is_some()
+        assert!(first_unmap.unmap_drain_report.core_detach_invoked);
+        assert!(second_unmap.unmap_drain_report.core_detach_invoked);
+        assert_eq!(
+            coordinator.admission_toplevel_mapping(first_registration.adapter_toplevel_id),
+            None
         );
-        assert!(
-            coordinator
-                .admission_toplevel_mapping(second_registration.adapter_toplevel_id)
-                .is_some()
+        assert_eq!(
+            coordinator.admission_toplevel_mapping(second_registration.adapter_toplevel_id),
+            None
         );
         assert_eq!(coordinator.admission_pending_count(), 0);
         assert_eq!(coordinator.admission_next_core_surface_id(), 13_002);
@@ -5863,19 +6294,31 @@ mod tests {
         };
         let mut state = State::new();
 
-        let first_report = coordinator.pump_once_with_live_toplevel_admission_drain(
+        let first_report = coordinator.pump_once_with_live_toplevel_admission_and_unmap_drain(
             &mut state,
             Duration::ZERO,
             RuntimeToplevelAdmissionDrainTick::phase52y_default(55),
         );
-        let second_report = coordinator.pump_once_with_live_toplevel_admission_drain(
+        let first_unmap = coordinator.pump_once_with_live_toplevel_admission_and_unmap_drain(
             &mut state,
             Duration::ZERO,
             RuntimeToplevelAdmissionDrainTick::phase52y_default(56),
         );
+        let second_report = coordinator.pump_once_with_live_toplevel_admission_and_unmap_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(57),
+        );
+        let second_unmap = coordinator.pump_once_with_live_toplevel_admission_and_unmap_drain(
+            &mut state,
+            Duration::ZERO,
+            RuntimeToplevelAdmissionDrainTick::phase52y_default(58),
+        );
 
         assert!(first_report.lifecycle_report.is_successful());
         assert!(second_report.lifecycle_report.is_successful());
+        assert!(first_unmap.unmap_drain_report.core_detach_invoked);
+        assert!(second_unmap.unmap_drain_report.core_detach_invoked);
         assert_eq!(
             first_report
                 .live_admission_owner_report
@@ -5923,6 +6366,14 @@ mod tests {
         assert_eq!(
             coordinator.admission_surface_mapping(second_registration.adapter_surface_id),
             Some(14_001)
+        );
+        assert_eq!(
+            coordinator.admission_toplevel_mapping(first_registration.adapter_toplevel_id),
+            None
+        );
+        assert_eq!(
+            coordinator.admission_toplevel_mapping(second_registration.adapter_toplevel_id),
+            None
         );
         assert_eq!(coordinator.admission_pending_count(), 0);
         assert_eq!(coordinator.admission_next_core_surface_id(), 14_002);

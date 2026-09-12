@@ -122,6 +122,8 @@ Sky Mirror 的原始 .git 曾在跨机转移后丢失。现有仓库于 2026-06-
 - 56N：选择 concrete renderer candidate 与 construction route，仍是决策。
 - 56O：在 adapter owner 内构造并保存 Smithay DummyRenderer，证明 type/owner/storage/drop；buffer_imported、texture_created、renderer_called、damage_submitted、frame_done、input、core mutation 全为 false。
 - 56P：关键转折。production NestedRuntimeOrchestrator::start() 改走 production constructor；严格按 Display -> wl_compositor -> xdg_wm_base -> socket -> calloop source 初始化。外部有界 Wayland client 真实 discovery/bind 两个 globals；server report 不冒充 client observation。加入 deadline、poll cap、scoped join、outer watchdog、kill/reap 与 socket/runtime cleanup。Phase 在 global bootstrap 结束，明确禁止创建 wl_surface/xdg_surface/xdg_toplevel 和所有 render/input/Core mutation。PR #92 后来已合并；原文末尾 push/PR/CI/merge PENDING 是提交前历史状态。
+- 56Q：在明确授权的 narrow tracer 中继续真实 external Wayland lifecycle。production client 创建 wl_surface -> xdg_surface -> xdg_toplevel，处理 initial configure/ack 与无 buffer commit；server handler 只记录 callback/identity observation 并发送 configure，coordinator 通过 active session -> Core client bridge 将 admission intent 入队。真实 xdg_toplevel destroy 由 live unmap owner 消费，Core window detach、registry tombstone 成立，同时验证 wl_surface 在 toplevel destroy 后仍存活，随后完成 surface destroy 与 socket cleanup。该证据是 bounded production fact，不等于 long-running compositor；buffer/import/texture/renderer/damage/frame done/input/DRM 仍明确未接入，真实 disconnect callback 的独立证明仍作为边界证据保留。
+- R2 SHM-first controlled proof：在 56Q production socket/lifecycle 之上，external client 提交带 damage 与 frame request 的 2×2 XRGB8888 WlBuffer。新增 coordinator 原子 admission owner，在资源仍位于 display FIFO 时验证 source session -> Core client、adapter surface/toplevel、ledger surface/window、live Core identity 与 exact commit token；未知、已死、销毁、交错、重复或迟到身份按单侧／双侧精确回收并留下 tombstone。进程主线程的唯一 Winit/EGL/GLES owner 完成真实 SHM import、metadata→texture dimensions/format cross-check、texture readback、texture draw、backbuffer/output-damage submit；回读红／绿／蓝／白像素与 client 图样一致。独立 completion gate 只在 presentation、identity、damage 与 callback 数量全部一致时发送一次 frame done。client read 与 write 均由独立 fd readiness、同一绝对 deadline 与固定 poll cap 驱动；无论 worker 成功、失败、超时或断连，runner 都先 drop server owner、join client、检查 socket，再返回结果，cleanup destroy request 同样有界 flush。它仍只是单 buffer 的 bounded controlled proof：未接入默认 main，不含长时 buffer replacement/release、surface-tree、完整 damage tracking、input、DRM/KMS、dmabuf 或多输出。
 
 ## 10. Codex 环境与恢复文档历史
 
@@ -143,7 +145,7 @@ RECOVERY_NOTES 记录 transferred working tree 缺失 .git、预期旧基线 934
 
 ## 11. 当前结论与后续路线的形成
 
-历史共同说明：项目从纯数据 Core 与大量 proof/readiness 逐步到达真实 production socket/global bootstrap，但 main、external XDG lifecycle、render、input 与 DRM 仍断开。继续开发应停止新增不服务纵向切片的 descriptor/report，先做 Phase 56Q 的 production external toplevel lifecycle，然后再做 SHM-first 可见渲染、输入、可靠性和最终 DRM session。规范化当前路线见 PROJECT_GUIDE。
+历史共同说明：项目从纯数据 Core 与大量 proof/readiness，逐步到达真实 production socket/global bootstrap、56Q external XDG 窄生命周期，以及 R2 单帧 SHM import/readback/draw/submit/frame-done 的 bounded controlled proof。默认 main、长时 renderer/resource lifecycle、input 与 DRM 仍断开。继续开发应停止新增不服务纵向切片的 descriptor/report，并分别审批输入、可靠性／长期 buffer release、产品入口和最终 DRM session。规范化当前路线见 PROJECT_GUIDE。
 
 ## 12. Source provenance：86/86
 

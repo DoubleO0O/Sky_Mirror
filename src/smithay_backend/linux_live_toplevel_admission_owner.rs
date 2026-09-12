@@ -8,6 +8,7 @@
 //! coordinator drain path.
 
 use super::{
+    client_session::NestedClientSessionId,
     linux_toplevel_admission_bridge::{
         LiveToplevelAdmissionBridgeBlocker, LiveToplevelAdmissionBridgeInput,
         LiveToplevelAdmissionBridgeReport, live_toplevel_admission_bridge_report,
@@ -49,6 +50,10 @@ pub enum LiveToplevelAdmissionOwnerBlocker {
     MissingBridgePendingAdmission,
     /// 当前 callback sequence 已经被 coordinator admission owner 处理过。
     DuplicateNewToplevelCallbackObservation(u64),
+    /// production callback 没有携带可解析的 source session。
+    MissingSourceSession,
+    /// production callback 的 source session 不在同一 active flow bridge 中。
+    UnknownSourceSession(NestedClientSessionId),
 }
 
 /// Phase 53A live callback admission owner 的纯数据报告。
@@ -110,6 +115,9 @@ pub struct LiveToplevelAdmissionOwnerObservation {
     /// 最近一次 adapter toplevel identity registration observation。
     pub adapter_toplevel_identity_registration:
         Option<Result<XdgToplevelIdentityMapping, AdapterToplevelIdentityRegistrationError>>,
+    /// 与同一 callback sequence 绑定的 adapter session。它不是 Core client ID；
+    /// coordinator 必须经 session/core bridge 显式解析，不能转换或猜测数值。
+    pub source_session: Option<NestedClientSessionId>,
 }
 
 impl LiveToplevelAdmissionOwnerObservation {
@@ -120,6 +128,7 @@ impl LiveToplevelAdmissionOwnerObservation {
                 .last_new_toplevel_callback_observation_sequence(),
             adapter_toplevel_identity_registration: server
                 .last_adapter_toplevel_identity_registration_observation(),
+            source_session: server.last_toplevel_callback_session(),
         }
     }
 }
@@ -184,13 +193,36 @@ pub fn enqueue_live_toplevel_admission_from_observation(
         }
     };
 
+    // production bootstrap 下，每一条 callback 都必须携带可解析的 source session。
+    // active session 数量不能放宽这个条件：0/1/多 client 都无法安全猜测归属。受控
+    // helper 则使用非-production coordinator，保留 adapter-only proof 的既有范围。
+    let production_core_client = if coordinator.production_protocol_bootstrap_report().is_some() {
+        match observation.source_session {
+            Some(source_session) => match coordinator.core_client_for_session(source_session) {
+                Some(core_client) => Some(core_client),
+                None => {
+                    blockers.push(LiveToplevelAdmissionOwnerBlocker::UnknownSourceSession(
+                        source_session,
+                    ));
+                    None
+                }
+            },
+            None => {
+                blockers.push(LiveToplevelAdmissionOwnerBlocker::MissingSourceSession);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     if !blockers.is_empty() {
         operations.push(LiveToplevelAdmissionOwnerOperation::BuildReport);
         return LiveToplevelAdmissionOwnerReport {
             new_toplevel_callback_observed: callback_sequence.is_some(),
             new_toplevel_callback_sequence: callback_sequence,
             adapter_toplevel_identity_observation_available,
-            adapter_toplevel_identity_registered: false,
+            adapter_toplevel_identity_registered: registration.is_some(),
             bridge_input_created: false,
             bridge_report: None,
             pending_admission_intent_created: false,
@@ -249,9 +281,12 @@ pub fn enqueue_live_toplevel_admission_from_observation(
     if blockers.is_empty() {
         operations.push(LiveToplevelAdmissionOwnerOperation::EnqueueCoordinatorAdmission);
         coordinator_enqueue_invoked = true;
-        coordinator_enqueue_report = Some(coordinator.enqueue_pending_toplevel_admission(
-            pending_admission.expect("pending admission 已由 blocker 检查"),
-        ));
+        let pending_admission = pending_admission.expect("pending admission 已由 blocker 检查");
+        let pending_admission = production_core_client
+            .map(|core_client| pending_admission.with_core_client(core_client))
+            .unwrap_or(pending_admission);
+        coordinator_enqueue_report =
+            Some(coordinator.enqueue_pending_toplevel_admission(pending_admission));
         if coordinator_enqueue_report
             .as_ref()
             .is_some_and(|report| report.pending_admission_enqueued)
@@ -288,13 +323,16 @@ pub fn enqueue_live_toplevel_admission_from_observation(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{os::unix::net::UnixStream, path::Path, time::Duration};
 
     use crate::{
         core::state::State,
         smithay_backend::{
+            client_session::NestedClientSessionId,
             linux_live_toplevel_admission_owner::{
-                LiveToplevelAdmissionOwnerBlocker, enqueue_live_toplevel_admission_from_display,
+                LiveToplevelAdmissionOwnerBlocker, LiveToplevelAdmissionOwnerObservation,
+                enqueue_live_toplevel_admission_from_display,
+                enqueue_live_toplevel_admission_from_observation,
             },
             linux_toplevel_admission_bridge::LiveToplevelAdmissionBridgeBlocker,
             linux_toplevel_admission_runtime_queue::RuntimeToplevelAdmissionDrainTick,
@@ -429,5 +467,123 @@ mod tests {
             Some(core_window)
         );
         assert!(state.validate().is_clean());
+    }
+
+    /// Red：callback 关联的 adapter session 未经 active session bridge 解析时，不能
+    /// 仅凭 adapter ObjectId 将 toplevel 放入 admission queue。错误 session 必须在
+    /// coordinator 边界被拒绝，既不新增 pending，也不触发任何 Core mutation。
+    #[test]
+    fn live_admission_owner_rejects_unknown_source_session_before_enqueue() {
+        assert_runtime_dir();
+        let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+        server
+            .initialize_wl_compositor_global()
+            .expect("测试 wl_compositor global 必须初始化");
+        server
+            .initialize_xdg_shell_global()
+            .expect("测试 xdg-shell global 必须初始化");
+        let registration = adapter_toplevel_identity_registration_report(&mut server)
+            .expect("受控 client 必须得到真实 callback identity");
+        let socket_name = unique_socket_name("phase56q-unknown-session");
+        let mut coordinator =
+            NestedRuntimeCoordinator::with_production_protocol_bootstrap(&socket_name)
+                .expect("production coordinator 必须绑定测试 socket");
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").expect("需要 XDG_RUNTIME_DIR");
+        let peer = UnixStream::connect(Path::new(&runtime_dir).join(coordinator.socket_name()))
+            .expect("unknown-session test peer 必须连接 production socket");
+        let mut state = State::new();
+        let connected = coordinator.pump_once(&mut state, Duration::from_secs(1));
+        assert_eq!(connected.registered_core_clients.len(), 1);
+
+        let report = enqueue_live_toplevel_admission_from_observation(
+            LiveToplevelAdmissionOwnerObservation {
+                new_toplevel_callback_sequence: Some(registration.new_toplevel_callback_sequence),
+                adapter_toplevel_identity_registration: Some(Ok(
+                    crate::smithay_backend::xdg_toplevel_identity::XdgToplevelIdentityMapping {
+                        adapter_toplevel: registration.adapter_toplevel_id,
+                        adapter_surface: registration.adapter_surface_id,
+                    },
+                )),
+                source_session: NestedClientSessionId::new(9_999),
+            },
+            &mut coordinator,
+        );
+
+        assert!(report.new_toplevel_callback_observed);
+        assert!(report.adapter_toplevel_identity_registered);
+        assert!(
+            !report.coordinator_enqueue_invoked,
+            "unknown adapter session 绝不能进入 coordinator admission queue"
+        );
+        let unknown_session = NestedClientSessionId::new(9_999).expect("session id 有效");
+        assert!(report.blockers.iter().any(|blocker| {
+            *blocker == LiveToplevelAdmissionOwnerBlocker::UnknownSourceSession(unknown_session)
+        }));
+        assert_eq!(coordinator.admission_pending_count(), 0);
+        drop(peer);
+    }
+
+    /// Red：只要 coordinator 已按 production protocol bootstrap 建立，缺失
+    /// source_session 就必须 fail closed；active session 数量不能成为放行条件。三个
+    /// case 覆盖没有 peer、一个 peer 与多个 peer，确保不会把 callback 猜配给任意 Core
+    /// client，也不会污染 queue、ledger 或 State。
+    #[test]
+    fn production_admission_owner_rejects_missing_source_session_for_zero_one_and_many_clients() {
+        assert_runtime_dir();
+
+        for active_client_count in [0usize, 1, 2] {
+            let mut server = SmithayWaylandDisplayProbe::new().expect("测试 display 必须可创建");
+            server
+                .initialize_wl_compositor_global()
+                .expect("测试 wl_compositor global 必须初始化");
+            server
+                .initialize_xdg_shell_global()
+                .expect("测试 xdg-shell global 必须初始化");
+            let registration = adapter_toplevel_identity_registration_report(&mut server)
+                .expect("受控 identity registration 必须完成");
+            let socket_name = unique_socket_name("phase56q-missing-source-session");
+            let mut coordinator =
+                NestedRuntimeCoordinator::with_production_protocol_bootstrap(&socket_name)
+                    .expect("production coordinator 必须绑定测试 socket");
+            let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").expect("需要 XDG_RUNTIME_DIR");
+            let socket_path = Path::new(&runtime_dir).join(coordinator.socket_name());
+            let mut peers = Vec::new();
+            let mut state = State::new();
+            for _ in 0..active_client_count {
+                peers.push(UnixStream::connect(&socket_path).expect("测试 peer 必须连接 socket"));
+                let lifecycle = coordinator.pump_once(&mut state, Duration::from_secs(1));
+                assert_eq!(lifecycle.registered_core_clients.len(), 1);
+            }
+            let surface_count_before = state.surfaces.records().len();
+            let window_count_before = state.registry.records().len();
+
+            let report = enqueue_live_toplevel_admission_from_observation(
+                LiveToplevelAdmissionOwnerObservation {
+                    new_toplevel_callback_sequence: Some(
+                        registration.new_toplevel_callback_sequence,
+                    ),
+                    adapter_toplevel_identity_registration: Some(Ok(
+                        crate::smithay_backend::xdg_toplevel_identity::XdgToplevelIdentityMapping {
+                            adapter_toplevel: registration.adapter_toplevel_id,
+                            adapter_surface: registration.adapter_surface_id,
+                        },
+                    )),
+                    source_session: None,
+                },
+                &mut coordinator,
+            );
+
+            assert!(
+                report
+                    .blockers
+                    .contains(&LiveToplevelAdmissionOwnerBlocker::MissingSourceSession)
+            );
+            assert!(!report.coordinator_enqueue_invoked);
+            assert_eq!(coordinator.admission_pending_count(), 0);
+            assert_eq!(state.surfaces.records().len(), surface_count_before);
+            assert_eq!(state.registry.records().len(), window_count_before);
+            assert!(state.validate().is_clean());
+            drop(peers);
+        }
     }
 }

@@ -7500,13 +7500,17 @@ impl NestedRuntimeLoop {
         let mut admission_tick_index = 0u64;
         run_with_observed_pump(state, config, &stop_handle, |state, timeout| {
             admission_tick_index = admission_tick_index.saturating_add(1);
+            let report = self
+                .coordinator
+                .pump_once_with_live_toplevel_admission_and_unmap_drain(
+                    state,
+                    timeout,
+                    RuntimeToplevelAdmissionDrainTick::phase52y_default(admission_tick_index),
+                );
+            let lifecycle_pending_after = self.coordinator.pending_live_toplevel_lifecycle_count();
             ObservedNestedRuntimePumpReport::from_live_admission_unmap(
-                self.coordinator
-                    .pump_once_with_live_toplevel_admission_and_unmap_drain(
-                        state,
-                        timeout,
-                        RuntimeToplevelAdmissionDrainTick::phase52y_default(admission_tick_index),
-                    ),
+                report,
+                lifecycle_pending_after,
             )
         })
     }
@@ -7517,6 +7521,8 @@ struct ObservedNestedRuntimePumpReport {
     live_admission: NestedRuntimeLiveAdmissionRunSummary,
     live_unmap: NestedRuntimeLiveUnmapRunSummary,
     surface_commit: NestedRuntimeSurfaceCommitRunSummary,
+    /// 统一 lifecycle FIFO 在本轮 coordinator 消费后仍剩余的 event 数量。
+    lifecycle_pending_after: usize,
 }
 
 impl ObservedNestedRuntimePumpReport {
@@ -7526,10 +7532,14 @@ impl ObservedNestedRuntimePumpReport {
             live_admission: NestedRuntimeLiveAdmissionRunSummary::default(),
             live_unmap: NestedRuntimeLiveUnmapRunSummary::default(),
             surface_commit: NestedRuntimeSurfaceCommitRunSummary::default(),
+            lifecycle_pending_after: 0,
         }
     }
 
-    fn from_live_admission_unmap(report: NestedRuntimeLiveAdmissionUnmapPumpReport) -> Self {
+    fn from_live_admission_unmap(
+        report: NestedRuntimeLiveAdmissionUnmapPumpReport,
+        lifecycle_pending_after: usize,
+    ) -> Self {
         let mut surface_commit = NestedRuntimeSurfaceCommitRunSummary::from_surface_commit_drain(
             &report.surface_commit_drain_report,
         );
@@ -7720,6 +7730,7 @@ impl ObservedNestedRuntimePumpReport {
             live_unmap: NestedRuntimeLiveUnmapRunSummary::from_live_admission_unmap(&report),
             surface_commit,
             lifecycle_report: report.lifecycle_report,
+            lifecycle_pending_after,
         }
     }
 }
@@ -7779,6 +7790,7 @@ where
             let live_admission_has_progress = observed_report.live_admission.has_progress();
             let live_unmap_has_progress = observed_report.live_unmap.has_progress();
             let surface_commit_has_progress = observed_report.surface_commit.has_progress();
+            let lifecycle_backlog_pending = observed_report.lifecycle_pending_after > 0;
             live_admission.observe(observed_report.live_admission);
             live_unmap.observe(observed_report.live_unmap);
             surface_commit.observe(observed_report.surface_commit);
@@ -7820,6 +7832,7 @@ where
                 && !live_admission_has_progress
                 && !live_unmap_has_progress
                 && !surface_commit_has_progress
+                && !lifecycle_backlog_pending
             {
                 exit_reason = NestedRuntimeLoopExitReason::Idle;
                 break;
@@ -8404,7 +8417,10 @@ mod tests {
         let report = run_with_observed_pump(
             &mut state,
             NestedRuntimeLoopConfig {
-                max_iterations: 3,
+                // 两个 controlled toplevel 各自产生 Admission + Destroy 两条统一
+                // lifecycle event；第五轮才可观察真正 idle，不能假定 destroy 会被
+                // admission pump 跨类型跳过。
+                max_iterations: 5,
                 pump_timeout: Duration::ZERO,
                 stop_when_idle: true,
                 continue_after_error: false,
@@ -8430,6 +8446,7 @@ mod tests {
                     live_admission: NestedRuntimeLiveAdmissionRunSummary::default(),
                     live_unmap,
                     surface_commit: NestedRuntimeSurfaceCommitRunSummary::default(),
+                    lifecycle_pending_after: 0,
                 }
             },
         );
@@ -8474,22 +8491,24 @@ mod tests {
         let report = runtime_loop.run_for_iterations(
             &mut state,
             NestedRuntimeLoopConfig {
-                max_iterations: 3,
+                max_iterations: 5,
                 pump_timeout: Duration::ZERO,
                 stop_when_idle: true,
                 continue_after_error: false,
             },
         );
 
-        assert_eq!(report.iterations_run, 3);
+        assert_eq!(report.iterations_run, 5);
         assert_eq!(report.exit_reason, NestedRuntimeLoopExitReason::Idle);
         assert!(report.is_successful());
-        assert_eq!(report.live_admission.owner_invocations, 3);
+        assert_eq!(report.live_admission.owner_invocations, 5);
         assert_eq!(report.live_admission.enqueue_invocations, 2);
         assert_eq!(report.live_admission.admissions_enqueued, 2);
-        assert_eq!(report.live_admission.drain_invocations, 3);
+        assert_eq!(report.live_admission.drain_invocations, 5);
         assert_eq!(report.live_admission.admissions_consumed, 2);
         assert_eq!(report.live_admission.pending_admissions_after, 0);
+        assert_eq!(report.live_unmap.live_unmap_observations, 2);
+        assert_eq!(report.live_unmap.core_detaches, 2);
         assert_eq!(
             runtime_loop
                 .coordinator
