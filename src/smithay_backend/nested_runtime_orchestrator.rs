@@ -2726,6 +2726,435 @@ mod tests {
         );
     }
 
+    // ---- 双客户端 admission 共存（A 先 admit，B 后 admit；本轮不断连）------------------
+    //
+    // 证据边界：只证明两个真实外部 client 各自完成无 buffer 初始 configure/ack/commit
+    // 并先后 admission 到 Core，且两组 Core 身份互异、归属正确、同时 alive，B 的
+    // admission 不覆盖 A。它不覆盖断连、断连隔离、ledger 或 orchestrator 公共
+    // run/finish_run 路径；外层 watchdog 只证明 child 被有界回收并清理唯一 runtime dir。
+
+    const PRODUCTION_PROTOCOL_CHILD_DUAL_ADMISSION_ROLE: &str = "external-dual-admission";
+    const PRODUCTION_PROTOCOL_DUAL_ADMISSION_TEST_NAME: &str = "smithay_backend::nested_runtime_orchestrator::tests::production_orchestrator_external_dual_admission_coexists";
+
+    /// 双 admission 共存一方的 Core 身份。ID 类型均为 u64 别名，直接按值比较；
+    /// 认领只依据相对快照的新增差分，不比较 ID 大小、不假设分配顺序。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct DualAdmissionIdentity {
+        client: u64,
+        surface: u64,
+        window: u64,
+    }
+
+    /// 快照当前全部 alive client（排序只为稳定比较，不参与身份认领）。
+    fn dual_admission_alive_clients(state: &State) -> Vec<u64> {
+        let mut ids: Vec<u64> = state
+            .clients
+            .records()
+            .iter()
+            .filter(|record| record.alive)
+            .map(|record| record.id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// 有界 pump，直到相对基线恰好新增一个 alive client，且其 surface/window 已完成
+    /// admission。调用方保证一次只启动一个 client：新增为零继续 pump，新增超过一个
+    /// 直接 panic 并附只读诊断。
+    fn wait_for_one_new_admission(
+        orchestrator: &mut NestedRuntimeOrchestrator,
+        state: &mut State,
+        baseline: &[u64],
+        label: &str,
+    ) -> (DualAdmissionIdentity, usize) {
+        let deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+        let mut pumps = 0usize;
+        loop {
+            if !(Instant::now() < deadline && pumps < PRODUCTION_PROTOCOL_MAX_PUMPS) {
+                panic!(
+                    "服务端未在 deadline 内确认 {label} 的 Core admission: pumps={pumps} {}",
+                    abrupt_disconnect_state_digest(state)
+                );
+            }
+            let _pump = orchestrator
+                .runtime_loop
+                .as_mut()
+                .expect("started orchestrator 必须持有 runtime loop")
+                .run_for_iterations(
+                    state,
+                    NestedRuntimeLoopConfig {
+                        max_iterations: 1,
+                        pump_timeout: PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
+                        stop_when_idle: false,
+                        continue_after_error: false,
+                    },
+                );
+            pumps += 1;
+            let current = dual_admission_alive_clients(state);
+            let new: Vec<u64> = current
+                .iter()
+                .filter(|id| !baseline.contains(*id))
+                .copied()
+                .collect();
+            if new.is_empty() {
+                continue;
+            }
+            assert!(
+                new.len() == 1,
+                "{label} 必须恰好新增一个 alive client: {new:?} {}",
+                abrupt_disconnect_state_digest(state)
+            );
+            let client = new[0];
+            let surfaces = state.surfaces.surfaces_for_client(client);
+            if let [surface] = &surfaces[..] {
+                if state.surfaces.is_alive(*surface) {
+                    if let Some(window) = state.surfaces.window_for_surface(*surface) {
+                        if state.registry.is_alive(window) {
+                            return (
+                                DualAdmissionIdentity {
+                                    client,
+                                    surface: *surface,
+                                    window,
+                                },
+                                pumps,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 内部执行体：在 child 进程内真实跑一次“双客户端 admission 共存”。
+    ///
+    /// A 先连接并完成 configure/ack/commit，服务端相对初始快照差分认领 A 身份后
+    /// 不释放 A；再启动 B，相对 A admission 后快照差分认领 B 身份。随后断言两组
+    /// 身份共存，最后释放双方并有界退出。两个 client 线程各持自己的 FnOnce 门控
+    /// 等待服务端释放，门控均为有界 recv_timeout，不阻塞服务端 pump；任何阶段超时
+    /// 都 panic（child 非零退出），由 outer watchdog 有界回收。
+    fn production_orchestrator_external_dual_admission_coexists_inner() {
+        assert_runtime_dir();
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .expect("dual-admission child 必须持有 XDG_RUNTIME_DIR");
+        let mut orchestrator_config = config(
+            "production-protocol-dual-admission",
+            PRODUCTION_PROTOCOL_MAX_PUMPS,
+        );
+        if let Ok(child_socket_name) = std::env::var(PRODUCTION_PROTOCOL_CHILD_SOCKET_ENV) {
+            orchestrator_config.socket_name = child_socket_name;
+        }
+        let socket_name = orchestrator_config.socket_name.clone();
+        let socket_path = runtime_dir.join(&socket_name);
+        // 两个 client 闭包均为 move：共享 borrow，而不移动 socket_path。
+        let socket_ref = socket_path.as_path();
+
+        let mut state = State::new();
+        let initial_clients = dual_admission_alive_clients(&state);
+
+        let mut orchestrator = NestedRuntimeOrchestrator::new(orchestrator_config);
+        let start_report = orchestrator
+            .start()
+            .expect("dual-admission orchestrator 必须完成 production bootstrap");
+        assert!(
+            start_report.started,
+            "dual-admission orchestrator 必须进入 Started"
+        );
+        assert_eq!(
+            start_report.socket_name, socket_name,
+            "bootstrap 必须使用唯一 socket 名"
+        );
+
+        let (a_connected_sender, a_connected_receiver) = mpsc::channel::<()>();
+        let (a_admitted_sender, a_admitted_receiver) = mpsc::channel::<()>();
+        let (b_connected_sender, b_connected_receiver) = mpsc::channel::<()>();
+        let (b_admitted_sender, b_admitted_receiver) = mpsc::channel::<()>();
+
+        thread::scope(|scope| {
+            let a_handle = scope.spawn(
+                move || -> Result<ExternalAbruptDisconnectClientReport, String> {
+                    let client_stream = UnixStream::connect(socket_ref).map_err(|error| {
+                        format!("dual-admission client A 必须连接 production socket: {error}")
+                    })?;
+                    a_connected_sender.send(()).map_err(|error| {
+                        format!("dual-admission client A 必须通知 connected: {error}")
+                    })?;
+                    let result = drive_external_protocol_client_until_abrupt_disconnect(
+                        client_stream,
+                        Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT,
+                        || {
+                            a_admitted_receiver
+                                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                                .map_err(|error| {
+                                    format!("client A 未在 deadline 内收到服务端释放确认: {error}")
+                                })
+                        },
+                    );
+                    result
+                },
+            );
+
+            a_connected_receiver
+                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                .expect("主线程必须收到 client A 的 connected 通知");
+
+            // A admission：相对初始快照差分认领。此时不发送释放确认，A 连接保持。
+            let (a_identity, a_pumps) = wait_for_one_new_admission(
+                &mut orchestrator,
+                &mut state,
+                &initial_clients,
+                "client A",
+            );
+
+            let b_handle = scope.spawn(
+                move || -> Result<ExternalAbruptDisconnectClientReport, String> {
+                    let client_stream = UnixStream::connect(socket_ref).map_err(|error| {
+                        format!("dual-admission client B 必须连接 production socket: {error}")
+                    })?;
+                    b_connected_sender.send(()).map_err(|error| {
+                        format!("dual-admission client B 必须通知 connected: {error}")
+                    })?;
+                    let result = drive_external_protocol_client_until_abrupt_disconnect(
+                        client_stream,
+                        Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT,
+                        || {
+                            b_admitted_receiver
+                                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                                .map_err(|error| {
+                                    format!("client B 未在 deadline 内收到服务端释放确认: {error}")
+                                })
+                        },
+                    );
+                    result
+                },
+            );
+
+            b_connected_receiver
+                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                .expect("主线程必须收到 client B 的 connected 通知");
+
+            // B admission：相对 A admission 后快照差分认领，不按 ID 大小或分配顺序认领。
+            let post_a_clients = dual_admission_alive_clients(&state);
+            assert!(
+                post_a_clients.contains(&a_identity.client),
+                "B 启动前 A 的 client 必须仍 alive"
+            );
+            let (b_identity, b_pumps) = wait_for_one_new_admission(
+                &mut orchestrator,
+                &mut state,
+                &post_a_clients,
+                "client B",
+            );
+
+            // 共存断言：两组身份互异、归属正确、同时 alive，A 未被 B 覆盖。
+            assert_ne!(
+                a_identity.client, b_identity.client,
+                "A/B 必须是两个互异 Core client"
+            );
+            assert_ne!(
+                a_identity.surface, b_identity.surface,
+                "A/B 必须是两个互异 Core surface"
+            );
+            assert_ne!(
+                a_identity.window, b_identity.window,
+                "A/B 必须是两个互异 Core window"
+            );
+            assert!(
+                state
+                    .surfaces
+                    .surfaces_for_client(a_identity.client)
+                    .contains(&a_identity.surface),
+                "A surface 必须仍归属 A client"
+            );
+            assert_eq!(
+                state.surfaces.window_for_surface(a_identity.surface),
+                Some(a_identity.window),
+                "A surface 必须仍绑定 A window"
+            );
+            assert!(
+                state
+                    .surfaces
+                    .surfaces_for_client(b_identity.client)
+                    .contains(&b_identity.surface),
+                "B surface 必须归属 B client"
+            );
+            assert_eq!(
+                state.surfaces.window_for_surface(b_identity.surface),
+                Some(b_identity.window),
+                "B surface 必须绑定 B window"
+            );
+            assert!(
+                state.clients.is_alive(a_identity.client)
+                    && state.surfaces.is_alive(a_identity.surface)
+                    && state.registry.is_alive(a_identity.window),
+                "A 的 client/surface/window 在 B admission 后必须同时 alive"
+            );
+            assert!(
+                state.clients.is_alive(b_identity.client)
+                    && state.surfaces.is_alive(b_identity.surface)
+                    && state.registry.is_alive(b_identity.window),
+                "B 的 client/surface/window 必须同时 alive"
+            );
+
+            // 共存快照一致性：两组身份确立且同时 alive 的这一刻 State 必须干净；
+            // 该断言位于任何释放信号之前，只覆盖 admission 共存状态。
+            assert!(
+                state.validate().is_clean(),
+                "双 admission 共存确立时 State 校验必须干净"
+            );
+
+            // 释放两个客户端：各走自己的 FnOnce 门控，互不阻塞。
+            a_admitted_sender.send(()).expect("服务端必须释放 client A");
+            b_admitted_sender.send(()).expect("服务端必须释放 client B");
+
+            let a_report = a_handle
+                .join()
+                .expect("client A 线程不得 panic")
+                .expect("client A driver 必须成功");
+            let b_report = b_handle
+                .join()
+                .expect("client B 线程不得 panic")
+                .expect("client B driver 必须成功");
+            for (label, report) in [("A", &a_report), ("B", &b_report)] {
+                assert!(
+                    report.initial_configure_acknowledged,
+                    "client {label} 必须确认初始 configure"
+                );
+                assert!(
+                    report.configured_surface_committed,
+                    "client {label} 必须在 configure 后 commit surface"
+                );
+                assert!(
+                    report.registry_readiness_polls > 0,
+                    "client {label} registry discovery 不得 0 poll 空跑"
+                );
+                assert!(
+                    report.bind_readiness_polls > 0,
+                    "client {label} bind sync 不得 0 poll 空跑"
+                );
+                assert!(
+                    report.configure_readiness_polls > 0,
+                    "client {label} configure 不得 0 poll 空跑"
+                );
+            }
+
+            // 有界退出：双方连接已 drop，有界 pump 到级联完成（仅做清理，不比较隔离语义）。
+            let mut drain_pumps = 0usize;
+            let drain_deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+            while state.clients.is_alive(a_identity.client)
+                || state.surfaces.is_alive(a_identity.surface)
+                || state.registry.is_alive(a_identity.window)
+                || state.clients.is_alive(b_identity.client)
+                || state.surfaces.is_alive(b_identity.surface)
+                || state.registry.is_alive(b_identity.window)
+            {
+                assert!(
+                    Instant::now() < drain_deadline && drain_pumps < PRODUCTION_PROTOCOL_MAX_PUMPS,
+                    "服务端未在 deadline 内处理双客户端退出: pumps={drain_pumps}"
+                );
+                let _pump = orchestrator
+                    .runtime_loop
+                    .as_mut()
+                    .expect("started orchestrator 必须持有 runtime loop")
+                    .run_for_iterations(
+                        &mut state,
+                        NestedRuntimeLoopConfig {
+                            max_iterations: 1,
+                            pump_timeout: PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
+                            stop_when_idle: false,
+                            continue_after_error: false,
+                        },
+                    );
+                drain_pumps += 1;
+            }
+
+            let stop_report = orchestrator.stop(&state);
+            assert!(
+                stop_report.shutdown_completed,
+                "orchestrator stop 必须完成 shutdown"
+            );
+            assert!(
+                stop_report.validation_is_clean,
+                "orchestrator stop 必须报告 State 校验干净"
+            );
+            assert!(
+                state.validate().is_clean(),
+                "双 admission 共存后 State 校验必须干净"
+            );
+            println!(
+                "production protocol dual admission: a={a_identity:?} b={b_identity:?} a_pumps={a_pumps} b_pumps={b_pumps} drain_pumps={drain_pumps} a_polls=({},{},{}) b_polls=({},{},{})",
+                a_report.registry_readiness_polls,
+                a_report.bind_readiness_polls,
+                a_report.configure_readiness_polls,
+                b_report.registry_readiness_polls,
+                b_report.bind_readiness_polls,
+                b_report.configure_readiness_polls,
+            );
+        });
+    }
+
+    /// “双客户端 admission 共存”outer 测试：沿用既有 child-role 复跑 + outer watchdog +
+    /// ProtocolChildRuntimeDir 清理模板。child 内部走 inner 的真实双 socket 会话；任何
+    /// 失败都会让 child 非零退出，由 watchdog 在有界 deadline 内 kill/reap 并清理。
+    #[test]
+    fn production_orchestrator_external_dual_admission_coexists() {
+        match std::env::var(PRODUCTION_PROTOCOL_CHILD_ROLE_ENV).as_deref() {
+            Ok(PRODUCTION_PROTOCOL_CHILD_DUAL_ADMISSION_ROLE) => {
+                production_orchestrator_external_dual_admission_coexists_inner();
+                return;
+            }
+            Ok(role) => panic!("dual-admission child 收到未知 role: {role}"),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(error) => panic!("读取 dual-admission child role 失败: {error}"),
+        }
+
+        let current_exe =
+            std::env::current_exe().expect("outer watchdog 必须取得当前 test executable");
+        let child_runtime_dir = ProtocolChildRuntimeDir::create()
+            .expect("outer watchdog 必须创建唯一 child runtime dir");
+        let child_result = spawn_protocol_child(
+            &current_exe,
+            PRODUCTION_PROTOCOL_DUAL_ADMISSION_TEST_NAME,
+            PRODUCTION_PROTOCOL_CHILD_DUAL_ADMISSION_ROLE,
+            &child_runtime_dir,
+        )
+        .and_then(|child| {
+            run_protocol_child_with_watchdog(
+                child,
+                Instant::now() + PRODUCTION_PROTOCOL_OUTER_WATCHDOG_TIMEOUT,
+            )
+        });
+        let cleanup = child_runtime_dir
+            .cleanup_and_verify()
+            .expect("outer watchdog 必须清理并移除唯一 child runtime dir");
+        let report = child_result.expect("outer watchdog 必须在绝对 deadline 内确认 child 退出");
+
+        assert!(
+            !report.timed_out,
+            "正常 dual-admission child 不得触发 watchdog kill: {report:?}"
+        );
+        assert!(
+            report.status.success(),
+            "dual-admission child 必须以成功状态退出: {report:?}"
+        );
+        assert!(
+            !cleanup.socket_was_residual,
+            "正常 dual-admission child 必须自行 drop 并移除唯一 socket: {cleanup:?}"
+        );
+        assert!(
+            cleanup.runtime_dir_removed,
+            "outer watchdog 必须移除唯一 child runtime dir: {cleanup:?}"
+        );
+        println!(
+            "production protocol dual-admission outer watchdog: child_polls={} timed_out={} status={} child_socket_residual={} child_runtime_dir_removed={}",
+            report.polls,
+            report.timed_out,
+            report.status,
+            cleanup.socket_was_residual,
+            cleanup.runtime_dir_removed,
+        );
+    }
+
     /// 诊断用：只读汇总 Core State 的 clients/surfaces/windows 记录。
     ///
     /// 仅在 abrupt-disconnect 超时 panic 时调用，用于区分“客户端握手未完成”与
