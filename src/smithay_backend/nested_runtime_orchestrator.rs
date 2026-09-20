@@ -2157,18 +2157,34 @@ mod tests {
         configured_surface_committed: bool,
     }
 
-    /// 驱动单 client / 单 toplevel 的真实 Wayland 会话直到 configured：registry
-    /// discovery、三个 required global bind、一个 wl_surface/xdg_surface/xdg_toplevel
-    /// 的创建与无 buffer 初始 configure/ack/commit。达到 configured 后调用
-    /// `await_server_admission`，由服务端直接从 Core state 只读确认 admission；闭包返回
-    /// 后本函数返回，Connection/EventQueue/全部 proxy/readiness loop 随作用域 drop，
-    /// 向服务端产生真实 socket EOF。全程不发送任何 destroy，也不以 sync 回包冒充
-    /// Core 确认。
-    fn drive_external_protocol_client_until_abrupt_disconnect(
+    /// 已完成初始 configure/ack/commit、但仍持有全部 protocol owner 的外部 client 会话。
+    /// 结构体存活期间连接保持；drop 即向服务端产生真实 socket EOF。readiness loop
+    /// 内部全为 owned 资源（calloop 0.13 EventLoop 持有 Arc/Rc/Vec 而无借用），故可用
+    /// 'static 存放在结构体中跨越前缀／幸存两阶段。
+    struct ConfiguredExternalProtocolClient {
+        connection: Connection,
+        event_queue: EventQueue<ProductionProtocolClientState>,
+        client_state: ProductionProtocolClientState,
+        readiness_loop: EventLoop<'static, ProductionProtocolReadiness>,
+        readiness: ProductionProtocolReadiness,
+        report: ExternalAbruptDisconnectClientReport,
+    }
+
+    /// 幸存端新 sync 往返的纯数据证据：独立 Lifecycle 阶段回包到达及其实 poll 计数。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct SurvivorSyncEvidence {
+        sync_polls: usize,
+        lifecycle_sync_done: bool,
+    }
+
+    /// 单 client 建连前缀：registry discovery、三个 required global bind、一个
+    /// wl_surface/xdg_surface/xdg_toplevel 的创建与无 buffer 初始 configure/ack/commit。
+    /// 达到 configured 后返回并保持全部 owner；调用方决定何时 drop。全程不发送任何
+    /// destroy，也不以 sync 回包冒充 Core 确认。
+    fn drive_external_protocol_client_until_configured(
         client_stream: UnixStream,
         deadline: Instant,
-        await_server_admission: impl FnOnce() -> Result<(), String>,
-    ) -> Result<ExternalAbruptDisconnectClientReport, String> {
+    ) -> Result<ConfiguredExternalProtocolClient, String> {
         client_stream
             .set_nonblocking(true)
             .map_err(|error| format!("abrupt-disconnect client 必须设为 nonblocking: {error}"))?;
@@ -2343,10 +2359,85 @@ mod tests {
             initial_configure_acknowledged: client_state.initial_configure_acknowledged,
             configured_surface_committed: client_state.configured_surface_committed,
         };
+        Ok(ConfiguredExternalProtocolClient {
+            connection,
+            event_queue,
+            client_state,
+            readiness_loop,
+            readiness,
+            report,
+        })
+    }
+
+    /// 驱动单 client / 单 toplevel 的真实 Wayland 会话直到 configured：registry
+    /// discovery、三个 required global bind、一个 wl_surface/xdg_surface/xdg_toplevel
+    /// 的创建与无 buffer 初始 configure/ack/commit。达到 configured 后调用
+    /// `await_server_admission`，由服务端直接从 Core state 只读确认 admission；闭包返回
+    /// 后本函数返回，Connection/EventQueue/全部 proxy/readiness loop 随作用域 drop，
+    /// 向服务端产生真实 socket EOF。全程不发送任何 destroy，也不以 sync 回包冒充
+    /// Core 确认。
+    fn drive_external_protocol_client_until_abrupt_disconnect(
+        client_stream: UnixStream,
+        deadline: Instant,
+        await_server_admission: impl FnOnce() -> Result<(), String>,
+    ) -> Result<ExternalAbruptDisconnectClientReport, String> {
+        let configured = drive_external_protocol_client_until_configured(client_stream, deadline)?;
         // 服务端已从 Core state 直接确认本次 client/surface/window admission；闭包返回
         // 后本函数不再发送任何协议消息，直接以 drop 产生真实 EOF。
         await_server_admission()?;
-        Ok(report)
+        Ok(configured.report)
+    }
+
+    /// 断连隔离幸存端（B）driver：复用 configured 前缀完成初始 configure/ack/commit 后
+    /// 保持全部 owner；第一门等待服务端“发起新 sync”指令（此时 A 应已 dead），随后用
+    /// 从未使用过的 Lifecycle 阶段发起一次 wl_display.sync 真实往返并上报证据，但仍
+    /// 持有 Connection/EventQueue/proxy/readiness socket，直到第二次释放才 drop。
+    fn drive_disconnect_isolation_survivor_client<AwaitSyncGo, NotifySyncDone, AwaitFinalRelease>(
+        client_stream: UnixStream,
+        deadline: Instant,
+        await_sync_go: AwaitSyncGo,
+        notify_sync_done: NotifySyncDone,
+        await_final_release: AwaitFinalRelease,
+    ) -> Result<ExternalAbruptDisconnectClientReport, String>
+    where
+        AwaitSyncGo: FnOnce() -> Result<(), String>,
+        NotifySyncDone: FnOnce(SurvivorSyncEvidence) -> Result<(), String>,
+        AwaitFinalRelease: FnOnce() -> Result<(), String>,
+    {
+        let mut configured =
+            drive_external_protocol_client_until_configured(client_stream, deadline)?;
+        assert!(
+            !configured.client_state.lifecycle_sync_done,
+            "survivor 新 sync 前 Lifecycle 完成标志必须为 false，否则不能作为本次回包标识"
+        );
+        // 第一门：服务端已确认 A dead，指示发起新 sync；此前连接一直持有。
+        await_sync_go()?;
+        let queue_handle = configured.event_queue.handle();
+        let sync = configured
+            .connection
+            .display()
+            .sync(&queue_handle, ProductionProtocolRoundtripStage::Lifecycle);
+        if !sync.is_alive() {
+            return Err("survivor 新 sync proxy 必须存活".to_owned());
+        }
+        let sync_deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+        let sync_polls = drive_client_event_queue_until(
+            &mut configured.event_queue,
+            &mut configured.client_state,
+            &mut configured.readiness_loop,
+            &mut configured.readiness,
+            sync_deadline,
+            "survivor post-disconnect lifecycle sync",
+            |state| state.lifecycle_sync_done,
+        )?;
+        let evidence = SurvivorSyncEvidence {
+            sync_polls,
+            lifecycle_sync_done: configured.client_state.lifecycle_sync_done,
+        };
+        // 上报成功但仍持有全部 owner，等待第二次释放信号。
+        notify_sync_done(evidence)?;
+        await_final_release()?;
+        Ok(configured.report)
     }
 
     /// 内部执行体：在 child 进程内真实跑一次“admission 后突然断连”。
@@ -3147,6 +3238,497 @@ mod tests {
         );
         println!(
             "production protocol dual-admission outer watchdog: child_polls={} timed_out={} status={} child_socket_residual={} child_runtime_dir_removed={}",
+            report.polls,
+            report.timed_out,
+            report.status,
+            cleanup.socket_was_residual,
+            cleanup.runtime_dir_removed,
+        );
+    }
+
+    // ---- 双客户端断连隔离（A 断连，B 存活并完成新 sync 往返）--------------------------
+    //
+    // 证据边界：只证明该有界场景——A 断连后 Core 将 A 三元组标记 dead（tombstone 保留、
+    // 移出布局），B 三元组保持 alive，且 B 能在 A dead 之后完成一次新的 Lifecycle sync
+    // 真实往返。它不处理 ledger，不覆盖渲染、输入或长时运行；外层 watchdog 只证明
+    // child 被有界回收并清理唯一 runtime dir。
+
+    const PRODUCTION_PROTOCOL_CHILD_DISCONNECT_ISOLATION_ROLE: &str =
+        "external-disconnect-isolation";
+    const PRODUCTION_PROTOCOL_DISCONNECT_ISOLATION_TEST_NAME: &str = "smithay_backend::nested_runtime_orchestrator::tests::production_orchestrator_external_disconnect_isolation";
+
+    /// 内部执行体：在 child 进程内真实跑一次“断连隔离”。
+    ///
+    /// A/B 先后 admission 并确立共存；随后只释放 A（自然 drop，不发 destroy、不注入
+    /// 事件），有界 pump 到 A 三元组全 dead；再指示 B 发起新 sync，服务端在持续 pump
+    /// 中等待 B 成功通知，复核 B 后才释放 B 并收尾。任何阶段超时都 panic（child 非零
+    /// 退出），由 outer watchdog 有界回收。
+    fn production_orchestrator_external_disconnect_isolation_inner() {
+        assert_runtime_dir();
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .expect("disconnect-isolation child 必须持有 XDG_RUNTIME_DIR");
+        let mut orchestrator_config = config(
+            "production-protocol-disconnect-isolation",
+            PRODUCTION_PROTOCOL_MAX_PUMPS,
+        );
+        if let Ok(child_socket_name) = std::env::var(PRODUCTION_PROTOCOL_CHILD_SOCKET_ENV) {
+            orchestrator_config.socket_name = child_socket_name;
+        }
+        let socket_name = orchestrator_config.socket_name.clone();
+        let socket_path = runtime_dir.join(&socket_name);
+        // 两个 client 闭包均为 move：共享 borrow，而不移动 socket_path。
+        let socket_ref = socket_path.as_path();
+
+        let mut state = State::new();
+        let initial_clients = dual_admission_alive_clients(&state);
+
+        let mut orchestrator = NestedRuntimeOrchestrator::new(orchestrator_config);
+        let start_report = orchestrator
+            .start()
+            .expect("disconnect-isolation orchestrator 必须完成 production bootstrap");
+        assert!(
+            start_report.started,
+            "disconnect-isolation orchestrator 必须进入 Started"
+        );
+        assert_eq!(
+            start_report.socket_name, socket_name,
+            "bootstrap 必须使用唯一 socket 名"
+        );
+
+        let (a_connected_sender, a_connected_receiver) = mpsc::channel::<()>();
+        let (a_release_sender, a_release_receiver) = mpsc::channel::<()>();
+        let (b_connected_sender, b_connected_receiver) = mpsc::channel::<()>();
+        let (b_sync_go_sender, b_sync_go_receiver) = mpsc::channel::<()>();
+        let (b_sync_done_sender, b_sync_done_receiver) = mpsc::channel::<SurvivorSyncEvidence>();
+        let (b_release_sender, b_release_receiver) = mpsc::channel::<()>();
+
+        thread::scope(|scope| {
+            // A 复用旧单客户端 driver：门控返回即 drop，不发 destroy。
+            let a_handle = scope.spawn(
+                move || -> Result<ExternalAbruptDisconnectClientReport, String> {
+                    let client_stream = UnixStream::connect(socket_ref).map_err(|error| {
+                        format!("isolation client A 必须连接 production socket: {error}")
+                    })?;
+                    a_connected_sender.send(()).map_err(|error| {
+                        format!("isolation client A 必须通知 connected: {error}")
+                    })?;
+                    drive_external_protocol_client_until_abrupt_disconnect(
+                        client_stream,
+                        Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT,
+                        || {
+                            a_release_receiver
+                                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                                .map_err(|error| {
+                                    format!("client A 未在 deadline 内收到服务端释放确认: {error}")
+                                })
+                        },
+                    )
+                },
+            );
+
+            a_connected_receiver
+                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                .expect("主线程必须收到 isolation client A 的 connected 通知");
+            let (a_identity, a_pumps) = wait_for_one_new_admission(
+                &mut orchestrator,
+                &mut state,
+                &initial_clients,
+                "isolation client A",
+            );
+
+            // B 走幸存端 driver：admission 后保持连接，等待新 sync 指令。
+            let b_handle = scope.spawn(
+                move || -> Result<ExternalAbruptDisconnectClientReport, String> {
+                    let client_stream = UnixStream::connect(socket_ref).map_err(|error| {
+                        format!("isolation client B 必须连接 production socket: {error}")
+                    })?;
+                    b_connected_sender.send(()).map_err(|error| {
+                        format!("isolation client B 必须通知 connected: {error}")
+                    })?;
+                    drive_disconnect_isolation_survivor_client(
+                        client_stream,
+                        Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT,
+                        || {
+                            b_sync_go_receiver
+                                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                                .map_err(|error| {
+                                    format!("client B 未在 deadline 内收到新 sync 指令: {error}")
+                                })
+                        },
+                        |evidence| {
+                            b_sync_done_sender
+                                .send(evidence)
+                                .map_err(|error| format!("client B 必须上报新 sync 成功: {error}"))
+                        },
+                        || {
+                            b_release_receiver
+                                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                                .map_err(|error| {
+                                    format!("client B 未在 deadline 内收到最终释放确认: {error}")
+                                })
+                        },
+                    )
+                },
+            );
+
+            b_connected_receiver
+                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                .expect("主线程必须收到 isolation client B 的 connected 通知");
+            let post_a_clients = dual_admission_alive_clients(&state);
+            assert!(
+                post_a_clients.contains(&a_identity.client),
+                "B 启动前 A 的 client 必须仍 alive"
+            );
+            let (b_identity, b_pumps) = wait_for_one_new_admission(
+                &mut orchestrator,
+                &mut state,
+                &post_a_clients,
+                "isolation client B",
+            );
+
+            // 共存确立：互异、归属、六 alive、State 干净。
+            assert_ne!(
+                a_identity.client, b_identity.client,
+                "A/B 必须是两个互异 Core client"
+            );
+            assert_ne!(
+                a_identity.surface, b_identity.surface,
+                "A/B 必须是两个互异 Core surface"
+            );
+            assert_ne!(
+                a_identity.window, b_identity.window,
+                "A/B 必须是两个互异 Core window"
+            );
+            assert!(
+                state
+                    .surfaces
+                    .surfaces_for_client(a_identity.client)
+                    .contains(&a_identity.surface),
+                "A surface 必须归属 A client"
+            );
+            assert_eq!(
+                state.surfaces.window_for_surface(a_identity.surface),
+                Some(a_identity.window),
+                "A surface 必须绑定 A window"
+            );
+            assert!(
+                state
+                    .surfaces
+                    .surfaces_for_client(b_identity.client)
+                    .contains(&b_identity.surface),
+                "B surface 必须归属 B client"
+            );
+            assert_eq!(
+                state.surfaces.window_for_surface(b_identity.surface),
+                Some(b_identity.window),
+                "B surface 必须绑定 B window"
+            );
+            assert!(
+                state.clients.is_alive(a_identity.client)
+                    && state.surfaces.is_alive(a_identity.surface)
+                    && state.registry.is_alive(a_identity.window)
+                    && state.clients.is_alive(b_identity.client)
+                    && state.surfaces.is_alive(b_identity.surface)
+                    && state.registry.is_alive(b_identity.window),
+                "A/B 两组身份必须同时 alive"
+            );
+            assert!(
+                state.validate().is_clean(),
+                "隔离测试共存确立时 State 校验必须干净"
+            );
+
+            // 只释放 A：其连接及全部 owner 自然 drop，不发 destroy、不注入事件。
+            a_release_sender
+                .send(())
+                .expect("服务端必须只释放 client A");
+
+            // 有界 pump，直到 A 三元组全 dead。
+            let mut a_dead_pumps = 0usize;
+            let a_dead_deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+            while state.clients.is_alive(a_identity.client)
+                || state.surfaces.is_alive(a_identity.surface)
+                || state.registry.is_alive(a_identity.window)
+            {
+                assert!(
+                    Instant::now() < a_dead_deadline
+                        && a_dead_pumps < PRODUCTION_PROTOCOL_MAX_PUMPS,
+                    "服务端未在 deadline 内处理 isolation client A 断连: pumps={a_dead_pumps}"
+                );
+                let _pump = orchestrator
+                    .runtime_loop
+                    .as_mut()
+                    .expect("started orchestrator 必须持有 runtime loop")
+                    .run_for_iterations(
+                        &mut state,
+                        NestedRuntimeLoopConfig {
+                            max_iterations: 1,
+                            pump_timeout: PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
+                            stop_when_idle: false,
+                            continue_after_error: false,
+                        },
+                    );
+                a_dead_pumps += 1;
+            }
+            assert!(a_dead_pumps > 0, "A 断连级联必须经过至少一次有界 pump");
+
+            // A 隔离断言：tombstone 保留、移出布局、focus 不再指向；B 原身份不受影响。
+            let a_client_tombstone = state
+                .clients
+                .get(a_identity.client)
+                .expect("Core 必须保留 A dead client tombstone");
+            assert!(!a_client_tombstone.alive, "断连 A client 必须 dead");
+            let a_surface_tombstone = state
+                .surfaces
+                .get(a_identity.surface)
+                .expect("Core 必须保留 A dead surface tombstone");
+            assert!(!a_surface_tombstone.alive, "断连 A surface 必须 dead");
+            let a_window_tombstone = state
+                .registry
+                .get(a_identity.window)
+                .expect("Core 必须保留 A dead window tombstone");
+            assert!(!a_window_tombstone.alive, "断连 A window 必须 dead");
+            assert!(
+                state
+                    .compositor
+                    .workspaces
+                    .iter()
+                    .all(|workspace| !workspace.window_ids().contains(&a_identity.window)),
+                "A dead 窗口不得残留于任何 workspace"
+            );
+            assert_ne!(
+                state.compositor.focus.window,
+                Some(a_identity.window),
+                "focus 不得指向 A dead 窗口"
+            );
+            assert!(
+                state
+                    .surfaces
+                    .surfaces_for_client(b_identity.client)
+                    .contains(&b_identity.surface),
+                "A 断连后 B surface 必须仍归属 B client"
+            );
+            assert_eq!(
+                state.surfaces.window_for_surface(b_identity.surface),
+                Some(b_identity.window),
+                "A 断连后 B surface 必须仍绑定 B window"
+            );
+            assert!(
+                state.clients.is_alive(b_identity.client)
+                    && state.surfaces.is_alive(b_identity.surface)
+                    && state.registry.is_alive(b_identity.window),
+                "A 断连后 B 三元组必须保持 alive"
+            );
+            assert!(
+                state.validate().is_clean(),
+                "A 断连隔离后 State 校验必须干净"
+            );
+
+            let a_report = a_handle
+                .join()
+                .expect("isolation client A 线程不得 panic")
+                .expect("isolation client A driver 必须成功");
+            assert!(
+                a_report.initial_configure_acknowledged,
+                "client A 必须确认初始 configure"
+            );
+            assert!(
+                a_report.configured_surface_committed,
+                "client A 必须在 configure 后 commit surface"
+            );
+
+            // 此时才指示 B 发起新的 sync。
+            b_sync_go_sender
+                .send(())
+                .expect("服务端必须指示 client B 发起新 sync");
+
+            // 等待 B 成功通知：必须持续 pump，不能阻塞在 recv/join。
+            let mut sync_wait_pumps = 0usize;
+            let sync_wait_deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+            let b_evidence = loop {
+                if !(Instant::now() < sync_wait_deadline
+                    && sync_wait_pumps < PRODUCTION_PROTOCOL_MAX_PUMPS)
+                {
+                    panic!(
+                        "服务端未在 deadline 内收到 client B 新 sync 成功通知: pumps={sync_wait_pumps} {}",
+                        abrupt_disconnect_state_digest(&state)
+                    );
+                }
+                let _pump = orchestrator
+                    .runtime_loop
+                    .as_mut()
+                    .expect("started orchestrator 必须持有 runtime loop")
+                    .run_for_iterations(
+                        &mut state,
+                        NestedRuntimeLoopConfig {
+                            max_iterations: 1,
+                            pump_timeout: PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
+                            stop_when_idle: false,
+                            continue_after_error: false,
+                        },
+                    );
+                sync_wait_pumps += 1;
+                match b_sync_done_receiver.try_recv() {
+                    Ok(evidence) => break evidence,
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        panic!("client B 在上报新 sync 成功前断开门控通道")
+                    }
+                }
+            };
+
+            // B 新 sync 证据：独立 Lifecycle 回包到达、非 0 poll。
+            assert!(
+                b_evidence.lifecycle_sync_done,
+                "B 必须收到本次新 sync 的独立 Lifecycle 回包"
+            );
+            assert!(b_evidence.sync_polls > 0, "B 新 sync 不得 0 poll 空跑");
+
+            // 复核 B 后才释放：三组身份、归属、存活、State 一致性。
+            assert!(
+                state
+                    .surfaces
+                    .surfaces_for_client(b_identity.client)
+                    .contains(&b_identity.surface),
+                "新 sync 后 B surface 必须仍归属 B client"
+            );
+            assert_eq!(
+                state.surfaces.window_for_surface(b_identity.surface),
+                Some(b_identity.window),
+                "新 sync 后 B surface 必须仍绑定 B window"
+            );
+            assert!(
+                state.clients.is_alive(b_identity.client)
+                    && state.surfaces.is_alive(b_identity.surface)
+                    && state.registry.is_alive(b_identity.window),
+                "新 sync 后 B 三元组必须仍 alive"
+            );
+            assert!(
+                state.validate().is_clean(),
+                "B 新 sync 后 State 校验必须干净"
+            );
+
+            b_release_sender.send(()).expect("服务端必须释放 client B");
+            let b_report = b_handle
+                .join()
+                .expect("isolation client B 线程不得 panic")
+                .expect("isolation client B driver 必须成功");
+            assert!(
+                b_report.initial_configure_acknowledged,
+                "client B 必须确认初始 configure"
+            );
+            assert!(
+                b_report.configured_surface_committed,
+                "client B 必须在 configure 后 commit surface"
+            );
+            assert!(
+                b_report.registry_readiness_polls > 0
+                    && b_report.bind_readiness_polls > 0
+                    && b_report.configure_readiness_polls > 0,
+                "client B 各阶段不得 0 poll 空跑"
+            );
+
+            // 有界退出：B drop 后 pump 到 B 三元组全 dead（仅做清理）。
+            let mut drain_pumps = 0usize;
+            let drain_deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+            while state.clients.is_alive(b_identity.client)
+                || state.surfaces.is_alive(b_identity.surface)
+                || state.registry.is_alive(b_identity.window)
+            {
+                assert!(
+                    Instant::now() < drain_deadline && drain_pumps < PRODUCTION_PROTOCOL_MAX_PUMPS,
+                    "服务端未在 deadline 内处理 isolation client B 退出: pumps={drain_pumps}"
+                );
+                let _pump = orchestrator
+                    .runtime_loop
+                    .as_mut()
+                    .expect("started orchestrator 必须持有 runtime loop")
+                    .run_for_iterations(
+                        &mut state,
+                        NestedRuntimeLoopConfig {
+                            max_iterations: 1,
+                            pump_timeout: PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
+                            stop_when_idle: false,
+                            continue_after_error: false,
+                        },
+                    );
+                drain_pumps += 1;
+            }
+
+            let stop_report = orchestrator.stop(&state);
+            assert!(
+                stop_report.shutdown_completed,
+                "orchestrator stop 必须完成 shutdown"
+            );
+            assert!(
+                stop_report.validation_is_clean,
+                "orchestrator stop 必须报告 State 校验干净"
+            );
+            assert!(
+                state.validate().is_clean(),
+                "隔离测试收尾后 State 校验必须干净"
+            );
+            println!(
+                "production protocol disconnect isolation: a={a_identity:?} b={b_identity:?} a_pumps={a_pumps} b_pumps={b_pumps} a_dead_pumps={a_dead_pumps} sync_wait_pumps={sync_wait_pumps} sync_polls={} drain_pumps={drain_pumps}",
+                b_evidence.sync_polls,
+            );
+        });
+    }
+
+    /// “双客户端断连隔离”outer 测试：沿用既有 child-role 复跑 + outer watchdog +
+    /// ProtocolChildRuntimeDir 清理模板。child 内部走 inner 的真实双 socket 会话；任何
+    /// 失败都会让 child 非零退出，由 watchdog 在有界 deadline 内 kill/reap 并清理。
+    #[test]
+    fn production_orchestrator_external_disconnect_isolation() {
+        match std::env::var(PRODUCTION_PROTOCOL_CHILD_ROLE_ENV).as_deref() {
+            Ok(PRODUCTION_PROTOCOL_CHILD_DISCONNECT_ISOLATION_ROLE) => {
+                production_orchestrator_external_disconnect_isolation_inner();
+                return;
+            }
+            Ok(role) => panic!("disconnect-isolation child 收到未知 role: {role}"),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(error) => panic!("读取 disconnect-isolation child role 失败: {error}"),
+        }
+
+        let current_exe =
+            std::env::current_exe().expect("outer watchdog 必须取得当前 test executable");
+        let child_runtime_dir = ProtocolChildRuntimeDir::create()
+            .expect("outer watchdog 必须创建唯一 child runtime dir");
+        let child_result = spawn_protocol_child(
+            &current_exe,
+            PRODUCTION_PROTOCOL_DISCONNECT_ISOLATION_TEST_NAME,
+            PRODUCTION_PROTOCOL_CHILD_DISCONNECT_ISOLATION_ROLE,
+            &child_runtime_dir,
+        )
+        .and_then(|child| {
+            run_protocol_child_with_watchdog(
+                child,
+                Instant::now() + PRODUCTION_PROTOCOL_OUTER_WATCHDOG_TIMEOUT,
+            )
+        });
+        let cleanup = child_runtime_dir
+            .cleanup_and_verify()
+            .expect("outer watchdog 必须清理并移除唯一 child runtime dir");
+        let report = child_result.expect("outer watchdog 必须在绝对 deadline 内确认 child 退出");
+
+        assert!(
+            !report.timed_out,
+            "正常 disconnect-isolation child 不得触发 watchdog kill: {report:?}"
+        );
+        assert!(
+            report.status.success(),
+            "disconnect-isolation child 必须以成功状态退出: {report:?}"
+        );
+        assert!(
+            !cleanup.socket_was_residual,
+            "正常 disconnect-isolation child 必须自行 drop 并移除唯一 socket: {cleanup:?}"
+        );
+        assert!(
+            cleanup.runtime_dir_removed,
+            "outer watchdog 必须移除唯一 child runtime dir: {cleanup:?}"
+        );
+        println!(
+            "production protocol disconnect-isolation outer watchdog: child_polls={} timed_out={} status={} child_socket_residual={} child_runtime_dir_removed={}",
             report.polls,
             report.timed_out,
             report.status,
