@@ -506,6 +506,10 @@ mod tests {
         NestedRuntimeOrchestratorConfig, NestedRuntimeOrchestratorError,
         NestedRuntimeOrchestratorOperation, nested_runtime_orchestrator_readiness_report,
     };
+    use crate::core::{
+        backend_event::BackendEvent, command::CommandResult, runtime_bridge::CoreRuntimeBridge,
+        surface::SurfaceRole, window::WindowKind,
+    };
     use crate::{
         core::state::State,
         smithay_backend::{
@@ -1357,8 +1361,13 @@ mod tests {
                 "sky-mirror-phase56p-protocol-{}-{entropy}",
                 std::process::id()
             ));
-            fs::create_dir(&path)
-                .map_err(|error| format!("创建 protocol child runtime dir 失败: {error}"))?;
+            fs::create_dir(&path).map_err(|error| {
+                format!(
+                    "创建 protocol child runtime dir 失败: operation=fs::create_dir path={} error={error} kind={:?}",
+                    path.display(),
+                    error.kind()
+                )
+            })?;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
                 .map_err(|error| format!("收紧 protocol child runtime dir 权限失败: {error}"))?;
             let socket_path = path.join("phase56p-external-protocol.sock");
@@ -2124,6 +2133,633 @@ mod tests {
             cleanup.socket_was_residual,
             cleanup.runtime_dir_removed,
         );
+    }
+
+    // ---- 真实客户端突然断连（单 client / 单 toplevel）----------------------------------
+    //
+    // 证据边界：本测试只覆盖真实外部 client 在 Core admission 后不做任何对象 destroy
+    // 直接断连时的 Core 生命周期级联（client/surface/window dead + tombstone 保留 +
+    // workspace/focus live path 清理 + 无关基线窗口不受影响）。它不检查或修复 ledger
+    // 残留，也不覆盖 orchestrator 公共 run/finish_run 路径；外层 watchdog 只证明
+    // child 被有界 kill/reap 并清理唯一 runtime dir。
+
+    const PRODUCTION_PROTOCOL_CHILD_ABRUPT_DISCONNECT_ROLE: &str = "external-abrupt-disconnect";
+    const PRODUCTION_PROTOCOL_ABRUPT_DISCONNECT_TEST_NAME: &str = "smithay_backend::nested_runtime_orchestrator::tests::production_orchestrator_external_abrupt_disconnect_marks_core_lifecycle_dead";
+
+    /// 断连 client 端的纯数据证据：单 toplevel 已完成无 buffer 初始 configure/ack/commit，
+    /// 且整个驱动过程未发送任何 destroy。readiness poll 计数证明这些阶段不是 0 poll 空跑。
+    #[derive(Debug, Default, Clone, PartialEq)]
+    struct ExternalAbruptDisconnectClientReport {
+        registry_readiness_polls: usize,
+        bind_readiness_polls: usize,
+        configure_readiness_polls: usize,
+        initial_configure_acknowledged: bool,
+        configured_surface_committed: bool,
+    }
+
+    /// 驱动单 client / 单 toplevel 的真实 Wayland 会话直到 configured：registry
+    /// discovery、三个 required global bind、一个 wl_surface/xdg_surface/xdg_toplevel
+    /// 的创建与无 buffer 初始 configure/ack/commit。达到 configured 后调用
+    /// `await_server_admission`，由服务端直接从 Core state 只读确认 admission；闭包返回
+    /// 后本函数返回，Connection/EventQueue/全部 proxy/readiness loop 随作用域 drop，
+    /// 向服务端产生真实 socket EOF。全程不发送任何 destroy，也不以 sync 回包冒充
+    /// Core 确认。
+    fn drive_external_protocol_client_until_abrupt_disconnect(
+        client_stream: UnixStream,
+        deadline: Instant,
+        await_server_admission: impl FnOnce() -> Result<(), String>,
+    ) -> Result<ExternalAbruptDisconnectClientReport, String> {
+        client_stream
+            .set_nonblocking(true)
+            .map_err(|error| format!("abrupt-disconnect client 必须设为 nonblocking: {error}"))?;
+        let readiness_socket = client_stream.try_clone().map_err(|error| {
+            format!("abrupt-disconnect client 必须克隆 readiness socket: {error}")
+        })?;
+        let connection = Connection::from_socket(client_stream).map_err(|error| {
+            format!("abrupt-disconnect client 创建 Wayland connection 失败: {error}")
+        })?;
+        let mut event_queue = connection.new_event_queue();
+        let queue_handle = event_queue.handle();
+        let display = connection.display();
+        let mut client_state = ProductionProtocolClientState::default();
+        let mut readiness_loop = EventLoop::<ProductionProtocolReadiness>::try_new()
+            .expect("abrupt-disconnect client 必须创建 readiness event loop");
+        let mut readiness = ProductionProtocolReadiness::default();
+        readiness_loop
+            .handle()
+            .insert_source(
+                Generic::new(readiness_socket, Interest::READ, Mode::Level),
+                |readiness_event, _socket, readiness| {
+                    readiness.readable_or_error |=
+                        readiness_event.readable || readiness_event.error;
+                    Ok(PostAction::Continue)
+                },
+            )
+            .expect("abrupt-disconnect client 必须注册 readiness source");
+
+        let registry = display.get_registry(&queue_handle, ());
+        if !registry.is_alive() {
+            return Err("abrupt-disconnect client registry proxy 必须存活".to_owned());
+        }
+        let sync = display.sync(&queue_handle, ProductionProtocolRoundtripStage::Registry);
+        if !sync.is_alive() {
+            return Err("abrupt-disconnect client registry sync proxy 必须存活".to_owned());
+        }
+        let registry_readiness_polls = drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "abrupt-disconnect registry discovery",
+            |state| state.registry_sync_done,
+        )?;
+
+        let wl_compositor = client_state
+            .wl_compositor
+            .as_ref()
+            .map(|global| (global.name, global.version))
+            .ok_or_else(|| "abrupt-disconnect client 必须发现 wl_compositor global".to_owned())?;
+        let xdg_wm_base = client_state
+            .xdg_wm_base
+            .as_ref()
+            .map(|global| (global.name, global.version))
+            .ok_or_else(|| "abrupt-disconnect client 必须发现 xdg_wm_base global".to_owned())?;
+        let wl_shm = client_state
+            .wl_shm
+            .as_ref()
+            .map(|global| (global.name, global.version))
+            .ok_or_else(|| "abrupt-disconnect client 必须发现 wl_shm global".to_owned())?;
+        if wl_compositor.1 == 0 || xdg_wm_base.1 == 0 || wl_shm.1 == 0 {
+            return Err("abrupt-disconnect client required global version 必须大于 0".to_owned());
+        }
+
+        let bound_wl_compositor = registry.bind::<WlCompositor, _, _>(
+            wl_compositor.0,
+            wl_compositor.1.min(5),
+            &queue_handle,
+            (),
+        );
+        let bound_xdg_wm_base = registry.bind::<XdgWmBase, _, _>(
+            xdg_wm_base.0,
+            xdg_wm_base.1.min(7),
+            &queue_handle,
+            (),
+        );
+        let bound_wl_shm =
+            registry.bind::<WlShm, _, _>(wl_shm.0, wl_shm.1.min(1), &queue_handle, ());
+        if !bound_wl_compositor.is_alive()
+            || !bound_xdg_wm_base.is_alive()
+            || !bound_wl_shm.is_alive()
+        {
+            return Err(
+                "abrupt-disconnect client required global bind 后 proxy 必须全部存活".to_owned(),
+            );
+        }
+        client_state.bound_wl_compositor = Some(bound_wl_compositor);
+        client_state.bound_xdg_wm_base = Some(bound_xdg_wm_base);
+        client_state.bound_wl_shm = Some(bound_wl_shm);
+
+        let sync = display.sync(&queue_handle, ProductionProtocolRoundtripStage::Bind);
+        if !sync.is_alive() {
+            return Err("abrupt-disconnect client bind sync proxy 必须存活".to_owned());
+        }
+        let bind_readiness_polls = drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "abrupt-disconnect bind sync",
+            |state| state.bind_sync_done,
+        )?;
+        if !client_state
+            .bound_wl_compositor
+            .as_ref()
+            .is_some_and(Proxy::is_alive)
+            || !client_state
+                .bound_xdg_wm_base
+                .as_ref()
+                .is_some_and(Proxy::is_alive)
+            || !client_state
+                .bound_wl_shm
+                .as_ref()
+                .is_some_and(Proxy::is_alive)
+        {
+            return Err(
+                "abrupt-disconnect client bind sync 后 required global proxy 必须仍存活".to_owned(),
+            );
+        }
+
+        let wl_surface = match client_state.bound_wl_compositor.as_ref() {
+            Some(bound) => bound.create_surface(&queue_handle, ()),
+            None => {
+                return Err(
+                    "bind sync 后 wl_compositor proxy 必须仍由 client state 持有".to_owned(),
+                );
+            }
+        };
+        let xdg_surface = match client_state.bound_xdg_wm_base.as_ref() {
+            Some(bound) => bound.get_xdg_surface(&wl_surface, &queue_handle, ()),
+            None => {
+                return Err("bind sync 后 xdg_wm_base proxy 必须仍由 client state 持有".to_owned());
+            }
+        };
+        let xdg_toplevel = xdg_surface.get_toplevel(&queue_handle, ());
+        xdg_toplevel.set_title("Sky Mirror Phase 56Q external abrupt disconnect".to_owned());
+        if !wl_surface.is_alive() || !xdg_surface.is_alive() || !xdg_toplevel.is_alive() {
+            return Err(
+                "abrupt-disconnect client 单 toplevel 创建后 proxy 必须全部存活".to_owned(),
+            );
+        }
+        // 只做无 buffer 初始 commit；不 attach/commit SHM，保持 Phase 56Q no-buffer
+        // lifecycle 事实边界，也不发送任何 destroy。
+        wl_surface.commit();
+        client_state
+            .lifecycle_surfaces
+            .push((xdg_surface, wl_surface));
+        client_state.lifecycle_toplevels.push(xdg_toplevel);
+
+        let configure_readiness_polls = drive_client_event_queue_until(
+            &mut event_queue,
+            &mut client_state,
+            &mut readiness_loop,
+            &mut readiness,
+            deadline,
+            "abrupt-disconnect xdg initial configure",
+            |state| state.initial_configure_acknowledged && state.configured_surface_committed,
+        )?;
+        if configure_readiness_polls == 0 {
+            return Err(
+                "abrupt-disconnect client 初始 configure 必须经过至少一次 readiness poll"
+                    .to_owned(),
+            );
+        }
+
+        let report = ExternalAbruptDisconnectClientReport {
+            registry_readiness_polls,
+            bind_readiness_polls,
+            configure_readiness_polls,
+            initial_configure_acknowledged: client_state.initial_configure_acknowledged,
+            configured_surface_committed: client_state.configured_surface_committed,
+        };
+        // 服务端已从 Core state 直接确认本次 client/surface/window admission；闭包返回
+        // 后本函数不再发送任何协议消息，直接以 drop 产生真实 EOF。
+        await_server_admission()?;
+        Ok(report)
+    }
+
+    /// 内部执行体：在 child 进程内真实跑一次“admission 后突然断连”。
+    ///
+    /// 主线程用 `NestedRuntimeLoop::run_for_iterations`（既有 pub 有界 pump）逐步驱动
+    /// production runtime，先只读确认 Core 中恰有一个 alive client / alive surface /
+    /// alive window，再允许 client drop 连接；随后有界 pump 到 Core 级联完成并做全部
+    /// 断言。任何阶段超时都 panic（child 非零退出），由 outer watchdog 有界回收。
+    fn production_orchestrator_external_abrupt_disconnect_marks_core_lifecycle_dead_inner() {
+        assert_runtime_dir();
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .expect("abrupt-disconnect child 必须持有 XDG_RUNTIME_DIR");
+        let mut orchestrator_config = config(
+            "production-protocol-abrupt-disconnect",
+            PRODUCTION_PROTOCOL_MAX_PUMPS,
+        );
+        if let Ok(child_socket_name) = std::env::var(PRODUCTION_PROTOCOL_CHILD_SOCKET_ENV) {
+            orchestrator_config.socket_name = child_socket_name;
+        }
+        let socket_name = orchestrator_config.socket_name.clone();
+        let socket_path = runtime_dir.join(&socket_name);
+
+        // 无关基线窗口：经既有 CoreRuntimeBridge 事件预置的无 client 窗口。它与真实
+        // 断连 client 无关，用于确认断连级联不会误伤其他窗口的 Core 生命周期。
+        let mut state = State::new();
+        // 基线 surface 必须使用显式高位 ID：production admission queue 从 Core
+        // surface id 1 开始显式注册，若基线占用 id 1，真实 client 的 admission 会
+        // 因重复 ID 被持续拒绝并永久停在 pending。
+        let baseline_surface = 900_001;
+        assert!(
+            state
+                .surfaces
+                .register_surface_with_id(baseline_surface, SurfaceRole::XdgToplevel),
+            "基线 surface 必须使用未被占用的显式高位 ID"
+        );
+        let baseline_mapped = CoreRuntimeBridge::handle_backend_event(
+            &mut state,
+            BackendEvent::ToplevelMapped {
+                surface: baseline_surface,
+                title: "abrupt-disconnect baseline window".to_owned(),
+                app_id: Some("sky-mirror-baseline".to_owned()),
+                kind: WindowKind::WaylandPlaceholder,
+            },
+        );
+        assert!(
+            baseline_mapped.validation.is_clean(),
+            "基线窗口事件必须保持 State 校验干净"
+        );
+        let baseline_window = match baseline_mapped.result {
+            CommandResult::WindowRegisteredForSurface {
+                window,
+                bound: true,
+                ..
+            } => window,
+            other => panic!("基线 ToplevelMapped 必须注册并绑定窗口: {other:?}"),
+        };
+        assert!(
+            state.surfaces.is_alive(baseline_surface),
+            "基线 surface 必须存活"
+        );
+        assert!(state.registry.is_alive(baseline_window), "基线窗口必须存活");
+        assert!(
+            state
+                .compositor
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.window_ids().contains(&baseline_window)),
+            "基线窗口必须被至少一个 workspace 引用"
+        );
+
+        let mut orchestrator = NestedRuntimeOrchestrator::new(orchestrator_config);
+        let start_report = orchestrator
+            .start()
+            .expect("abrupt-disconnect orchestrator 必须完成 production bootstrap");
+        assert!(
+            start_report.started,
+            "abrupt-disconnect orchestrator 必须进入 Started"
+        );
+        assert_eq!(
+            start_report.socket_name, socket_name,
+            "bootstrap 必须使用唯一 socket 名"
+        );
+
+        let (client_connected_sender, client_connected_receiver) = mpsc::channel::<()>();
+        let (server_admitted_sender, server_admitted_receiver) = mpsc::channel::<()>();
+        let (client_result_sender, client_result_receiver) =
+            mpsc::channel::<Result<ExternalAbruptDisconnectClientReport, String>>();
+
+        thread::scope(|scope| {
+            let client_handle = scope.spawn(move || -> Result<ExternalAbruptDisconnectClientReport, String> {
+                let client_stream = UnixStream::connect(&socket_path).map_err(|error| {
+                    format!("abrupt-disconnect client 必须连接 production socket: {error}")
+                })?;
+                client_connected_sender
+                    .send(())
+                    .map_err(|error| format!("abrupt-disconnect client 必须通知 connected: {error}"))?;
+                let result = drive_external_protocol_client_until_abrupt_disconnect(
+                    client_stream,
+                    Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT,
+                    || {
+                        server_admitted_receiver
+                            .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                            .map_err(|error| {
+                                format!("client 未在 deadline 内收到服务端 Core admission 确认: {error}")
+                            })
+                    },
+                );
+                let _ = client_result_sender.send(result.clone());
+                result
+            });
+
+            client_connected_receiver
+                .recv_timeout(PRODUCTION_PROTOCOL_TEST_TIMEOUT)
+                .expect("主线程必须收到 abrupt-disconnect client 的 connected 通知");
+
+            // 阶段 1：有界逐步 pump，直到 State 只读确认恰有一个 alive client、其恰有
+            // 一个 alive surface、且该 surface 绑定一个 alive window。这是服务端对
+            // Core admission 的直接确认，不用 sync 回包或固定 sleep 代替。
+            let mut admission_pumps = 0usize;
+            let (real_client, real_surface, real_window) = {
+                let admission_deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+                loop {
+                    if !(Instant::now() < admission_deadline
+                        && admission_pumps < PRODUCTION_PROTOCOL_MAX_PUMPS)
+                    {
+                        // 诊断：有界等回 client 线程结果，并连同只读 State 摘要一起输出，
+                        // 用于区分“client 握手未完成”与“服务端未推进 admission”。
+                        let mut client_outcome = None;
+                        let outcome_deadline = Instant::now() + Duration::from_secs(1);
+                        while Instant::now() < outcome_deadline {
+                            match client_result_receiver.try_recv() {
+                                Ok(result) => {
+                                    client_outcome = Some(result);
+                                    break;
+                                }
+                                Err(mpsc::TryRecvError::Empty) => {
+                                    thread::sleep(Duration::from_millis(5));
+                                }
+                                Err(mpsc::TryRecvError::Disconnected) => break,
+                            }
+                        }
+                        panic!(
+                            "服务端未在 deadline 内确认 Core client/surface/window admission: pumps={admission_pumps} client={client_outcome:?} {}",
+                            abrupt_disconnect_state_digest(&state)
+                        );
+                    }
+                    let _pump = orchestrator
+                        .runtime_loop
+                        .as_mut()
+                        .expect("started orchestrator 必须持有 runtime loop")
+                        .run_for_iterations(
+                            &mut state,
+                            NestedRuntimeLoopConfig {
+                                max_iterations: 1,
+                                pump_timeout: PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
+                                stop_when_idle: false,
+                                continue_after_error: false,
+                            },
+                        );
+                    admission_pumps += 1;
+                    let alive_clients: Vec<_> = state
+                        .clients
+                        .records()
+                        .iter()
+                        .filter(|record| record.alive)
+                        .collect();
+                    if let [client_record] = alive_clients.as_slice() {
+                        let client_surfaces = state.surfaces.surfaces_for_client(client_record.id);
+                        if let [surface_id] = &client_surfaces[..] {
+                            if state.surfaces.is_alive(*surface_id) {
+                                if let Some(window) = state.surfaces.window_for_surface(*surface_id)
+                                {
+                                    if state.registry.is_alive(window) {
+                                        break (client_record.id, *surface_id, window);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            // 服务端确认成立后才允许 client 断连：client 收到本信号即 drop 全部对象
+            // （不发送任何 destroy），服务端随后观察到真实 EOF。
+            server_admitted_sender
+                .send(())
+                .expect("服务端必须向 abrupt-disconnect client 发送 Core admission 确认");
+
+            // 阶段 2：有界 pump，直到 Core 级联把该 client/surface/window 全部标记 dead。
+            let mut disconnect_pumps = 0usize;
+            let disconnect_deadline = Instant::now() + PRODUCTION_PROTOCOL_TEST_TIMEOUT;
+            while state.clients.is_alive(real_client)
+                || state.surfaces.is_alive(real_surface)
+                || state.registry.is_alive(real_window)
+            {
+                assert!(
+                    Instant::now() < disconnect_deadline
+                        && disconnect_pumps < PRODUCTION_PROTOCOL_MAX_PUMPS,
+                    "服务端未在 deadline 内处理真实 client 断连: pumps={disconnect_pumps}"
+                );
+                let _pump = orchestrator
+                    .runtime_loop
+                    .as_mut()
+                    .expect("started orchestrator 必须持有 runtime loop")
+                    .run_for_iterations(
+                        &mut state,
+                        NestedRuntimeLoopConfig {
+                            max_iterations: 1,
+                            pump_timeout: PRODUCTION_PROTOCOL_PUMP_TIMEOUT,
+                            stop_when_idle: false,
+                            continue_after_error: false,
+                        },
+                    );
+                disconnect_pumps += 1;
+            }
+            assert!(disconnect_pumps > 0, "断连级联必须经过至少一次有界 pump");
+
+            let stop_report = orchestrator.stop(&state);
+            assert!(
+                stop_report.shutdown_completed,
+                "orchestrator stop 必须完成 shutdown"
+            );
+            assert!(
+                stop_report.validation_is_clean,
+                "orchestrator stop 必须报告 State 校验干净"
+            );
+
+            let client_report = client_handle
+                .join()
+                .expect("abrupt-disconnect client 线程不得 panic")
+                .expect("abrupt-disconnect client driver 必须成功");
+            assert!(
+                client_report.initial_configure_acknowledged,
+                "client 必须确认初始 configure"
+            );
+            assert!(
+                client_report.configured_surface_committed,
+                "client 必须在 configure 后 commit surface"
+            );
+            assert!(
+                client_report.registry_readiness_polls > 0,
+                "registry discovery 不得 0 poll 空跑"
+            );
+            assert!(
+                client_report.bind_readiness_polls > 0,
+                "bind sync 不得 0 poll 空跑"
+            );
+            assert!(
+                client_report.configure_readiness_polls > 0,
+                "configure 不得 0 poll 空跑"
+            );
+
+            // 断连级联：client/surface/window 必须 dead 且保留 tombstone。
+            let client_tombstone = state
+                .clients
+                .get(real_client)
+                .expect("Core 必须保留 dead client tombstone");
+            assert!(!client_tombstone.alive, "断连 client 必须 dead");
+            let surface_tombstone = state
+                .surfaces
+                .get(real_surface)
+                .expect("Core 必须保留 dead surface tombstone");
+            assert!(!surface_tombstone.alive, "断连 surface 必须 dead");
+            let window_tombstone = state
+                .registry
+                .get(real_window)
+                .expect("Core 必须保留 dead window tombstone");
+            assert!(!window_tombstone.alive, "断连 window 必须 dead");
+            assert!(!state.clients.is_alive(real_client));
+            assert!(!state.surfaces.is_alive(real_surface));
+            assert!(!state.registry.is_alive(real_window));
+
+            // dead 窗口必须退出全部 workspace live path，focus 不得再指向它。
+            assert!(
+                state
+                    .compositor
+                    .workspaces
+                    .iter()
+                    .all(|workspace| !workspace.window_ids().contains(&real_window)),
+                "dead 窗口不得残留于任何 workspace"
+            );
+            assert_ne!(
+                state.compositor.focus.window,
+                Some(real_window),
+                "focus 不得指向 dead 窗口"
+            );
+
+            // 无关基线窗口必须不受影响：surface/window 仍 alive 且仍被 workspace 引用。
+            assert!(
+                state.surfaces.is_alive(baseline_surface),
+                "基线 surface 不得受断连级联影响"
+            );
+            assert!(
+                state.registry.is_alive(baseline_window),
+                "基线窗口不得受断连级联影响"
+            );
+            assert!(
+                state
+                    .compositor
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.window_ids().contains(&baseline_window)),
+                "基线窗口必须仍被 workspace 引用"
+            );
+
+            assert!(state.validate().is_clean(), "断连级联后 State 校验必须干净");
+            println!(
+                "phase56q production protocol abrupt disconnect: client_id={real_client:?} surface_id={real_surface:?} window_id={real_window:?} admission_pumps={admission_pumps} disconnect_pumps={disconnect_pumps} registry_polls={} bind_polls={} configure_polls={}",
+                client_report.registry_readiness_polls,
+                client_report.bind_readiness_polls,
+                client_report.configure_readiness_polls,
+            );
+        });
+    }
+
+    /// “真实客户端突然断连”outer 测试：沿用既有 child-role 复跑 + outer watchdog +
+    /// ProtocolChildRuntimeDir 清理模板。child 内部走 inner 的真实 socket 会话；任何
+    /// 失败都会让 child 非零退出，由 watchdog 在有界 deadline 内 kill/reap 并清理。
+    #[test]
+    fn production_orchestrator_external_abrupt_disconnect_marks_core_lifecycle_dead() {
+        match std::env::var(PRODUCTION_PROTOCOL_CHILD_ROLE_ENV).as_deref() {
+            Ok(PRODUCTION_PROTOCOL_CHILD_ABRUPT_DISCONNECT_ROLE) => {
+                production_orchestrator_external_abrupt_disconnect_marks_core_lifecycle_dead_inner(
+                );
+                return;
+            }
+            Ok(role) => panic!("abrupt-disconnect child 收到未知 role: {role}"),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(error) => panic!("读取 abrupt-disconnect child role 失败: {error}"),
+        }
+
+        let current_exe =
+            std::env::current_exe().expect("outer watchdog 必须取得当前 test executable");
+        let child_runtime_dir = ProtocolChildRuntimeDir::create()
+            .expect("outer watchdog 必须创建唯一 child runtime dir");
+        let child_result = spawn_protocol_child(
+            &current_exe,
+            PRODUCTION_PROTOCOL_ABRUPT_DISCONNECT_TEST_NAME,
+            PRODUCTION_PROTOCOL_CHILD_ABRUPT_DISCONNECT_ROLE,
+            &child_runtime_dir,
+        )
+        .and_then(|child| {
+            run_protocol_child_with_watchdog(
+                child,
+                Instant::now() + PRODUCTION_PROTOCOL_OUTER_WATCHDOG_TIMEOUT,
+            )
+        });
+        let cleanup = child_runtime_dir
+            .cleanup_and_verify()
+            .expect("outer watchdog 必须清理并移除唯一 child runtime dir");
+        let report = child_result.expect("outer watchdog 必须在绝对 deadline 内确认 child 退出");
+
+        assert!(
+            !report.timed_out,
+            "正常 abrupt-disconnect child 不得触发 watchdog kill: {report:?}"
+        );
+        assert!(
+            report.status.success(),
+            "abrupt-disconnect child 必须以成功状态退出: {report:?}"
+        );
+        assert!(
+            !cleanup.socket_was_residual,
+            "正常 abrupt-disconnect child 必须自行 drop 并移除唯一 socket: {cleanup:?}"
+        );
+        assert!(
+            cleanup.runtime_dir_removed,
+            "outer watchdog 必须移除唯一 child runtime dir: {cleanup:?}"
+        );
+        println!(
+            "phase56q production protocol abrupt-disconnect outer watchdog: child_polls={} timed_out={} status={} child_socket_residual={} child_runtime_dir_removed={}",
+            report.polls,
+            report.timed_out,
+            report.status,
+            cleanup.socket_was_residual,
+            cleanup.runtime_dir_removed,
+        );
+    }
+
+    /// 诊断用：只读汇总 Core State 的 clients/surfaces/windows 记录。
+    ///
+    /// 仅在 abrupt-disconnect 超时 panic 时调用，用于区分“客户端握手未完成”与
+    /// “服务端未推进 admission/断连级联”。不修改任何状态。
+    fn abrupt_disconnect_state_digest(state: &State) -> String {
+        let clients: Vec<String> = state
+            .clients
+            .records()
+            .iter()
+            .map(|record| format!("client#{} alive={}", record.id, record.alive))
+            .collect();
+        let surfaces: Vec<String> = state
+            .surfaces
+            .records()
+            .iter()
+            .map(|record| {
+                format!(
+                    "surface#{} alive={} client={:?} window={:?}",
+                    record.id, record.alive, record.client, record.window
+                )
+            })
+            .collect();
+        let windows: Vec<String> = state
+            .registry
+            .records()
+            .iter()
+            .map(|record| format!("window#{} alive={}", record.id, record.alive))
+            .collect();
+        format!(
+            "clients=[{}] surfaces=[{}] windows=[{}]",
+            clients.join(", "),
+            surfaces.join(", "),
+            windows.join(", ")
+        )
     }
 
     #[test]
