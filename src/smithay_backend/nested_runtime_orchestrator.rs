@@ -398,6 +398,49 @@ impl NestedRuntimeOrchestrator {
         Ok(self.finish_run(loop_report))
     }
 
+    /// 在同一 session 内执行一批有界 pump，由调用方驱动重复批次。
+    ///
+    /// 只允许从 Started 进入：调用前进入 Running，批次结束后按退出原因落定，
+    /// session owner 保留。`MaxIterationsReached` 或 `Idle` 回到 Started，可执行
+    /// 下一批；`StopRequested` 或 `Interrupted` 经 Stopping 进入 Stopped；
+    /// `Error` 退出或 validation 脏则与 [`Self::run`] 一致进入 Failed。
+    /// 现有 `run()`、`finish_run()`、`stop()` 的行为和签名不变；本方法不宣称
+    /// long-running loop 已实现。
+    ///
+    /// # Errors
+    ///
+    /// 非 Started 状态返回现有 structured transition error（operation 为 `Run`）；
+    /// 资源不一致时进入 Failed 并返回 `MissingRuntimeLoop`。
+    pub(crate) fn run_next_batch(
+        &mut self,
+        state: &mut State,
+    ) -> Result<NestedRuntimeLoopReport, NestedRuntimeOrchestratorError> {
+        if self.state != NestedRuntimeLifecycleState::Started {
+            return Err(self.invalid_transition(NestedRuntimeOrchestratorOperation::Run));
+        }
+        self.state = NestedRuntimeLifecycleState::Running;
+        let Some(runtime_loop) = self.runtime_loop.as_mut() else {
+            self.state = NestedRuntimeLifecycleState::Failed;
+            return Err(NestedRuntimeOrchestratorError::MissingRuntimeLoop { state: self.state });
+        };
+
+        let loop_report = runtime_loop.run_for_iterations(state, self.config.loop_config);
+        if loop_report.exit_reason == NestedRuntimeLoopExitReason::Error
+            || !loop_report.validation_is_clean
+        {
+            self.state = NestedRuntimeLifecycleState::Failed;
+        } else if matches!(
+            loop_report.exit_reason,
+            NestedRuntimeLoopExitReason::StopRequested | NestedRuntimeLoopExitReason::Interrupted
+        ) {
+            self.state = NestedRuntimeLifecycleState::Stopping;
+            self.state = NestedRuntimeLifecycleState::Stopped;
+        } else {
+            self.state = NestedRuntimeLifecycleState::Started;
+        }
+        Ok(loop_report)
+    }
+
     fn finish_run(&mut self, loop_report: NestedRuntimeLoopReport) -> NestedRuntimeLifecycleReport {
         let loop_failed = loop_report.exit_reason == NestedRuntimeLoopExitReason::Error
             || !loop_report.validation_is_clean;
@@ -3989,6 +4032,139 @@ mod tests {
             }
         );
         assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Created);
+        assert!(state.validate().is_clean());
+    }
+
+    /// session batch 驱动：同一 session 内重复执行有界 pump 批次，停止请求终结 session。
+    ///
+    /// 第一批 `MaxIterationsReached` 后回到 Started；同一 session 可执行第二批；
+    /// 外部停止在第三批入口被观测为 `StopRequested`（0 iterations），随后经
+    /// Stopping 进入 Stopped；Stopped 后再调用报 transition error。
+    #[test]
+    fn runtime_orchestrator_session_batch_driver_serves_two_batches_and_external_stop() {
+        assert_runtime_dir();
+        let mut orchestrator =
+            NestedRuntimeOrchestrator::new(config("orchestrator-session-batch", 1));
+        let mut state = State::new();
+        orchestrator.start().expect("Created 必须允许 start");
+
+        let batch_one = orchestrator
+            .run_next_batch(&mut state)
+            .expect("Started 必须允许第一批次");
+        assert_eq!(
+            batch_one.exit_reason,
+            NestedRuntimeLoopExitReason::MaxIterationsReached
+        );
+        assert_eq!(batch_one.iterations_run, 1);
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Started);
+
+        let batch_two = orchestrator
+            .run_next_batch(&mut state)
+            .expect("同一 session 必须允许第二批次");
+        assert_eq!(
+            batch_two.exit_reason,
+            NestedRuntimeLoopExitReason::MaxIterationsReached
+        );
+        assert_eq!(batch_two.iterations_run, 1);
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Started);
+
+        orchestrator
+            .stop_handle()
+            .expect("Started 必须允许获取 stop handle")
+            .request_stop_and_wakeup();
+
+        let batch_three = orchestrator
+            .run_next_batch(&mut state)
+            .expect("停止批次必须返回报告而非 transition error");
+        assert_eq!(
+            batch_three.exit_reason,
+            NestedRuntimeLoopExitReason::StopRequested
+        );
+        assert_eq!(batch_three.iterations_run, 0);
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Stopped);
+
+        let error = orchestrator
+            .run_next_batch(&mut state)
+            .expect_err("Stopped 不得再执行 batch");
+        assert_eq!(
+            error,
+            NestedRuntimeOrchestratorError::InvalidTransition {
+                state: NestedRuntimeLifecycleState::Stopped,
+                operation: NestedRuntimeOrchestratorOperation::Run,
+            }
+        );
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Stopped);
+
+        // 已是 Stopped：stop() 只验证幂等，不承载本次停止语义。
+        let stop_report = orchestrator.stop(&state);
+        assert_eq!(
+            stop_report.previous_state,
+            NestedRuntimeLifecycleState::Stopped
+        );
+        assert_eq!(stop_report.state, NestedRuntimeLifecycleState::Stopped);
+        assert!(stop_report.shutdown_completed);
+        assert!(stop_report.validation_is_clean);
+        assert!(state.validate().is_clean());
+    }
+
+    /// Idle 批次同样回到 Started，session owner 保留。
+    #[test]
+    fn runtime_orchestrator_session_batch_returns_to_started_on_idle() {
+        assert_runtime_dir();
+        let mut batch_config = config("orchestrator-session-batch-idle", 5);
+        batch_config.loop_config.stop_when_idle = true;
+        let mut orchestrator = NestedRuntimeOrchestrator::new(batch_config);
+        let mut state = State::new();
+        orchestrator.start().expect("Created 必须允许 start");
+
+        let batch = orchestrator
+            .run_next_batch(&mut state)
+            .expect("Started 必须允许 idle 批次");
+        assert_eq!(batch.exit_reason, NestedRuntimeLoopExitReason::Idle);
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Started);
+
+        let rerun = orchestrator
+            .run_next_batch(&mut state)
+            .expect("Idle 后同一 session 必须允许再执行批次");
+        assert_eq!(rerun.exit_reason, NestedRuntimeLoopExitReason::Idle);
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Started);
+        assert!(state.validate().is_clean());
+    }
+
+    /// 未存活 session 不得执行 batch：Created 与 Stopped 均返回既有 transition error。
+    #[test]
+    fn runtime_orchestrator_session_batch_requires_live_session() {
+        let mut orchestrator =
+            NestedRuntimeOrchestrator::new(config("orchestrator-batch-guard", 1));
+        let mut state = State::new();
+
+        let error = orchestrator
+            .run_next_batch(&mut state)
+            .expect_err("Created 不得执行 batch");
+        assert_eq!(
+            error,
+            NestedRuntimeOrchestratorError::InvalidTransition {
+                state: NestedRuntimeLifecycleState::Created,
+                operation: NestedRuntimeOrchestratorOperation::Run,
+            }
+        );
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Created);
+
+        assert_runtime_dir();
+        orchestrator.start().expect("Created 必须允许 start");
+        let stop_report = orchestrator.stop(&state);
+        assert_eq!(stop_report.state, NestedRuntimeLifecycleState::Stopped);
+        let error = orchestrator
+            .run_next_batch(&mut state)
+            .expect_err("Stopped 不得执行 batch");
+        assert_eq!(
+            error,
+            NestedRuntimeOrchestratorError::InvalidTransition {
+                state: NestedRuntimeLifecycleState::Stopped,
+                operation: NestedRuntimeOrchestratorOperation::Run,
+            }
+        );
+        assert_eq!(orchestrator.state(), NestedRuntimeLifecycleState::Stopped);
         assert!(state.validate().is_clean());
     }
 

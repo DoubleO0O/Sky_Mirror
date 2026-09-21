@@ -125,6 +125,11 @@ Sky Mirror 的原始 .git 曾在跨机转移后丢失。现有仓库于 2026-06-
 - 56Q：在明确授权的 narrow tracer 中继续真实 external Wayland lifecycle。production client 创建 wl_surface -> xdg_surface -> xdg_toplevel，处理 initial configure/ack 与无 buffer commit；server handler 只记录 callback/identity observation 并发送 configure，coordinator 通过 active session -> Core client bridge 将 admission intent 入队。真实 xdg_toplevel destroy 由 live unmap owner 消费，Core window detach、registry tombstone 成立，同时验证 wl_surface 在 toplevel destroy 后仍存活，随后完成 surface destroy 与 socket cleanup。该证据是 bounded production fact，不等于 long-running compositor；buffer/import/texture/renderer/damage/frame done/input/DRM 仍明确未接入，真实 disconnect callback 的独立证明仍作为边界证据保留。
 - R2 SHM-first controlled proof：在 56Q production socket/lifecycle 之上，external client 提交带 damage 与 frame request 的 2×2 XRGB8888 WlBuffer。新增 coordinator 原子 admission owner，在资源仍位于 display FIFO 时验证 source session -> Core client、adapter surface/toplevel、ledger surface/window、live Core identity 与 exact commit token；未知、已死、销毁、交错、重复或迟到身份按单侧／双侧精确回收并留下 tombstone。进程主线程的唯一 Winit/EGL/GLES owner 完成真实 SHM import、metadata→texture dimensions/format cross-check、texture readback、texture draw、backbuffer/output-damage submit；回读红／绿／蓝／白像素与 client 图样一致。独立 completion gate 只在 presentation、identity、damage 与 callback 数量全部一致时发送一次 frame done。client read 与 write 均由独立 fd readiness、同一绝对 deadline 与固定 poll cap 驱动；无论 worker 成功、失败、超时或断连，runner 都先 drop server owner、join client、检查 socket，再返回结果，cleanup destroy request 同样有界 flush。它仍只是单 buffer 的 bounded controlled proof：未接入默认 main，不含长时 buffer replacement/release、surface-tree、完整 damage tracking、input、DRM/KMS、dmabuf 或多输出。
 
+### post-56Q 可靠性演进（未编号，不创建新阶段）
+
+- 已推送：单客户端断连 Core 级联（e2e2311）、双客户端 admission 共存（0282ea4）、A 断连后 B 存活并完成新 sync 隔离（3247a42）。前三者均为 bounded proof，不代表 ledger 清理或完整 compositor。
+- 随后新增：`NestedRuntimeOrchestrator::run_next_batch`（crate 内 seam，只允许从 Started 执行一批有界 pump；`MaxIterationsReached`／`Idle` 回 Started 并保留 owner，`StopRequested`／`Interrupted` 进 Stopped，Error 或 validation 脏进 Failed；`run()`／`stop()` 未变）。仍无 production caller，不得称为 long-running loop。
+
 ## 10. Codex 环境与恢复文档历史
 
 ### 10.1 旧环境规则

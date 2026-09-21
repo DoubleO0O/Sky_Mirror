@@ -34,7 +34,8 @@ MockRenderer、DummyRenderer、InputSimulator、source guard、回调计数、�
 - client 关闭可级联关闭其 surface 与 window；toplevel detach 可结束 window 而保留底层 surface；registry 保留 alive=false 的诊断 tombstone。
 - session JSON 可保存 workspace、slot、stack、focus 与下一个 window ID，并恢复为纯数据状态。
 - Linux 内部 production nested constructor 能依次创建 Display、初始化 wl_compositor、wl_shm 和 xdg_wm_base、绑定 Wayland socket、注册 calloop source，并接受／插入 client；wl_shm global 的存在不代表 buffer import 或 render 已发生。
-- Phase 56P/56Q 的有界外部客户端测试真实发现并 bind wl_compositor、wl_shm 与 xdg_wm_base；当前 narrow production path 还能创建 wl_surface、xdg_surface、xdg_toplevel，完成 initial configure/ack/commit，并经同一 session mapping admission 到 Core，再消费 toplevel unmap；本轮 `smithay-linux` 与 `all-features` 新鲜验证均已通过。
+- Phase 56P/56Q 的有界外部客户端测试真实发现并 bind wl_compositor、wl_shm 与 xdg_wm_base；当前 narrow production path 还能创建 wl_surface、xdg_surface、xdg_toplevel，完成 initial configure/ack/commit，并经同一 session mapping admission 到 Core，再消费 toplevel unmap；单客户端断连、双客户端共存、A 断连后 B 新 sync 隔离均已推送并通过 CI（均为 bounded proof）。
+- `NestedRuntimeOrchestrator` 新增 crate 内部 `run_next_batch` seam：只允许从 Started 执行一批有界 pump；`MaxIterationsReached`／`Idle` 后回到 Started 并保留 owner，`StopRequested`／`Interrupted` 后进入 Stopped，Error 或 validation 脏进入 Failed；现有 `run()`／`stop()` 语义未变。该能力只是 orchestrator 提供调用方驱动的重复有界批次 seam，尚无非测试 production 调用方。
 
 ### 3.2 仅受控证明或骨架
 
@@ -47,6 +48,7 @@ MockRenderer、DummyRenderer、InputSimulator、source guard、回调计数、�
 ### 3.3 尚未实现
 
 - main 启动 production nested session。
+- orchestrator batch seam 的非测试 production 调用方、long-running loop（`long_running_loop_available` 仍为 false）、持续渲染与输入接入。
 - production external XDG 的长时 create／map／unmap／destroy／disconnect 到 adapter、ledger、Core 的完整产品闭环（当前只有 bounded tracer 的 create/configure/admit/unmap 与独立真实 disconnect callback proof）。
 - 长时 owned WlBuffer 替换／release、surface-tree 合成、任意尺寸与变换、精确 per-surface damage tracking、持续帧调度及 production main 中的可见输出；当前 R2 只覆盖单个受控 SHM 首帧，成功 source buffer 保留到 output owner drop。
 - 真实 keyboard、pointer、touch 输入。
@@ -67,6 +69,7 @@ MockRenderer、DummyRenderer、InputSimulator、source guard、回调计数、�
 feature-gated Linux nested 路径：
 
     NestedRuntimeOrchestrator
+      -> run_next_batch（crate 内重复有界批次 seam，调用方驱动，尚无 production 调用方）
       -> NestedRuntimeLoop
         -> NestedRuntimeCoordinator
           -> NestedRealAcceptFlow
@@ -129,9 +132,9 @@ Wayland socket 测试必须使用短、存在且权限为 0700 的 XDG_RUNTIME_D
     cargo test --locked --all-features
     cargo clippy --locked --all-features --tests
 
-历史基线（本轮未重跑）：default 352 tests、smithay-probe 634 tests。
+历史基线（此前某轮）：default 352 tests、smithay-probe 634 tests。
 
-本轮 Ubuntu 新鲜结果：default 353、smithay-probe 635、smithay-linux 908、all-features 908 tests；default/probe 均为 0 failed、0 ignored，Linux/all-features 均为 907 passed、0 failed、1 ignored（该 ignored 项是 Winit 必须在进程主线程创建的 unit test，真实 main-thread controlled binary 已单独执行）。已完成相应 `cargo check --locked`、`cargo fmt --check`、`git diff --check` 与 `cargo clippy --locked --all-features --tests`；Clippy 以退出码 0 完成并报告 113 条既有非致命 warning，不把 warning 当作顺手清理授权。
+当前 batch seam 的新鲜本地验证结果：default 353 passed、smithay-probe 635 passed、smithay-linux 913 passed、0 failed、1 ignored（该 ignored 项仍是 Winit 必须在进程主线程创建的 unit test；controlled_winit test binary 为 0 tests）。all-features 本轮未重跑，不得引用旧 all-features 数字作为本轮结论（此前某轮 all-features 908 tests／907 passed／1 ignored、clippy 退出码 0 附 113 条既有非致命 warning 仍为历史记录）。
 
 CI 位于 .github/workflows/ci.yml，在 ubuntu-latest 安装 stable Rust 与 libxkbcommon-dev，创建短 runtime 目录，然后运行 fmt、default、probe 和 Linux check/test。CI 配置本身是独立自动化真值，不由本文替代。
 
@@ -141,11 +144,11 @@ CI 位于 .github/workflows/ci.yml，在 ubuntu-latest 安装 stable Rust 与 li
 
 ## 9. 当前阶段与风险
 
-最近完成能力阶段是 Phase 56Q 的 narrow production tracer；它建立在 Phase 56P 之上，但不等于 long-running compositor。当前状态以实时 Git、源码和新鲜 all-features 验证为准。
+最近完成能力阶段是 Phase 56Q 的 narrow production tracer；它建立在 Phase 56P 之上，但不等于 long-running compositor。当前状态以实时 Git、源码及与声明相匹配的新鲜验证为准。
 
 主要风险按优先级为：
 
-1. 用户路径断裂：main 与 production nested orchestrator 是两条未汇合路径。
+1. 用户路径断裂：main 与 production nested orchestrator 是两条未汇合路径；orchestrator 已有调用方驱动的重复有界批次 seam，但仍无非测试 production 调用方。
 2. production XDG lifecycle 仍不是长时 create／destroy／disconnect 完整产品闭环；当前只覆盖 bounded tracer 与独立 disconnect callback proof。
 3. R2 只证明受控单帧 nested SHM 可见链路；默认 main、长时渲染、buffer release 与输入仍未实现，尚无可投入使用的桌面。
 4. 多层 identity 与 owner 若处理不严会造成错绑、重复 cleanup 或幽灵窗口。
@@ -168,6 +171,8 @@ CI 位于 .github/workflows/ci.yml，在 ubuntu-latest 安装 stable Rust 与 li
 R1／Phase 56Q 与 R2 bounded controlled proof 已完成。R2 只授权并证明一个外部 XRGB8888 SHM 首帧：资源转移前执行 exact token/session/ledger/Core 原子校验，失败路径按 FIFO 精确回收并 tombstone；成功路径做 GLES import/readback/draw、Winit submit、output damage 与一次 gated frame done，最后 drop owner、join client 并清理 socket/SHM backing file。
 
 下一代码阶段若进入 R3 input、扩大 R2 为长时 renderer／buffer release，或接入默认 main，均必须分别明确批准 goal、精确 allowlist/denylist、正确 Red、最小 Green、timeout/watchdog、cleanup 与 destroy 语义；R2 审批不自动覆盖 input、DRM、dmabuf、多输出、公共 API 或相邻重构。
+
+新增的 `run_next_batch` seam 只允许后续调用方驱动重复有界批次，不改变现有 `run()`／`stop()`，不代表 long-running loop 已实现；main 接入、持续渲染与输入仍需分别审批，不创建新阶段编号。
 
 ## 12. 文档权威顺序
 
