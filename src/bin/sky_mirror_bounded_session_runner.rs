@@ -55,6 +55,8 @@ mod session_runner {
     const MAX_CONTROL_LINE_BYTES: usize = 128;
     /// step 模式开关参数。
     const STEP_ARG: &str = "--step-batches";
+    /// xdg admission 只读验证开关参数：只能与 step 模式组合。
+    const VERIFY_XDG_ARG: &str = "--verify-xdg-admission";
     /// Unix socket 路径（含 NUL 的 SUN_LEN）上限；按字节比较。
     const MAX_SOCKET_PATH_BYTES: usize = 108;
     /// 本次运行在独占子目录内的 socket 文件名。
@@ -227,6 +229,131 @@ mod session_runner {
         }
     }
 
+    /// 只读身份基线：在 `State::new()` 后、启动前保存的 alive 三元组。
+    ///
+    /// 现有 mock window 属于基线内容，不修改或删除；验证只认相对差分。
+    #[derive(Default)]
+    struct IdentityBaseline {
+        clients: Vec<u64>,
+        surfaces: Vec<u64>,
+        windows: Vec<u64>,
+    }
+
+    /// 从只读 State 快照当前全部 alive client/surface/window。
+    fn snapshot_alive_identities(state: &State) -> IdentityBaseline {
+        let mut clients: Vec<u64> = state
+            .clients
+            .records()
+            .iter()
+            .filter(|record| record.alive)
+            .map(|record| record.id)
+            .collect();
+        clients.sort_unstable();
+        let mut surfaces: Vec<u64> = state
+            .surfaces
+            .records()
+            .iter()
+            .filter(|record| record.alive)
+            .map(|record| record.id)
+            .collect();
+        surfaces.sort_unstable();
+        let mut windows: Vec<u64> = state
+            .registry
+            .records()
+            .iter()
+            .filter(|record| record.alive)
+            .map(|record| record.id)
+            .collect();
+        windows.sort_unstable();
+        IdentityBaseline {
+            clients,
+            surfaces,
+            windows,
+        }
+    }
+
+    /// verify 模式的 Core 证据：相对基线新增且归属相符的三元组。
+    struct AdmissionEvidence {
+        client: u64,
+        surface: u64,
+        window: u64,
+    }
+
+    /// 只读验证 xdg admission：相对基线恰好新增一个 alive client，其恰有一
+    /// 个新增 alive surface 关联一个新增 alive window，归属相符且 window 已
+    /// 进入 workspace，State 校验干净。
+    ///
+    /// 只读查询，不修改 State；动态 ID 来自查询结果，不硬编码，不数总数，
+    /// 不读日志文本。任何缺失、歧义、错误归属或 validation 失败均为 Err。
+    fn verify_xdg_admission(
+        state: &State,
+        baseline: &IdentityBaseline,
+        batch: usize,
+    ) -> RunnerResult<AdmissionEvidence> {
+        let mut new_clients: Vec<u64> = state
+            .clients
+            .records()
+            .iter()
+            .filter(|record| record.alive && !baseline.clients.contains(&record.id))
+            .map(|record| record.id)
+            .collect();
+        new_clients.sort_unstable();
+        let [client] = new_clients.as_slice() else {
+            return Err(format!(
+                "batch{batch} 后相对基线的新增 alive client 必须恰好一个: {new_clients:?}"
+            ));
+        };
+        let mut new_surfaces: Vec<u64> = state
+            .surfaces
+            .surfaces_for_client(*client)
+            .into_iter()
+            .filter(|surface| {
+                state.surfaces.is_alive(*surface) && !baseline.surfaces.contains(surface)
+            })
+            .collect();
+        new_surfaces.sort_unstable();
+        let [surface] = new_surfaces.as_slice() else {
+            return Err(format!(
+                "client {client} 的新增 alive surface 必须恰好一个: {new_surfaces:?}"
+            ));
+        };
+        let window = state
+            .surfaces
+            .window_for_surface(*surface)
+            .ok_or_else(|| format!("surface {surface} 必须关联 Core window"))?;
+        if baseline.windows.contains(&window) || !state.registry.is_alive(window) {
+            return Err(format!(
+                "surface {surface} 关联的 window 必须是新增且 alive: {window}"
+            ));
+        }
+        let surface_record = state
+            .surfaces
+            .get(*surface)
+            .ok_or_else(|| format!("surface {surface} 必须仍在 registry"))?;
+        if surface_record.client != Some(*client) || surface_record.window != Some(window) {
+            return Err(format!(
+                "surface {surface} 归属不符: client={:?} window={:?}",
+                surface_record.client, surface_record.window
+            ));
+        }
+        if !state
+            .compositor
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.window_ids().contains(&window))
+        {
+            return Err(format!("window {window} 必须已进入 workspace"));
+        }
+        if !state.validate().is_clean() {
+            return Err("admission 验证时 State 校验必须干净".to_owned());
+        }
+        Ok(AdmissionEvidence {
+            client: *client,
+            surface: *surface,
+            window,
+        })
+    }
+
     /// 批次执行标量：调用方据此决定计数或停止，不累积完整报告。
     struct BatchScalars {
         exit_reason: NestedRuntimeLoopExitReason,
@@ -268,11 +395,27 @@ mod session_runner {
     }
 
     pub(super) fn run() -> RunnerResult<()> {
-        // 参数在创建任何资源前解析：未知或重复参数直接非零退出。
-        let step_mode = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
-            [] => false,
-            [only] if only == STEP_ARG => true,
-            _ => return Err("未知或重复参数，仅支持 --step-batches".to_owned()),
+        // 参数在创建任何资源前解析：未知、重复或 verify 脱离 step 的组合直接非零退出。
+        let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
+        let (step_mode, verify_xdg) = match raw_args
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => (false, false),
+            [only] if *only == STEP_ARG => (true, false),
+            [first, second]
+                if (*first == STEP_ARG && *second == VERIFY_XDG_ARG)
+                    || (*first == VERIFY_XDG_ARG && *second == STEP_ARG) =>
+            {
+                (true, true)
+            }
+            _ => {
+                return Err(
+                    "未知或重复参数，仅支持 --step-batches [--verify-xdg-admission]".to_owned(),
+                );
+            }
         };
 
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
@@ -305,6 +448,7 @@ mod session_runner {
 
         let mut orchestrator = None;
         let mut state: Option<State> = None;
+        let mut baseline = IdentityBaseline::default();
         let mut stop_consumed = false;
         let mut batches = 0usize;
         let mut pumps = 0usize;
@@ -321,6 +465,10 @@ mod session_runner {
                     },
                 });
             let resource_state = State::new();
+            // 只读身份基线在 State::new() 后、启动前保存；mock window 属于基线。
+            if verify_xdg {
+                baseline = snapshot_alive_identities(&resource_state);
+            }
             match resource_orchestrator.start() {
                 Err(error) => {
                     // 先释放 owner，再清理由本次可能已绑定的已知文件与自建目录。
@@ -436,6 +584,29 @@ mod session_runner {
                         },
                     }
                 }
+            }
+        }
+
+        // verify 模式在 batch3 后、owner 释放前只读确认 admission；
+        // 成功才输出 Core 证据行，失败保留非零并走正常收尾。
+        if failure.is_none() && verify_xdg {
+            match state.as_ref() {
+                None => {
+                    failure = Some("verify 阶段 State owner 缺失".to_owned());
+                }
+                Some(state_ref) => match verify_xdg_admission(state_ref, &baseline, batches) {
+                    Err(error) => {
+                        failure = Some(error);
+                    }
+                    Ok(evidence) => {
+                        if let Err(error) = write_stdout_line(&format!(
+                            "xdg admission verified: batch={batches} client={} surface={} window={} alive=client/surface/window ownership=surface->client+window workspace=referenced validation=clean",
+                            evidence.client, evidence.surface, evidence.window
+                        )) {
+                            failure = Some(format!("输出 Core 证据行失败: {error}"));
+                        }
+                    }
+                },
             }
         }
 
