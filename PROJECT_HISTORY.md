@@ -129,7 +129,8 @@ Sky Mirror 的原始 .git 曾在跨机转移后丢失。现有仓库于 2026-06-
 
 - 已推送：单客户端断连 Core 级联（e2e2311）、双客户端 admission 共存（0282ea4）、A 断连后 B 存活并完成新 sync 隔离（3247a42）。前三者均为 bounded proof，不代表 ledger 清理或完整 compositor。
 - 随后新增：`NestedRuntimeOrchestrator::run_next_batch`（crate 内 seam，只允许从 Started 执行一批有界 pump；`MaxIterationsReached`／`Idle` 回 Started 并保留 owner，`StopRequested`／`Interrupted` 进 Stopped，Error 或 validation 脏进 Failed；`run()`／`stop()` 未变）。
-- 随后新增未提交候选 `src/bin/sky_mirror_bounded_session_runner.rs`：首个非测试调用方，最多三个正常批次或批间八秒预算耗尽后停止（八秒非硬超时），socket/lock 放在 XDG 下独占私有 0700 子目录并只在该目录内清理。无客户端真实进程运行已验证启动、跨批次、停止与释放；外部客户端跨批次存活、长期运行、Core/ledger 完整清理、渲染与输入未验收，输出失败/启动中途失败/owner 清理故障仅源码检查。默认 main 仍未接入 nested，不得称为 long-running loop 或已发布能力。
+- 随后新增未提交候选 `src/bin/sky_mirror_bounded_session_runner.rs`：首个非测试调用方，默认最多三个正常批次或批间八秒预算耗尽后停止（八秒非硬超时），`--step-batches` 受控模式每批等待对应 `run N`（每门十秒，读取过程按 128 字节含行终止符限长）；socket/lock 放在 XDG 下独占私有 0700 子目录并只在该目录内清理。无客户端真实进程运行已验证启动、跨批次、停止与释放。
+- 随后新增未提交候选 `src/bin/sky_mirror_session_probe_client.rs`：同一连接完成 registry 及两次独立标识 sync，不建 surface/toplevel；已验证 sync1 done→run 2→done2→continue→batch3 回包的因果链，仅证明跨越完整服务端批次后仍能响应新 sync。控制入口固定容量通道（容量为 1）、128 字节含终止符过程限长已验证；门控超时、错误编号、输出故障未验证。默认 main 仍未接入 nested，不得称为 long-running loop 或已发布能力。
 
 ## 10. Codex 环境与恢复文档历史
 

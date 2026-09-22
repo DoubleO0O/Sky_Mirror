@@ -22,6 +22,8 @@ mod session_runner {
         io::Write,
         os::unix::{ffi::OsStrExt, fs::DirBuilderExt},
         path::{Path, PathBuf},
+        sync::mpsc,
+        thread,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
@@ -47,6 +49,12 @@ mod session_runner {
     const SESSION_BUDGET: Duration = Duration::from_secs(8);
     /// 独占子目录名碰撞时的有限换名重试上限。
     const MAX_DIR_RETRIES: u32 = 16;
+    /// step 模式下每个控制门的最大等待时长；默认模式八秒预算不受影响。
+    const GATE_DEADLINE: Duration = Duration::from_secs(10);
+    /// 控制行长度上限（字节，含行终止符）；`run N` 类短命令完全兼容。
+    const MAX_CONTROL_LINE_BYTES: usize = 128;
+    /// step 模式开关参数。
+    const STEP_ARG: &str = "--step-batches";
     /// Unix socket 路径（含 NUL 的 SUN_LEN）上限；按字节比较。
     const MAX_SOCKET_PATH_BYTES: usize = 108;
     /// 本次运行在独占子目录内的 socket 文件名。
@@ -128,7 +136,145 @@ mod session_runner {
         handle.flush()
     }
 
+    /// 用不 panic 的写入方式输出任意协议行并立即 flush。
+    fn write_stdout_line(line: &str) -> std::io::Result<()> {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        writeln!(handle, "{line}")?;
+        handle.flush()
+    }
+
+    /// 进程内唯一的 stdin 控制行读取器。
+    ///
+    /// 读取线程不持有 session、socket 或 Core owner，只搬运文本行；`recv_timeout`
+    /// 不能取消已阻塞的读取，超时后主流程直接走资源收尾并退出进程，该线程随
+    /// 进程退出回收，不做无条件 join。
+    struct GateReader {
+        receiver: mpsc::Receiver<RunnerResult<String>>,
+    }
+
+    /// 按字节有界读取一行控制输入，最多读取上限字节。
+    ///
+    /// 先 push 再判长：累计字节（含终止符）超过上限立即报错，因此内容至多
+    /// 127 字节加换行；正常 `run N` 命令远小于上限，不受影响。
+    fn read_bounded_line() -> RunnerResult<String> {
+        use std::io::Read as _;
+
+        let stdin = std::io::stdin();
+        let mut handle = stdin.lock();
+        let mut buf = Vec::with_capacity(MAX_CONTROL_LINE_BYTES + 1);
+        let mut byte = [0u8; 1];
+        loop {
+            match handle.read(&mut byte) {
+                Ok(0) => {
+                    if buf.is_empty() {
+                        return Err("控制 stdin 遇到 EOF".to_owned());
+                    }
+                    break;
+                }
+                Ok(_) => {
+                    buf.push(byte[0]);
+                    if buf.len() > MAX_CONTROL_LINE_BYTES {
+                        return Err("控制行超过长度上限".to_owned());
+                    }
+                    if byte[0] == b'\n' {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(format!("控制 stdin 读取失败: {error}")),
+            }
+        }
+        String::from_utf8(buf)
+            .map(|text| text.trim_end_matches(['\r', '\n']).to_owned())
+            .map_err(|_| "控制行非 UTF-8".to_owned())
+    }
+
+    /// 启动唯一的门控读取线程，复用于全部 step 门控。
+    ///
+    /// 使用固定容量同步通道，不做无界缓冲；线程退出时通道断开，主流程据此收尾。
+    fn spawn_gate_reader() -> GateReader {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            loop {
+                let result = read_bounded_line();
+                let failed = result.is_err();
+                if sender.send(result).is_err() {
+                    break;
+                }
+                if failed {
+                    break;
+                }
+            }
+        });
+        GateReader { receiver }
+    }
+
+    /// 有界等待精确控制命令 `run {batch}`；EOF、超时、错文均为失败。
+    fn await_gate_command(gate: &GateReader, batch: usize) -> RunnerResult<()> {
+        let expected = format!("run {batch}");
+        match gate.receiver.recv_timeout(GATE_DEADLINE) {
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("等待 batch {batch} 控制命令超时")),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err("控制读取线程已结束".to_owned()),
+            Ok(Err(error)) => Err(error),
+            Ok(Ok(line)) => {
+                if line == expected {
+                    Ok(())
+                } else {
+                    Err(format!("控制命令不匹配: 期望 {expected:?} 实际 {line:?}"))
+                }
+            }
+        }
+    }
+
+    /// 批次执行标量：调用方据此决定计数或停止，不累积完整报告。
+    struct BatchScalars {
+        exit_reason: NestedRuntimeLoopExitReason,
+        iterations: usize,
+        end_state: NestedRuntimeLifecycleState,
+    }
+
+    /// 执行一批并只提取必要标量；方法 Err、Error 退出、报告错误或 validation
+    /// 脏均为失败。调用方按终态决定继续、计数或收尾。
+    fn run_one_batch(
+        orchestrator: &mut NestedRuntimeOrchestrator,
+        state: &mut State,
+        pumps: &mut usize,
+    ) -> RunnerResult<BatchScalars> {
+        match orchestrator.run_next_batch(state) {
+            Err(error) => Err(format!("batch 方法返回 Err: {error:?}")),
+            Ok(report) => {
+                *pumps += report.iterations_run;
+                let scalars = BatchScalars {
+                    exit_reason: report.exit_reason,
+                    iterations: report.iterations_run,
+                    end_state: orchestrator.state(),
+                };
+                let report_errors = !report.errors.is_empty();
+                let report_clean = report.validation_is_clean;
+                drop(report);
+                if scalars.exit_reason == NestedRuntimeLoopExitReason::Error
+                    || report_errors
+                    || !report_clean
+                {
+                    return Err(format!(
+                        "batch 报告失败: exit={:?} errors={} clean={}",
+                        scalars.exit_reason, report_errors, report_clean
+                    ));
+                }
+                Ok(scalars)
+            }
+        }
+    }
+
     pub(super) fn run() -> RunnerResult<()> {
+        // 参数在创建任何资源前解析：未知或重复参数直接非零退出。
+        let step_mode = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+            [] => false,
+            [only] if only == STEP_ARG => true,
+            _ => return Err("未知或重复参数，仅支持 --step-batches".to_owned()),
+        };
+
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .ok_or_else(|| "需要 XDG_RUNTIME_DIR".to_owned())?;
@@ -206,38 +352,76 @@ mod session_runner {
 
         let started_at = Instant::now();
         if let (Some(orchestrator), Some(state)) = (orchestrator.as_mut(), state.as_mut()) {
-            while failure.is_none()
-                && batches < MAX_NORMAL_BATCHES
-                && started_at.elapsed() < SESSION_BUDGET
-            {
-                match orchestrator.run_next_batch(state) {
-                    Err(error) => {
-                        failure = Some(format!("batch 方法返回 Err: {error:?}"));
+            if step_mode {
+                // step 模式：八秒批间预算暂停，每门改用独立十秒等待预算；
+                // 批次执行参数不变，预算语义不中断执行中的 pump。
+                let gate = spawn_gate_reader();
+                for batch_number in 1..=MAX_NORMAL_BATCHES {
+                    if failure.is_some() {
                         break;
                     }
-                    Ok(report) => {
-                        pumps += report.iterations_run;
-                        let exit_reason = report.exit_reason;
-                        let report_errors = !report.errors.is_empty();
-                        let report_clean = report.validation_is_clean;
-                        drop(report);
-                        if exit_reason == NestedRuntimeLoopExitReason::Error
-                            || report_errors
-                            || !report_clean
-                        {
-                            failure = Some(format!(
-                                "batch 报告失败: exit={exit_reason:?} errors={report_errors} clean={report_clean}"
-                            ));
+                    if let Err(error) = write_stdout_line(&format!("batch ready: n={batch_number}"))
+                    {
+                        failure = Some(format!("输出 batch ready 失败: {error}"));
+                        break;
+                    }
+                    if let Err(error) = await_gate_command(&gate, batch_number) {
+                        failure = Some(error);
+                        break;
+                    }
+                    match run_one_batch(orchestrator, state, &mut pumps) {
+                        Err(error) => {
+                            failure = Some(error);
                             break;
                         }
-                        match orchestrator.state() {
+                        Ok(scalars) => {
+                            if let Err(error) = write_stdout_line(&format!(
+                                "batch done: n={batch_number} exit={:?} pumps={}",
+                                scalars.exit_reason, scalars.iterations
+                            )) {
+                                failure = Some(format!("输出 batch done 失败: {error}"));
+                                break;
+                            }
+                            match scalars.end_state {
+                                NestedRuntimeLifecycleState::Started => {
+                                    batches += 1;
+                                }
+                                NestedRuntimeLifecycleState::Stopped => {
+                                    stop_consumed = matches!(
+                                        scalars.exit_reason,
+                                        NestedRuntimeLoopExitReason::StopRequested
+                                            | NestedRuntimeLoopExitReason::Interrupted
+                                    );
+                                    break;
+                                }
+                                other => {
+                                    failure = Some(format!(
+                                        "batch 正常退出但 session 状态非 Started/Stopped: {other:?}"
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                while failure.is_none()
+                    && batches < MAX_NORMAL_BATCHES
+                    && started_at.elapsed() < SESSION_BUDGET
+                {
+                    match run_one_batch(orchestrator, state, &mut pumps) {
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                        Ok(scalars) => match scalars.end_state {
                             NestedRuntimeLifecycleState::Started => {
                                 batches += 1;
                             }
                             NestedRuntimeLifecycleState::Stopped => {
                                 // 普通批次已消费停止或中断并自行终结：直接收尾，不再调用 batch。
                                 stop_consumed = matches!(
-                                    exit_reason,
+                                    scalars.exit_reason,
                                     NestedRuntimeLoopExitReason::StopRequested
                                         | NestedRuntimeLoopExitReason::Interrupted
                                 );
@@ -249,7 +433,7 @@ mod session_runner {
                                 ));
                                 break;
                             }
-                        }
+                        },
                     }
                 }
             }

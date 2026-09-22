@@ -36,7 +36,8 @@ MockRenderer、DummyRenderer、InputSimulator、source guard、回调计数、�
 - Linux 内部 production nested constructor 能依次创建 Display、初始化 wl_compositor、wl_shm 和 xdg_wm_base、绑定 Wayland socket、注册 calloop source，并接受／插入 client；wl_shm global 的存在不代表 buffer import 或 render 已发生。
 - Phase 56P/56Q 的有界外部客户端测试真实发现并 bind wl_compositor、wl_shm 与 xdg_wm_base；当前 narrow production path 还能创建 wl_surface、xdg_surface、xdg_toplevel，完成 initial configure/ack/commit，并经同一 session mapping admission 到 Core，再消费 toplevel unmap；单客户端断连、双客户端共存、A 断连后 B 新 sync 隔离均已推送并通过 CI（均为 bounded proof）。
 - `NestedRuntimeOrchestrator` 新增 crate 内部 `run_next_batch` seam：只允许从 Started 执行一批有界 pump；`MaxIterationsReached`／`Idle` 后回到 Started 并保留 owner，`StopRequested`／`Interrupted` 后进入 Stopped，Error 或 validation 脏进入 Failed；现有 `run()`／`stop()` 语义未变。
-- 独立非测试 `src/bin/sky_mirror_bounded_session_runner.rs`（未提交候选）复用该 seam：最多三个正常批次，或批间观察到八秒预算耗尽后经 stop handle 停止；八秒只是批间检查预算，不是能中断当前批次的硬超时。已在无客户端真实进程运行中验证启动、跨批次、停止与 socket/lock/自建子目录释放；socket/lock 隔离在 XDG 下的独占私有 0700 子目录内，不删除外层 XDG。外部客户端跨批次存活、长期运行、Core/ledger 完整清理、渲染与输入均未由该 runner 验收；输出失败、启动中途失败与 owner 清理故障目前仅源码检查，无故障注入证据。默认 main 仍未接入 nested。
+- 独立非测试 `src/bin/sky_mirror_bounded_session_runner.rs`（未提交候选）复用该 seam。默认模式保持原有行为：最多三个正常批次，或批间观察到八秒预算耗尽后经 stop handle 停止；八秒只是批间检查预算，不是能中断当前批次的硬超时。新增 `--step-batches` 受控模式：每批前输出 `batch ready: n=N` 并有界等待精确命令 `run N`（单例 reader 线程＋固定容量同步通道，每门十秒等待预算，读取过程按 128 字节含行终止符限长），停止消费批次不设门；八秒预算不用于 step 模式。socket/lock 隔离在 XDG 下的独占私有 0700 子目录内，不删除外层 XDG。
+- 独立非测试 `src/bin/sky_mirror_session_probe_client.rs`（未提交候选）：同一连接完成 registry 请求及两次带独立标识的 sync，不创建 surface/toplevel。已验证因果链：收到 sync1 done 后才发 run 2，收到 done2 后才发 continue，第二次 sync 在 batch3 得到回包；仅证明同一外部客户端连接跨越完整服务端批次后仍能响应新 sync。两控制入口均用固定容量同步通道（容量为 1），输入上限 128 字节含行终止符且在读取过程中限长；已验证 EOF、超长无换行输入、128 字节内容加换行的拒绝与清理。reader 线程的阻塞读取不可由 `recv_timeout` 取消，主流程超时后收尾并退出进程，线程随进程退出回收（不宣称已 join）。门控超时、错误编号、输出故障等负向场景仍未验证。默认 main 仍未接入 nested。
 
 ### 3.2 仅受控证明或骨架
 
@@ -70,7 +71,7 @@ MockRenderer、DummyRenderer、InputSimulator、source guard、回调计数、�
 feature-gated Linux nested 路径：
 
     NestedRuntimeOrchestrator
-      -> run_next_batch（crate 内重复有界批次 seam；由独立 bounded_session_runner 调用，未提交候选）
+      -> run_next_batch（crate 内重复有界批次 seam；由独立 bounded_session_runner 调用，另有 session_probe_client 独立验收，未提交候选）
       -> NestedRuntimeLoop
         -> NestedRuntimeCoordinator
           -> NestedRealAcceptFlow
@@ -135,7 +136,7 @@ Wayland socket 测试必须使用短、存在且权限为 0700 的 XDG_RUNTIME_D
 
 历史基线（此前某轮）：default 352 tests、smithay-probe 634 tests。
 
-bounded_session_runner 收尾轮的新鲜本地验证结果：default 353 passed、smithay-probe 635 passed、smithay-linux 913 passed、0 failed、1 ignored（该 ignored 项仍是 Winit 必须在进程主线程创建的 unit test；controlled_winit 与 bounded_session_runner 两个 test binary 均为 0 tests，runner 的 0 tests 不算运行验收，其运行验收是真实进程执行）。all-features 本轮未重跑，不得引用旧 all-features 数字作为本轮结论（此前某轮 all-features 908 tests／907 passed／1 ignored、clippy 退出码 0 附 113 条既有非致命 warning 仍为历史记录）。
+跨批次验收轮的新鲜本地验证结果：default 353 passed、smithay-probe 635 passed、smithay-linux 913 passed、0 failed、1 ignored（该 ignored 项仍是 Winit 必须在进程主线程创建的 unit test；controlled_winit、bounded_session_runner、session_probe_client 三个 test binary 均为 0 tests，0 tests 不是进程验收，进程验收是真实进程执行）。all-features 本轮未重跑，不得引用旧 all-features 数字作为本轮结论（此前某轮 all-features 908 tests／907 passed／1 ignored、clippy 退出码 0 附 113 条既有非致命 warning 仍为历史记录）。当前候选尚未提交、推送或取得对应 CI。
 
 CI 位于 .github/workflows/ci.yml，在 ubuntu-latest 安装 stable Rust 与 libxkbcommon-dev，创建短 runtime 目录，然后运行 fmt、default、probe 和 Linux check/test。CI 配置本身是独立自动化真值，不由本文替代。
 
