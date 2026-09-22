@@ -57,6 +57,10 @@ mod session_runner {
     const STEP_ARG: &str = "--step-batches";
     /// xdg admission 只读验证开关参数：只能与 step 模式组合。
     const VERIFY_XDG_ARG: &str = "--verify-xdg-admission";
+    /// xdg 断连只读验证开关参数：只能与 step 模式组合，且与 admission 验证互斥。
+    const VERIFY_XDG_DISCONNECT_ARG: &str = "--verify-xdg-disconnect";
+    /// 断连验证模式专属的第四个正常批次编号。
+    const DISCONNECT_BATCH_NUMBER: usize = 4;
     /// Unix socket 路径（含 NUL 的 SUN_LEN）上限；按字节比较。
     const MAX_SOCKET_PATH_BYTES: usize = 108;
     /// 本次运行在独占子目录内的 socket 文件名。
@@ -229,17 +233,20 @@ mod session_runner {
         }
     }
 
-    /// 只读身份基线：在 `State::new()` 后、启动前保存的 alive 三元组。
+    /// 只读身份基线：在 `State::new()` 后、启动前保存的 alive 三元组与
+    /// workspace 归属（按 workspace ID 排序后的 window ID 列表）。
     ///
-    /// 现有 mock window 属于基线内容，不修改或删除；验证只认相对差分。
+    /// 现有 mock window 属于基线内容，不修改或删除；验证只认相对差分与
+    /// 基线归属是否保持。
     #[derive(Default)]
     struct IdentityBaseline {
         clients: Vec<u64>,
         surfaces: Vec<u64>,
         windows: Vec<u64>,
+        workspace_windows: Vec<(u32, Vec<u64>)>,
     }
 
-    /// 从只读 State 快照当前全部 alive client/surface/window。
+    /// 从只读 State 快照当前全部 alive client/surface/window 及 workspace 归属。
     fn snapshot_alive_identities(state: &State) -> IdentityBaseline {
         let mut clients: Vec<u64> = state
             .clients
@@ -265,14 +272,27 @@ mod session_runner {
             .map(|record| record.id)
             .collect();
         windows.sort_unstable();
+        let mut workspace_windows: Vec<(u32, Vec<u64>)> = state
+            .compositor
+            .workspaces
+            .iter()
+            .map(|workspace| {
+                let mut ids = workspace.window_ids();
+                ids.sort_unstable();
+                (workspace.id, ids)
+            })
+            .collect();
+        workspace_windows.sort_by_key(|(id, _)| *id);
         IdentityBaseline {
             clients,
             surfaces,
             windows,
+            workspace_windows,
         }
     }
 
     /// verify 模式的 Core 证据：相对基线新增且归属相符的三元组。
+    #[derive(Debug, Clone, Copy)]
     struct AdmissionEvidence {
         client: u64,
         surface: u64,
@@ -354,6 +374,91 @@ mod session_runner {
         })
     }
 
+    /// 只读验证断连结果：使用 admission 阶段保存的同一组 ID，确认三类记录
+    /// 仍存在（tombstone 未被误删）、alive=false、surface 的 client 归属保持、
+    /// window 不再被任何 workspace 的 slot/stack 引用、启动基线窗口与归属
+    /// 保持、State 校验干净。
+    ///
+    /// 不修改 State；不做“drop 旧 session 后新建空 State”式伪验证。
+    fn verify_xdg_disconnect(
+        state: &State,
+        baseline: &IdentityBaseline,
+        evidence: &AdmissionEvidence,
+        batch: usize,
+    ) -> RunnerResult<()> {
+        let client_record = state
+            .clients
+            .get(evidence.client)
+            .ok_or_else(|| format!("batch{batch} 后 client 记录不得被删除"))?;
+        if client_record.alive {
+            return Err(format!(
+                "batch{batch} 后 client {} 必须已关闭（仍 alive）",
+                evidence.client
+            ));
+        }
+        let surface_record = state
+            .surfaces
+            .get(evidence.surface)
+            .ok_or_else(|| format!("batch{batch} 后 surface 记录不得被删除"))?;
+        if surface_record.alive {
+            return Err(format!(
+                "batch{batch} 后 surface {} 必须已关闭（仍 alive）",
+                evidence.surface
+            ));
+        }
+        if surface_record.client != Some(evidence.client) {
+            return Err(format!(
+                "batch{batch} 后 surface {} 的 client 归属必须保持为 {}，实际 {:?}",
+                evidence.surface, evidence.client, surface_record.client
+            ));
+        }
+        let window_record = state
+            .registry
+            .get(evidence.window)
+            .ok_or_else(|| format!("batch{batch} 后 window 记录不得被删除"))?;
+        if window_record.alive {
+            return Err(format!(
+                "batch{batch} 后 window {} 必须已关闭（仍 alive）",
+                evidence.window
+            ));
+        }
+        if state
+            .compositor
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.window_ids().contains(&evidence.window))
+        {
+            return Err(format!(
+                "batch{batch} 后 window {} 不得残留于任何 workspace 的 slot 或 stack",
+                evidence.window
+            ));
+        }
+        for window in &baseline.windows {
+            if !state.registry.is_alive(*window) {
+                return Err(format!("启动基线 window {window} 必须仍存活"));
+            }
+        }
+        for (workspace_id, expected) in &baseline.workspace_windows {
+            let mut actual: Vec<u64> = state
+                .compositor
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == *workspace_id)
+                .map(|workspace| workspace.window_ids())
+                .unwrap_or_default();
+            actual.sort_unstable();
+            if &actual != expected {
+                return Err(format!(
+                    "workspace {workspace_id} 的基线归属必须保持: 期望 {expected:?} 实际 {actual:?}"
+                ));
+            }
+        }
+        if !state.validate().is_clean() {
+            return Err("断连验证时 State 校验必须干净".to_owned());
+        }
+        Ok(())
+    }
+
     /// 批次执行标量：调用方据此决定计数或停止，不累积完整报告。
     struct BatchScalars {
         exit_reason: NestedRuntimeLoopExitReason,
@@ -395,25 +500,33 @@ mod session_runner {
     }
 
     pub(super) fn run() -> RunnerResult<()> {
-        // 参数在创建任何资源前解析：未知、重复或 verify 脱离 step 的组合直接非零退出。
+        // 参数在创建任何资源前解析：未知、重复、verify 脱离 step 或两个 verify
+        // 互斥参数同时出现的组合直接非零退出。
         let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
-        let (step_mode, verify_xdg) = match raw_args
+        let (step_mode, verify_xdg, verify_disconnect) = match raw_args
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>()
             .as_slice()
         {
-            [] => (false, false),
-            [only] if *only == STEP_ARG => (true, false),
+            [] => (false, false, false),
+            [only] if *only == STEP_ARG => (true, false, false),
             [first, second]
                 if (*first == STEP_ARG && *second == VERIFY_XDG_ARG)
                     || (*first == VERIFY_XDG_ARG && *second == STEP_ARG) =>
             {
-                (true, true)
+                (true, true, false)
+            }
+            [first, second]
+                if (*first == STEP_ARG && *second == VERIFY_XDG_DISCONNECT_ARG)
+                    || (*first == VERIFY_XDG_DISCONNECT_ARG && *second == STEP_ARG) =>
+            {
+                (true, false, true)
             }
             _ => {
                 return Err(
-                    "未知或重复参数，仅支持 --step-batches [--verify-xdg-admission]".to_owned(),
+                    "未知、重复或互斥参数，仅支持 --step-batches 与 --verify-xdg-admission／--verify-xdg-disconnect 二选一"
+                        .to_owned(),
                 );
             }
         };
@@ -466,7 +579,7 @@ mod session_runner {
                 });
             let resource_state = State::new();
             // 只读身份基线在 State::new() 后、启动前保存；mock window 属于基线。
-            if verify_xdg {
+            if verify_xdg || verify_disconnect {
                 baseline = snapshot_alive_identities(&resource_state);
             }
             match resource_orchestrator.start() {
@@ -498,12 +611,19 @@ mod session_runner {
             state = Some(resource_state);
         }
 
+        // step 门控读取器在批次循环与断连第四批之间保持存活；非 step 模式不创建。
+        let gate = if step_mode {
+            Some(spawn_gate_reader())
+        } else {
+            None
+        };
+
         let started_at = Instant::now();
         if let (Some(orchestrator), Some(state)) = (orchestrator.as_mut(), state.as_mut()) {
             if step_mode {
                 // step 模式：八秒批间预算暂停，每门改用独立十秒等待预算；
                 // 批次执行参数不变，预算语义不中断执行中的 pump。
-                let gate = spawn_gate_reader();
+                let gate_reader = gate.as_ref().expect("step 模式必须持有门控读取器");
                 for batch_number in 1..=MAX_NORMAL_BATCHES {
                     if failure.is_some() {
                         break;
@@ -513,7 +633,7 @@ mod session_runner {
                         failure = Some(format!("输出 batch ready 失败: {error}"));
                         break;
                     }
-                    if let Err(error) = await_gate_command(&gate, batch_number) {
+                    if let Err(error) = await_gate_command(gate_reader, batch_number) {
                         failure = Some(error);
                         break;
                     }
@@ -589,7 +709,8 @@ mod session_runner {
 
         // verify 模式在 batch3 后、owner 释放前只读确认 admission；
         // 成功才输出 Core 证据行，失败保留非零并走正常收尾。
-        if failure.is_none() && verify_xdg {
+        let mut admission_evidence: Option<AdmissionEvidence> = None;
+        if failure.is_none() && (verify_xdg || verify_disconnect) {
             match state.as_ref() {
                 None => {
                     failure = Some("verify 阶段 State owner 缺失".to_owned());
@@ -599,12 +720,89 @@ mod session_runner {
                         failure = Some(error);
                     }
                     Ok(evidence) => {
+                        admission_evidence = Some(evidence);
                         if let Err(error) = write_stdout_line(&format!(
                             "xdg admission verified: batch={batches} client={} surface={} window={} alive=client/surface/window ownership=surface->client+window workspace=referenced validation=clean",
                             evidence.client, evidence.surface, evidence.window
                         )) {
                             failure = Some(format!("输出 Core 证据行失败: {error}"));
                         }
+                    }
+                },
+            }
+        }
+
+        // 断连模式：admission 成功后进入第四批，等待 harness 确认客户端已退出
+        // 后才放行；第四批必须实际执行 pump，随后用同一组 ID 只读验证断连结果。
+        if failure.is_none() && verify_disconnect {
+            match admission_evidence {
+                None => {
+                    failure = Some("断连验证缺少 admission 前置证据".to_owned());
+                }
+                Some(evidence) => match (orchestrator.as_mut(), state.as_mut(), gate.as_ref()) {
+                    (Some(orchestrator), Some(state), Some(gate_reader)) => {
+                        if let Err(error) =
+                            write_stdout_line(&format!("batch ready: n={DISCONNECT_BATCH_NUMBER}"))
+                        {
+                            failure = Some(format!("输出 batch ready 失败: {error}"));
+                        } else if let Err(error) =
+                            await_gate_command(gate_reader, DISCONNECT_BATCH_NUMBER)
+                        {
+                            failure = Some(error);
+                        } else {
+                            match run_one_batch(orchestrator, state, &mut pumps) {
+                                Err(error) => {
+                                    failure = Some(error);
+                                }
+                                Ok(scalars) => {
+                                    let exit_reason = scalars.exit_reason;
+                                    let iterations = scalars.iterations;
+                                    let end_state = scalars.end_state;
+                                    if let Err(error) = write_stdout_line(&format!(
+                                        "batch done: n={DISCONNECT_BATCH_NUMBER} exit={exit_reason:?} pumps={iterations}"
+                                    )) {
+                                        failure = Some(format!("输出 batch done 失败: {error}"));
+                                    } else if iterations == 0 {
+                                        failure = Some(
+                                                "第四批必须实际执行 pump，不能是 0 iteration 的停止消费批次"
+                                                    .to_owned(),
+                                            );
+                                    } else if end_state != NestedRuntimeLifecycleState::Started {
+                                        failure = Some(format!(
+                                            "第四批正常退出后 session 状态必须为 Started: {end_state:?}"
+                                        ));
+                                    } else {
+                                        // 第四批已实际执行且正常退出：按前三批语义计入已执行批次。
+                                        batches += 1;
+                                        match verify_xdg_disconnect(
+                                            state,
+                                            &baseline,
+                                            &evidence,
+                                            DISCONNECT_BATCH_NUMBER,
+                                        ) {
+                                            Err(error) => {
+                                                failure = Some(error);
+                                            }
+                                            Ok(()) => {
+                                                if let Err(error) = write_stdout_line(&format!(
+                                                    "xdg disconnect verified: batch={DISCONNECT_BATCH_NUMBER} client={} surface={} window={} tombstones=client+surface+window alive=false surface_client_preserved=true unreferenced=true baseline_preserved=true validation=clean",
+                                                    evidence.client,
+                                                    evidence.surface,
+                                                    evidence.window
+                                                )) {
+                                                    failure = Some(format!(
+                                                        "输出断连证据行失败: {error}"
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        failure = Some("断连第四批缺少 owner 或门控".to_owned());
                     }
                 },
             }
