@@ -59,8 +59,14 @@ mod session_runner {
     const VERIFY_XDG_ARG: &str = "--verify-xdg-admission";
     /// xdg 断连只读验证开关参数：只能与 step 模式组合，且与 admission 验证互斥。
     const VERIFY_XDG_DISCONNECT_ARG: &str = "--verify-xdg-disconnect";
+    /// xdg 重新接入只读验证开关参数：只能与 step 模式组合，与其他 verify 互斥。
+    const VERIFY_XDG_READMIT_ARG: &str = "--verify-xdg-readmit";
     /// 断连验证模式专属的第四个正常批次编号。
     const DISCONNECT_BATCH_NUMBER: usize = 4;
+    /// readmit 模式中 B admission 的首个正常批次编号。
+    const READMIT_FIRST_BATCH: usize = 5;
+    /// readmit 模式中 B admission 的最后一个正常批次编号。
+    const READMIT_LAST_BATCH: usize = 7;
     /// Unix socket 路径（含 NUL 的 SUN_LEN）上限；按字节比较。
     const MAX_SOCKET_PATH_BYTES: usize = 108;
     /// 本次运行在独占子目录内的 socket 文件名。
@@ -216,11 +222,12 @@ mod session_runner {
         GateReader { receiver }
     }
 
-    /// 有界等待精确控制命令 `run {batch}`；EOF、超时、错文均为失败。
-    fn await_gate_command(gate: &GateReader, batch: usize) -> RunnerResult<()> {
-        let expected = format!("run {batch}");
+    /// 有界等待精确控制命令；EOF、超时、错文均为失败。
+    ///
+    /// `label` 只用于超时文案；`expected` 为必须逐字匹配的命令文本。
+    fn await_control_command(gate: &GateReader, expected: &str, label: &str) -> RunnerResult<()> {
         match gate.receiver.recv_timeout(GATE_DEADLINE) {
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("等待 batch {batch} 控制命令超时")),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("等待 {label} 控制命令超时")),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err("控制读取线程已结束".to_owned()),
             Ok(Err(error)) => Err(error),
             Ok(Ok(line)) => {
@@ -231,6 +238,19 @@ mod session_runner {
                 }
             }
         }
+    }
+
+    /// 有界等待精确控制命令 `run {batch}`；EOF、超时、错文均为失败。
+    fn await_gate_command(gate: &GateReader, batch: usize) -> RunnerResult<()> {
+        await_control_command(gate, &format!("run {batch}"), &format!("batch {batch}"))
+    }
+
+    /// 有界等待 harness 的最终确认命令 `finish`。
+    ///
+    /// 该命令不是第八个正常批次：不执行 pump、不处理 B 断连；它只表示 harness
+    /// 已释放并回收 B，runner 不得据此声称自己直接观察了 B 的进程退出或 Core 关闭。
+    fn await_finish_command(gate: &GateReader) -> RunnerResult<()> {
+        await_control_command(gate, "finish", "finish")
     }
 
     /// 只读身份基线：在 `State::new()` 后、启动前保存的 alive 三元组与
@@ -374,15 +394,12 @@ mod session_runner {
         })
     }
 
-    /// 只读验证断连结果：使用 admission 阶段保存的同一组 ID，确认三类记录
-    /// 仍存在（tombstone 未被误删）、alive=false、surface 的 client 归属保持、
-    /// window 不再被任何 workspace 的 slot/stack 引用、启动基线窗口与归属
-    /// 保持、State 校验干净。
+    /// A 三元组关闭检查：三类记录仍存在（tombstone 未被误删）、alive=false、
+    /// surface→client 归属保持、窗口不被任何 workspace 的 slot/stack 引用。
     ///
-    /// 不修改 State；不做“drop 旧 session 后新建空 State”式伪验证。
-    fn verify_xdg_disconnect(
+    /// 只读；错误文案与旧 disconnect 检查保持一致。
+    fn verify_identity_closed(
         state: &State,
-        baseline: &IdentityBaseline,
         evidence: &AdmissionEvidence,
         batch: usize,
     ) -> RunnerResult<()> {
@@ -433,11 +450,28 @@ mod session_runner {
                 evidence.window
             ));
         }
+        Ok(())
+    }
+
+    /// 基线保持检查：基线窗口仍存活；各 workspace 的窗口列表在排除
+    /// `allowed_extra` 后仍与启动基线排序列表精确相等。
+    ///
+    /// 旧 disconnect 模式传入空 `allowed_extra`，等价于原有精确相等比较，
+    /// 不接受任何新增、丢失或重复引用；readmit 只允许已确认的 B 窗口，且该
+    /// 窗口必须在全部 workspace 引用中恰好出现一次。
+    fn verify_baseline_preserved(
+        state: &State,
+        baseline: &IdentityBaseline,
+        allowed_extra: &[u64],
+        batch: usize,
+    ) -> RunnerResult<()> {
         for window in &baseline.windows {
             if !state.registry.is_alive(*window) {
                 return Err(format!("启动基线 window {window} 必须仍存活"));
             }
         }
+        let mut extra_occurrences: Vec<(u64, usize)> =
+            allowed_extra.iter().map(|window| (*window, 0)).collect();
         for (workspace_id, expected) in &baseline.workspace_windows {
             let mut actual: Vec<u64> = state
                 .compositor
@@ -447,16 +481,80 @@ mod session_runner {
                 .map(|workspace| workspace.window_ids())
                 .unwrap_or_default();
             actual.sort_unstable();
-            if &actual != expected {
+            for (window, count) in extra_occurrences.iter_mut() {
+                *count += actual.iter().filter(|id| *id == window).count();
+            }
+            let filtered: Vec<u64> = actual
+                .iter()
+                .copied()
+                .filter(|id| !allowed_extra.contains(id))
+                .collect();
+            if &filtered != expected {
                 return Err(format!(
-                    "workspace {workspace_id} 的基线归属必须保持: 期望 {expected:?} 实际 {actual:?}"
+                    "workspace {workspace_id} 的基线归属必须保持: 期望 {expected:?} 实际 {filtered:?}"
                 ));
             }
         }
+        for (window, count) in extra_occurrences {
+            if count != 1 {
+                return Err(format!(
+                    "batch{batch} 后允许的新增 window {window} 在 workspace 引用中必须恰好出现一次，实际 {count}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// 只读验证断连结果：使用 admission 阶段保存的同一组 ID，确认三类记录
+    /// 仍存在（tombstone 未被误删）、alive=false、surface 的 client 归属保持、
+    /// window 不再被任何 workspace 的 slot/stack 引用、启动基线窗口与归属
+    /// 保持、State 校验干净。
+    ///
+    /// 不修改 State；不做“drop 旧 session 后新建空 State”式伪验证。
+    fn verify_xdg_disconnect(
+        state: &State,
+        baseline: &IdentityBaseline,
+        evidence: &AdmissionEvidence,
+        batch: usize,
+    ) -> RunnerResult<()> {
+        verify_identity_closed(state, evidence, batch)?;
+        verify_baseline_preserved(state, baseline, &[], batch)?;
         if !state.validate().is_clean() {
             return Err("断连验证时 State 校验必须干净".to_owned());
         }
         Ok(())
+    }
+
+    /// readmit 验证：独立确认 B 的动态三元组（身份、存活、归属、布局与
+    /// validation），断言 B 各 ID 与对应 A ID 互异，复核 A tombstone 仍保留，
+    /// 并在允许已确认 B 窗口的前提下保持基线布局。
+    fn verify_xdg_readmission(
+        state: &State,
+        baseline: &IdentityBaseline,
+        a_evidence: &AdmissionEvidence,
+        batch: usize,
+    ) -> RunnerResult<AdmissionEvidence> {
+        let b_evidence = verify_xdg_admission(state, baseline, batch)?;
+        if b_evidence.client == a_evidence.client
+            || b_evidence.surface == a_evidence.surface
+            || b_evidence.window == a_evidence.window
+        {
+            return Err(format!(
+                "batch{batch} 后 B 的三元组必须与 A 完全不相交: a=({},{},{}) b=({},{},{})",
+                a_evidence.client,
+                a_evidence.surface,
+                a_evidence.window,
+                b_evidence.client,
+                b_evidence.surface,
+                b_evidence.window
+            ));
+        }
+        verify_identity_closed(state, a_evidence, batch)?;
+        verify_baseline_preserved(state, baseline, &[b_evidence.window], batch)?;
+        if !state.validate().is_clean() {
+            return Err("readmit 验证时 State 校验必须干净".to_owned());
+        }
+        Ok(b_evidence)
     }
 
     /// 批次执行标量：调用方据此决定计数或停止，不累积完整报告。
@@ -499,33 +597,69 @@ mod session_runner {
         }
     }
 
+    /// 门控执行一个正常批次：ready → 等 `run N` → 执行 → done，并按既有
+    /// `Started` 语义累计已执行批次数；任何步骤失败原样返回。
+    fn run_gated_normal_batch(
+        orchestrator: &mut NestedRuntimeOrchestrator,
+        state: &mut State,
+        gate: &GateReader,
+        batch_number: usize,
+        pumps: &mut usize,
+        batches: &mut usize,
+    ) -> RunnerResult<()> {
+        write_stdout_line(&format!("batch ready: n={batch_number}"))
+            .map_err(|error| format!("输出 batch ready 失败: {error}"))?;
+        await_gate_command(gate, batch_number)?;
+        let scalars = run_one_batch(orchestrator, state, pumps)?;
+        write_stdout_line(&format!(
+            "batch done: n={batch_number} exit={:?} pumps={}",
+            scalars.exit_reason, scalars.iterations
+        ))
+        .map_err(|error| format!("输出 batch done 失败: {error}"))?;
+        match scalars.end_state {
+            NestedRuntimeLifecycleState::Started => {
+                *batches += 1;
+                Ok(())
+            }
+            other => Err(format!(
+                "batch {batch_number} 正常退出但 session 状态非 Started: {other:?}"
+            )),
+        }
+    }
+
     pub(super) fn run() -> RunnerResult<()> {
         // 参数在创建任何资源前解析：未知、重复、verify 脱离 step 或两个 verify
         // 互斥参数同时出现的组合直接非零退出。
         let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
-        let (step_mode, verify_xdg, verify_disconnect) = match raw_args
+        let (step_mode, verify_xdg, verify_disconnect, verify_readmit) = match raw_args
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>()
             .as_slice()
         {
-            [] => (false, false, false),
-            [only] if *only == STEP_ARG => (true, false, false),
+            [] => (false, false, false, false),
+            [only] if *only == STEP_ARG => (true, false, false, false),
             [first, second]
                 if (*first == STEP_ARG && *second == VERIFY_XDG_ARG)
                     || (*first == VERIFY_XDG_ARG && *second == STEP_ARG) =>
             {
-                (true, true, false)
+                (true, true, false, false)
             }
             [first, second]
                 if (*first == STEP_ARG && *second == VERIFY_XDG_DISCONNECT_ARG)
                     || (*first == VERIFY_XDG_DISCONNECT_ARG && *second == STEP_ARG) =>
             {
-                (true, false, true)
+                (true, false, true, false)
+            }
+            [first, second]
+                if (*first == STEP_ARG && *second == VERIFY_XDG_READMIT_ARG)
+                    || (*first == VERIFY_XDG_READMIT_ARG && *second == STEP_ARG) =>
+            {
+                (true, false, false, true)
             }
             _ => {
                 return Err(
-                    "未知、重复或互斥参数，仅支持 --step-batches 与 --verify-xdg-admission／--verify-xdg-disconnect 二选一"
+                    "未知、重复或互斥参数，仅支持 --step-batches 与 --verify-xdg-admission／--verify-xdg-disconnect／--verify-xdg-readmit 三选一"
                         .to_owned(),
                 );
             }
@@ -579,7 +713,7 @@ mod session_runner {
                 });
             let resource_state = State::new();
             // 只读身份基线在 State::new() 后、启动前保存；mock window 属于基线。
-            if verify_xdg || verify_disconnect {
+            if verify_xdg || verify_disconnect || verify_readmit {
                 baseline = snapshot_alive_identities(&resource_state);
             }
             match resource_orchestrator.start() {
@@ -710,7 +844,7 @@ mod session_runner {
         // verify 模式在 batch3 后、owner 释放前只读确认 admission；
         // 成功才输出 Core 证据行，失败保留非零并走正常收尾。
         let mut admission_evidence: Option<AdmissionEvidence> = None;
-        if failure.is_none() && (verify_xdg || verify_disconnect) {
+        if failure.is_none() && (verify_xdg || verify_disconnect || verify_readmit) {
             match state.as_ref() {
                 None => {
                     failure = Some("verify 阶段 State owner 缺失".to_owned());
@@ -732,9 +866,10 @@ mod session_runner {
             }
         }
 
-        // 断连模式：admission 成功后进入第四批，等待 harness 确认客户端已退出
-        // 后才放行；第四批必须实际执行 pump，随后用同一组 ID 只读验证断连结果。
-        if failure.is_none() && verify_disconnect {
+        // 断连模式（disconnect／readmit 共用）：admission 成功后进入第四批，
+        // 等待 harness 确认客户端已退出后才放行；第四批必须实际执行 pump，
+        // 随后用同一组 ID 只读验证断连结果。
+        if failure.is_none() && (verify_disconnect || verify_readmit) {
             match admission_evidence {
                 None => {
                     failure = Some("断连验证缺少 admission 前置证据".to_owned());
@@ -803,6 +938,66 @@ mod session_runner {
                     }
                     _ => {
                         failure = Some("断连第四批缺少 owner 或门控".to_owned());
+                    }
+                },
+            }
+        }
+
+        // readmit 模式：A 关闭证据后（harness 才启动 B）进入批 5–7 完成 B
+        // admission；验证成功后等 harness 的 finish 确认，再走既有停止路径。
+        // finish 不是正常批次、不 pump；runner 不据此宣称观察到 B 的进程退出。
+        if failure.is_none() && verify_readmit {
+            match admission_evidence {
+                None => {
+                    failure = Some("readmit 验证缺少 A admission 前置证据".to_owned());
+                }
+                Some(a_evidence) => match (orchestrator.as_mut(), state.as_mut(), gate.as_ref()) {
+                    (Some(orchestrator), Some(state), Some(gate_reader)) => {
+                        for batch_number in READMIT_FIRST_BATCH..=READMIT_LAST_BATCH {
+                            if failure.is_some() {
+                                break;
+                            }
+                            if let Err(error) = run_gated_normal_batch(
+                                orchestrator,
+                                state,
+                                gate_reader,
+                                batch_number,
+                                &mut pumps,
+                                &mut batches,
+                            ) {
+                                failure = Some(error);
+                            }
+                        }
+                        if failure.is_none() {
+                            match verify_xdg_readmission(
+                                state,
+                                &baseline,
+                                &a_evidence,
+                                READMIT_LAST_BATCH,
+                            ) {
+                                Err(error) => {
+                                    failure = Some(error);
+                                }
+                                Ok(b_evidence) => {
+                                    if let Err(error) = write_stdout_line(&format!(
+                                        "xdg re-admission verified: batch={READMIT_LAST_BATCH} a=({},{},{}) b=({},{},{}) b_alive=client/surface/window a_tombstone=preserved baseline_preserved=true validation=clean",
+                                        a_evidence.client,
+                                        a_evidence.surface,
+                                        a_evidence.window,
+                                        b_evidence.client,
+                                        b_evidence.surface,
+                                        b_evidence.window
+                                    )) {
+                                        failure = Some(format!("输出 readmit 证据行失败: {error}"));
+                                    } else if let Err(error) = await_finish_command(gate_reader) {
+                                        failure = Some(error);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        failure = Some("readmit 阶段缺少 owner 或门控".to_owned());
                     }
                 },
             }
