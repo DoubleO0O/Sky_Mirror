@@ -61,6 +61,10 @@ mod session_runner {
     const VERIFY_XDG_DISCONNECT_ARG: &str = "--verify-xdg-disconnect";
     /// xdg 重新接入只读验证开关参数：只能与 step 模式组合，与其他 verify 互斥。
     const VERIFY_XDG_READMIT_ARG: &str = "--verify-xdg-readmit";
+    /// xdg 两轮生命周期只读验证开关参数：只能与 step 模式组合，与其他 verify 互斥。
+    const VERIFY_XDG_READMIT_CLOSE_ARG: &str = "--verify-xdg-readmit-close";
+    /// readmit-close 模式中处理 B 真实断连的第八个正常批次编号。
+    const SECOND_DISCONNECT_BATCH_NUMBER: usize = 8;
     /// 断连验证模式专属的第四个正常批次编号。
     const DISCONNECT_BATCH_NUMBER: usize = 4;
     /// readmit 模式中 B admission 的首个正常批次编号。
@@ -597,6 +601,25 @@ mod session_runner {
         }
     }
 
+    /// 两轮生命周期验证：B 关闭证据（同 ID tombstone、归属、布局移出）必须成立，
+    /// A 的既有关闭证据必须保持，且 workspace 窗口集合恢复为启动基线（空
+    /// allowed_extra＝旧 disconnect 的精确相等强度，B/A 窗口均不得残留）。
+    fn verify_xdg_second_close(
+        state: &State,
+        baseline: &IdentityBaseline,
+        a_evidence: &AdmissionEvidence,
+        b_evidence: &AdmissionEvidence,
+        batch: usize,
+    ) -> RunnerResult<()> {
+        verify_identity_closed(state, b_evidence, batch)?;
+        verify_identity_closed(state, a_evidence, batch)?;
+        verify_baseline_preserved(state, baseline, &[], batch)?;
+        if !state.validate().is_clean() {
+            return Err("两轮关闭验证时 State 校验必须干净".to_owned());
+        }
+        Ok(())
+    }
+
     /// 门控执行一个正常批次：ready → 等 `run N` → 执行 → done，并按既有
     /// `Started` 语义累计已执行批次数；任何步骤失败原样返回。
     fn run_gated_normal_batch(
@@ -631,39 +654,46 @@ mod session_runner {
         // 参数在创建任何资源前解析：未知、重复、verify 脱离 step 或两个 verify
         // 互斥参数同时出现的组合直接非零退出。
         let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
-        let (step_mode, verify_xdg, verify_disconnect, verify_readmit) = match raw_args
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .as_slice()
-        {
-            [] => (false, false, false, false),
-            [only] if *only == STEP_ARG => (true, false, false, false),
-            [first, second]
-                if (*first == STEP_ARG && *second == VERIFY_XDG_ARG)
-                    || (*first == VERIFY_XDG_ARG && *second == STEP_ARG) =>
+        let (step_mode, verify_xdg, verify_disconnect, verify_readmit, verify_readmit_close) =
+            match raw_args
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .as_slice()
             {
-                (true, true, false, false)
-            }
-            [first, second]
-                if (*first == STEP_ARG && *second == VERIFY_XDG_DISCONNECT_ARG)
-                    || (*first == VERIFY_XDG_DISCONNECT_ARG && *second == STEP_ARG) =>
-            {
-                (true, false, true, false)
-            }
-            [first, second]
-                if (*first == STEP_ARG && *second == VERIFY_XDG_READMIT_ARG)
-                    || (*first == VERIFY_XDG_READMIT_ARG && *second == STEP_ARG) =>
-            {
-                (true, false, false, true)
-            }
-            _ => {
-                return Err(
-                    "未知、重复或互斥参数，仅支持 --step-batches 与 --verify-xdg-admission／--verify-xdg-disconnect／--verify-xdg-readmit 三选一"
-                        .to_owned(),
-                );
-            }
-        };
+                [] => (false, false, false, false, false),
+                [only] if *only == STEP_ARG => (true, false, false, false, false),
+                [first, second]
+                    if (*first == STEP_ARG && *second == VERIFY_XDG_ARG)
+                        || (*first == VERIFY_XDG_ARG && *second == STEP_ARG) =>
+                {
+                    (true, true, false, false, false)
+                }
+                [first, second]
+                    if (*first == STEP_ARG && *second == VERIFY_XDG_DISCONNECT_ARG)
+                        || (*first == VERIFY_XDG_DISCONNECT_ARG && *second == STEP_ARG) =>
+                {
+                    (true, false, true, false, false)
+                }
+                [first, second]
+                    if (*first == STEP_ARG && *second == VERIFY_XDG_READMIT_ARG)
+                        || (*first == VERIFY_XDG_READMIT_ARG && *second == STEP_ARG) =>
+                {
+                    (true, false, false, true, false)
+                }
+                [first, second]
+                    if (*first == STEP_ARG && *second == VERIFY_XDG_READMIT_CLOSE_ARG)
+                        || (*first == VERIFY_XDG_READMIT_CLOSE_ARG && *second == STEP_ARG) =>
+                {
+                    (true, false, false, false, true)
+                }
+                _ => {
+                    return Err(
+                        "未知、重复或互斥参数，仅支持 --step-batches 与 --verify-xdg-admission／--verify-xdg-disconnect／--verify-xdg-readmit／--verify-xdg-readmit-close 四选一"
+                            .to_owned(),
+                    );
+                }
+            };
 
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
@@ -713,7 +743,7 @@ mod session_runner {
                 });
             let resource_state = State::new();
             // 只读身份基线在 State::new() 后、启动前保存；mock window 属于基线。
-            if verify_xdg || verify_disconnect || verify_readmit {
+            if verify_xdg || verify_disconnect || verify_readmit || verify_readmit_close {
                 baseline = snapshot_alive_identities(&resource_state);
             }
             match resource_orchestrator.start() {
@@ -844,7 +874,9 @@ mod session_runner {
         // verify 模式在 batch3 后、owner 释放前只读确认 admission；
         // 成功才输出 Core 证据行，失败保留非零并走正常收尾。
         let mut admission_evidence: Option<AdmissionEvidence> = None;
-        if failure.is_none() && (verify_xdg || verify_disconnect || verify_readmit) {
+        if failure.is_none()
+            && (verify_xdg || verify_disconnect || verify_readmit || verify_readmit_close)
+        {
             match state.as_ref() {
                 None => {
                     failure = Some("verify 阶段 State owner 缺失".to_owned());
@@ -866,10 +898,10 @@ mod session_runner {
             }
         }
 
-        // 断连模式（disconnect／readmit 共用）：admission 成功后进入第四批，
-        // 等待 harness 确认客户端已退出后才放行；第四批必须实际执行 pump，
+        // 断连模式（disconnect／readmit／readmit-close 共用）：admission 成功后进入
+        // 第四批，等待 harness 确认客户端已退出后才放行；第四批必须实际执行 pump，
         // 随后用同一组 ID 只读验证断连结果。
-        if failure.is_none() && (verify_disconnect || verify_readmit) {
+        if failure.is_none() && (verify_disconnect || verify_readmit || verify_readmit_close) {
             match admission_evidence {
                 None => {
                     failure = Some("断连验证缺少 admission 前置证据".to_owned());
@@ -943,10 +975,10 @@ mod session_runner {
             }
         }
 
-        // readmit 模式：A 关闭证据后（harness 才启动 B）进入批 5–7 完成 B
-        // admission；验证成功后等 harness 的 finish 确认，再走既有停止路径。
-        // finish 不是正常批次、不 pump；runner 不据此宣称观察到 B 的进程退出。
-        if failure.is_none() && verify_readmit {
+        // readmit／readmit-close 模式：A 关闭证据后（harness 才启动 B）进入批 5–7
+        // 完成 B admission。旧 readmit 以 finish 确认收尾；readmit-close 用真实
+        // 第八批处理 B 断连并验证两轮关闭，收尾门是 `run 8` 而非 finish。
+        if failure.is_none() && (verify_readmit || verify_readmit_close) {
             match admission_evidence {
                 None => {
                     failure = Some("readmit 验证缺少 A admission 前置证据".to_owned());
@@ -989,6 +1021,46 @@ mod session_runner {
                                         b_evidence.window
                                     )) {
                                         failure = Some(format!("输出 readmit 证据行失败: {error}"));
+                                    } else if verify_readmit_close {
+                                        // 收尾门是真实第八批：harness 已释放并回收 B 后
+                                        // 才发 `run 8`；该批 pump 处理 B 的真实断连。
+                                        if let Err(error) = run_gated_normal_batch(
+                                            orchestrator,
+                                            state,
+                                            gate_reader,
+                                            SECOND_DISCONNECT_BATCH_NUMBER,
+                                            &mut pumps,
+                                            &mut batches,
+                                        ) {
+                                            failure = Some(error);
+                                        } else {
+                                            match verify_xdg_second_close(
+                                                state,
+                                                &baseline,
+                                                &a_evidence,
+                                                &b_evidence,
+                                                SECOND_DISCONNECT_BATCH_NUMBER,
+                                            ) {
+                                                Err(error) => {
+                                                    failure = Some(error);
+                                                }
+                                                Ok(()) => {
+                                                    if let Err(error) = write_stdout_line(&format!(
+                                                        "xdg second-disconnect verified: batch={SECOND_DISCONNECT_BATCH_NUMBER} a=({},{},{}) b=({},{},{}) b_tombstones=client+surface+window alive=false a_retained=preserved unreferenced=true baseline_restored=true validation=clean",
+                                                        a_evidence.client,
+                                                        a_evidence.surface,
+                                                        a_evidence.window,
+                                                        b_evidence.client,
+                                                        b_evidence.surface,
+                                                        b_evidence.window
+                                                    )) {
+                                                        failure = Some(format!(
+                                                            "输出第二轮关闭证据行失败: {error}"
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        }
                                     } else if let Err(error) = await_finish_command(gate_reader) {
                                         failure = Some(error);
                                     }
