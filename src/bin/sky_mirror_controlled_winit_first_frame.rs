@@ -4,6 +4,11 @@
 //! 进程主线程创建；外部 Wayland client 在独立线程提交 256×256 XRGB8888 四象限
 //! （红、绿、蓝、白）buffer、damage 与 frame request。成功只代表该窄路径的 controlled
 //! proof，不外推 DRM/input/多输出能力。
+//!
+//! `--input-test` 是独立的 R3.1 受控键盘切片：Winit 窗口聚焦后按一次无修饰 J，经
+//! `KeybindingMap -> InputEvent -> Action -> State::dispatch_action` 执行一次
+//! `NextWorkspace` 并报告前后 workspace ID；它不创建 SHM、不接收 client buffer，只提交
+//! 一次固定背景启动帧使窗口真实可见，用于证明这一条输入链路。
 
 #[cfg(all(feature = "smithay-linux", target_os = "linux", not(test)))]
 #[path = "../backend/mod.rs"]
@@ -70,6 +75,124 @@ mod shm_pattern {
     }
 }
 
+/// R3.1 受控键盘输入切片的纯数据键位契约。
+///
+/// 本模块只做物理键码判定，不依赖 Core、Smithay 或任何平台资源，因此可以在
+/// `cargo test --bin sky_mirror_controlled_winit_first_frame` 中作为真实行为契约测试
+/// 的对象；真正的 Winit 事件泵送与状态分派由 `controlled_runner` 调用本判定。
+///
+/// 物理 J 的键码证据链（锁定依赖源码，不是猜测）：
+/// - winit 0.30.13 `platform_impl/linux/common/xkb/keymap.rs`：`KeyCode::KeyJ` 的
+///   Linux scancode 为 36（libinput/evdev 约定，与 `KeyCode::KeyH => 35`、
+///   `KeyCode::KeyK => 37` 相邻）；
+/// - Smithay 0.7.0 `backend/winit/mod.rs`：`physical_key.to_scancode()` 的结果存入
+///   `WinitKeyboardInputEvent.key`；`backend/winit/input.rs` 的
+///   `KeyboardKeyEvent::key_code()` 返回 `key + 8`，即 XKB/Wayland keycode；
+/// - 因此物理 J 到达本项目时为 XKB keycode 36 + 8 = 44。
+///
+/// 锁定的 Smithay 0.7.0 在 `backend/winit/mod.rs` 的 `ModifiersChanged` 分支直接丢弃
+/// 修饰状态，本切片因此只接受无修饰键语义，不声称 Super 组合键已接通。
+#[cfg(any(feature = "smithay-linux", test))]
+mod r3_input_test {
+    /// R3.1 唯一授权的受控按键。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum ControlledKey {
+        /// 物理 J；触发 `InputEvent::NextWorkspace`。
+        J,
+    }
+
+    /// 物理 J 的 XKB keycode（winit scancode 36 + Smithay 8）。
+    pub(crate) const J_XKB_KEYCODE: u32 = 44;
+
+    /// 把一次 Winit 键盘观察映射为受控按键：只有 J 的按下命中。
+    ///
+    /// 释放、其它物理键与未知键码一律返回 `None`，避免把非目标事件伪装成动作。
+    pub(crate) fn controlled_key_press(xkb_keycode: u32, pressed: bool) -> Option<ControlledKey> {
+        // 先决条件：释放事件永远不产生动作，避免按下/释放被重复计入。
+        if !pressed {
+            return None;
+        }
+        // R3.1 只授权物理 J；其余物理键码与未知键码一律拒绝。
+        (xkb_keycode == J_XKB_KEYCODE).then_some(ControlledKey::J)
+    }
+
+    /// R3.1 显式停止门禁：只有用户输入 `stop` 行对应的停止原因能通过，EOF 与其它终止原因都不算。
+    ///
+    /// stdin EOF 只表示输入结束，不代表用户执行了显式停止；R3.1 在自己的调用路径中把
+    /// EOF 判为失败，不改变 R2 `--sustained`／`--disconnect-test` 对 EOF 的既有语义。
+    pub(crate) fn accepts_explicit_stop(stop_reason: &str) -> bool {
+        // R3.1 只接受用户输入 `stop` 行产生的停止原因；EOF、deadline、窗口关闭、
+        // 输入错误与不变量失败都不是显式停止。
+        stop_reason == "stop_requested"
+    }
+}
+
+/// R3.1 纯数据键码映射契约测试（不创建窗口、不泵事件、不修改状态）。
+///
+/// 该测试只证明键码与按下状态判定语义；它不证明真实窗口收到了按键，也不冒充完整
+/// 链路验收——真实链路证据必须来自 `--input-test` 的人工按键运行。
+#[cfg(test)]
+mod r3_input_keycode_tests {
+    use crate::r3_input_test::{ControlledKey, J_XKB_KEYCODE, controlled_key_press};
+
+    /// 准备：物理 J 的按下观察。
+    /// 执行：`controlled_key_press(J_XKB_KEYCODE, true)`。
+    /// 断言：恰好映射为受控 J，且键码为源码链确认的 44。
+    /// Red 依据：占位实现恒返回 `None`，本测试以断言失败暴露目标行为缺失。
+    #[test]
+    fn physical_j_press_maps_to_controlled_j() {
+        // 独立已知值：36 + 8，来自 winit 0.30.13 与 Smithay 0.7.0 源码（见模块注释）。
+        assert_eq!(J_XKB_KEYCODE, 44);
+        assert_eq!(controlled_key_press(44, true), Some(ControlledKey::J));
+    }
+
+    /// 准备：J 的释放、源码确认的相邻非 J 物理键（H=43、K=45）与未知键码。
+    /// 执行：分别调用 `controlled_key_press`。
+    /// 断言：一律返回 `None`；释放与未知键不得产生受控动作。
+    /// Red 依据：本测试锁死拒绝语义；朴素实现（任意键码或释放也映射为 J）会在此失败。
+    #[test]
+    fn j_release_and_unknown_keycodes_map_to_none() {
+        assert_eq!(controlled_key_press(44, false), None);
+        assert_eq!(controlled_key_press(43, true), None);
+        assert_eq!(controlled_key_press(45, true), None);
+        assert_eq!(controlled_key_press(0, true), None);
+        assert_eq!(controlled_key_press(u32::MAX, true), None);
+    }
+}
+
+/// R3.1 显式停止门禁契约测试（纯数据，不读 stdin、不创建窗口或 Winit event loop）。
+///
+/// 该测试只证明“只有用户 `stop` 行对应的停止原因能通过成功门禁”；真实 stdin 行为与
+/// 清理结果仍由用户人工运行 `--input-test` 验收。
+#[cfg(test)]
+mod r3_input_stop_gate_tests {
+    use crate::r3_input_test::accepts_explicit_stop;
+
+    /// 准备：显式 `stop` 行对应的停止原因。
+    /// 执行：`accepts_explicit_stop("stop_requested")`。
+    /// 断言：`true` —— 只有显式 stop 才是 R3.1 的成功停止。
+    /// Red 依据：本测试锁死正例语义；把显式 stop 也判失败的实现会在此失败。
+    #[test]
+    fn explicit_stop_is_accepted() {
+        assert!(accepts_explicit_stop("stop_requested"));
+    }
+
+    /// 准备：EOF 与 deadline、窗口关闭、输入错误、不变量失败等停止原因。
+    /// 执行：分别调用 `accepts_explicit_stop`。
+    /// 断言：一律 `false` —— EOF 不是显式停止，不得满足 R3.1 成功门禁。
+    /// Red 依据：占位实现恒返回 `true`，本测试以断言失败暴露目标行为缺失。
+    #[test]
+    fn eof_and_other_stop_reasons_are_rejected() {
+        assert!(!accepts_explicit_stop("eof"));
+        assert!(!accepts_explicit_stop("deadline"));
+        assert!(!accepts_explicit_stop("window_closed"));
+        assert!(!accepts_explicit_stop("stop_input_error"));
+        assert!(!accepts_explicit_stop("pump_error"));
+        assert!(!accepts_explicit_stop("action_invariant"));
+        assert!(!accepts_explicit_stop("startup_workspace_missing"));
+    }
+}
+
 /// 本次 R2 运行的确切资源残留核对：socket、wayland-server `<socket>.lock` 与 client SHM。
 ///
 /// 该核对只读检查、从不删除任何文件：删除责任始终归属各自 owner（coordinator 关闭
@@ -78,7 +201,53 @@ mod shm_pattern {
 /// （例如宿主自己的 `wayland-1`）的归属。
 #[cfg(any(feature = "smithay-linux", test))]
 mod residue {
-    use std::{fs, path::Path};
+    use std::{ffi::OsString, fs, path::Path};
+
+    /// 读取运行目录中的全部条目文件名；目录或单项读取失败都必须失败关闭。
+    fn runtime_dir_file_names(runtime_dir: &Path) -> Result<Vec<OsString>, String> {
+        let entries = fs::read_dir(runtime_dir)
+            .map_err(|error| format!("读取 XDG_RUNTIME_DIR 失败: {error}"))?;
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("读取 XDG_RUNTIME_DIR 单项失败: {error}"))?;
+            names.push(entry.file_name());
+        }
+        Ok(names)
+    }
+
+    /// 把本次 socket 与 `<socket>.lock` 的精确名残留追加到 `problems`。
+    ///
+    /// `<socket>.lock` 命名必须与 wayland-server 的 `socket_path.with_extension("lock")`
+    /// 同源，避免两套推导产生漏检；该助手只读比较，不删除任何文件。
+    fn collect_socket_residue_problems(
+        socket_path: &Path,
+        names: &[OsString],
+        problems: &mut Vec<String>,
+    ) {
+        // 1) socket 精确文件名。
+        match socket_path.file_name() {
+            None => problems.push("socket 路径缺少文件名".to_owned()),
+            Some(socket_name) => {
+                if names.iter().any(|name| name.as_os_str() == socket_name) {
+                    problems.push(format!("本次运行 socket 仍残留: {}", socket_path.display()));
+                }
+            }
+        }
+
+        // 2) `<socket>.lock` 精确文件名。
+        let lock_path = socket_path.with_extension("lock");
+        match lock_path.file_name() {
+            None => problems.push("`.lock` 路径缺少文件名".to_owned()),
+            Some(lock_name) => {
+                if names.iter().any(|name| name.as_os_str() == lock_name) {
+                    problems.push(format!(
+                        "本次运行 <socket>.lock 仍残留: {}",
+                        lock_path.display()
+                    ));
+                }
+            }
+        }
+    }
 
     /// 只核对本次运行确切拥有的资源是否回收，绝不按宽泛前缀计数或误认用户已有文件。
     ///
@@ -98,39 +267,11 @@ mod residue {
         socket_path: &Path,
         shm_path: Option<&Path>,
     ) -> Result<(), String> {
-        let entries = fs::read_dir(runtime_dir)
-            .map_err(|error| format!("读取 XDG_RUNTIME_DIR 失败: {error}"))?;
-        let mut names = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|error| format!("读取 XDG_RUNTIME_DIR 单项失败: {error}"))?;
-            names.push(entry.file_name());
-        }
+        let names = runtime_dir_file_names(runtime_dir)?;
         let mut problems: Vec<String> = Vec::new();
 
-        // 1) socket 精确文件名。
-        match socket_path.file_name() {
-            None => problems.push("socket 路径缺少文件名".to_owned()),
-            Some(socket_name) => {
-                if names.iter().any(|name| name.as_os_str() == socket_name) {
-                    problems.push(format!("本次运行 socket 仍残留: {}", socket_path.display()));
-                }
-            }
-        }
-
-        // 2) `<socket>.lock` 精确文件名，命名与 wayland-server 的
-        //    `socket_path.with_extension("lock")` 同源，避免两套推导产生漏检。
-        let lock_path = socket_path.with_extension("lock");
-        match lock_path.file_name() {
-            None => problems.push("`.lock` 路径缺少文件名".to_owned()),
-            Some(lock_name) => {
-                if names.iter().any(|name| name.as_os_str() == lock_name) {
-                    problems.push(format!(
-                        "本次运行 <socket>.lock 仍残留: {}",
-                        lock_path.display()
-                    ));
-                }
-            }
-        }
+        // 1) + 2) socket 与 `<socket>.lock` 精确文件名。
+        collect_socket_residue_problems(socket_path, &names, &mut problems);
 
         // 3) 本次 client SHM 精确文件名；`None` 表示无法核对，必须失败关闭。
         match shm_path {
@@ -151,6 +292,26 @@ mod residue {
             Ok(())
         } else {
             // 聚合全部问题一次性报告，避免只报首个残留而掩盖 `.lock`/SHM 残留。
+            Err(problems.join("；"))
+        }
+    }
+
+    /// R3.1 无 SHM 模式的残留核对：只核对本次运行 owner 创建的 socket 与 `<socket>.lock`。
+    ///
+    /// R3.1 受控键盘模式不创建 SHM，因此不能复用“必须有 SHM 路径”的 R2 入口；本函数
+    /// 只证明这两个精确文件名未残留，既不检查也不删除目录中的其它文件（包括宿主自己的
+    /// `wayland-1` 与其它无关 SHM 文件）。
+    pub(crate) fn ensure_owned_socket_resources_reclaimed(
+        runtime_dir: &Path,
+        socket_path: &Path,
+    ) -> Result<(), String> {
+        let names = runtime_dir_file_names(runtime_dir)?;
+        let mut problems: Vec<String> = Vec::new();
+        collect_socket_residue_problems(socket_path, &names, &mut problems);
+
+        if problems.is_empty() {
+            Ok(())
+        } else {
             Err(problems.join("；"))
         }
     }
@@ -260,8 +421,15 @@ mod controlled_runner {
     };
 
     use crate::{
-        core::state::State,
-        describe_readback_mismatch, residue, shm_pattern,
+        core::{
+            action::Action,
+            input::InputEvent,
+            keybinding::{Key, KeyChord, KeybindingMap, Modifiers},
+            state::State,
+        },
+        describe_readback_mismatch,
+        r3_input_test::{ControlledKey, accepts_explicit_stop, controlled_key_press},
+        residue, shm_pattern,
         smithay_backend::{
             linux_toplevel_admission_runtime_queue::RuntimeToplevelAdmissionDrainTick,
             nested_runtime_coordinator::{
@@ -287,6 +455,12 @@ mod controlled_runner {
     const TEARDOWN_WAIT: Duration = Duration::from_secs(5);
     /// 确认本次运行确切身份关闭（tombstone、布局移除、基线保持）的有界排空预算。
     const CLOSURE_WAIT: Duration = Duration::from_secs(5);
+    /// R3.1 受控键盘模式的绝对 deadline／watchdog：收到显式 stop 前保持有界等待；超时、
+    /// 无有效按键或任一不变量失败都必须退出并清理。60s 为人工聚焦窗口并按键留出时间。
+    const INPUT_TEST_DEADLINE: Duration = Duration::from_secs(60);
+    /// R3.1 周期性 Winit 事件泵送的轮次间隔；Winit 0.30 要求外部循环持续 dispatch 才能
+    /// 收到真实按键，该间隔同时限制空闲轮询的 CPU 占用。
+    const INPUT_TEST_PUMP_INTERVAL: Duration = Duration::from_millis(16);
 
     /// client SHM backing file 的唯一 owner；drop 删除文件，失败路径同样不会留下残留。
     struct ShmBackingFile {
@@ -1913,8 +2087,291 @@ mod controlled_runner {
         }
     }
 
+    /// 本次 State 的 workspace 列表中是否存在该稳定 ID。
+    fn workspace_exists(state: &State, workspace_id: u32) -> bool {
+        state
+            .compositor
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == workspace_id)
+    }
+
+    /// R3.1 唯一授权的 InputEvent→Action 转换：只接受 `NextWorkspace`。
+    ///
+    /// 该 match 与 `core::EventLoop::run` 中对应分支保持同一语义；其余 InputEvent 在本
+    /// 模式下都表示本切片不变量被破坏，必须显式失败而不是猜测一个动作。
+    fn controlled_action_for_input_event(event: InputEvent) -> Option<Action> {
+        match event {
+            InputEvent::NextWorkspace => Some(Action::NextWorkspace),
+            _ => None,
+        }
+    }
+
+    /// `--input-test`：R3.1 受控键盘输入切片。
+    ///
+    /// 只证明“无修饰键物理 J 的按下 → 本地 `KeybindingMap` → `InputEvent` → `Action` →
+    /// `State::dispatch_action(NextWorkspace)`”这一条窄链路，并报告切换前后的实际
+    /// workspace ID。本模式不创建 SHM、不接收外部 client、只提交固定背景启动帧；成功
+    /// 只代表该受控切片，不外推 main、production desktop、pointer、DRM 或完整键盘支持。
+    ///
+    /// 失败关闭：watchdog 超时、EOF（非显式 stop）、窗口提前关闭、无有效按键、每次按下
+    /// 没有恰好一次动作、workspace 未变化或不在 State 中、泵送错误、输入错误与残留核对
+    /// 失败都会非零退出。
+    fn run_input_test() -> Result<(), Box<dyn std::error::Error>> {
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .ok_or("controlled runner 需要 XDG_RUNTIME_DIR")?;
+        if !runtime_dir.is_dir() {
+            return Err("XDG_RUNTIME_DIR 必须是已存在目录".into());
+        }
+        let socket_name = format!("wayland-sky-mirror-r3-{}", std::process::id());
+        let socket_path = runtime_dir.join(&socket_name);
+        let mut coordinator =
+            NestedRuntimeCoordinator::with_production_protocol_bootstrap(&socket_name)?;
+        coordinator.initialize_winit_output_on_current_thread()?;
+        // R3.1 启动帧：只周期性泵送输入事件不会向宿主提交任何内容，窗口可能不会出现在
+        // Niri 窗口列表或合成输出中；因此必须先经既有 Winit owner 提交一次固定背景首帧。
+        // 提交失败必须失败关闭：先销毁 owner，再核对本次 socket/`.lock` 已清理。
+        let startup_frame = match coordinator.present_winit_input_test_startup_frame() {
+            Ok(report) => report,
+            Err(error) => {
+                drop(coordinator);
+                let cleanup_note = match residue::ensure_owned_socket_resources_reclaimed(
+                    &runtime_dir,
+                    &socket_path,
+                ) {
+                    Ok(()) => String::new(),
+                    Err(cleanup_error) => format!("；残留核对失败: {cleanup_error}"),
+                };
+                return Err(format!(
+                    "R3.1 启动首帧提交失败，拒绝进入输入循环: {error}{cleanup_note}"
+                )
+                .into());
+            }
+        };
+        let mut state = State::new();
+
+        // 启动前只读基线：startup workspace 必须真实存在于同一个 State 的列表中。
+        let startup_workspace = state.compositor.current_workspace;
+        let startup_workspace_exists = workspace_exists(&state, startup_workspace);
+
+        // 本地无修饰键映射：只在 R3.1 模式内新增 J→NextWorkspace。`default_bindings()` 与
+        // 既有 Super 快捷键保持原样；Super 组合键在本模式不可达，因为锁定的 Smithay
+        // 0.7.0 Winit 适配丢弃 ModifiersChanged（见 `r3_input_test` 模块注释）。
+        let mut keybindings = KeybindingMap::default_bindings();
+        keybindings.insert(
+            KeyChord::new(Modifiers::default(), Key::J),
+            InputEvent::NextWorkspace,
+        );
+
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let (signal_sender, signal_receiver) = mpsc::channel();
+        spawn_stdin_stop_reader(stop_flag, signal_sender);
+
+        println!(
+            "R3.1 controlled input test ready: socket={socket_name} startup_workspace={startup_workspace} first_frame_submitted=true target={}x{} deadline={}s; 聚焦测试窗口后按一次无修饰 J，然后输入 stop（Smithay 0.7 丢弃 ModifiersChanged，本模式无法识别修饰键）",
+            startup_frame.target_size.0,
+            startup_frame.target_size.1,
+            INPUT_TEST_DEADLINE.as_secs()
+        );
+
+        let deadline = Instant::now() + INPUT_TEST_DEADLINE;
+        let mut failure: Option<String> = if startup_workspace_exists {
+            None
+        } else {
+            Some(format!(
+                "启动 workspace {startup_workspace} 不在 State 的 workspace 列表中"
+            ))
+        };
+        let mut stop_reason = if startup_workspace_exists {
+            "unknown"
+        } else {
+            "startup_workspace_missing"
+        };
+        let mut presses = 0usize;
+        let mut actions = 0usize;
+        let mut transitions: Vec<(u32, u32)> = Vec::new();
+        let mut focus_observed = false;
+        let mut pumps = 0usize;
+
+        while failure.is_none() && Instant::now() < deadline {
+            pumps += 1;
+            // 周期性有界泵送宿主 Winit 事件：窗口聚焦后的真实按键经 Smithay
+            // `WinitEvent::Input(Keyboard)` 到达；本切片不做 SHM/render/accept。
+            let report = match coordinator.pump_winit_input_test_events() {
+                Ok(report) => report,
+                Err(error) => {
+                    failure = Some(format!("Winit 事件泵送失败: {error}"));
+                    stop_reason = "pump_error";
+                    break;
+                }
+            };
+            if report.close_requested || report.exit_code.is_some() {
+                // 窗口提前关闭不是成功停止：立即停止泵送，避免对已关闭的 event loop
+                // 重复 dispatch 触发 Winit 声明的未定义行为。
+                failure = Some(format!(
+                    "Winit 窗口提前关闭: close_requested={} exit_code={:?}",
+                    report.close_requested, report.exit_code
+                ));
+                stop_reason = "window_closed";
+                break;
+            }
+            if report.focus_observed == Some(true) && !focus_observed {
+                focus_observed = true;
+                println!(
+                    "R3.1 controlled input test window focused: press unmodified J once, then type stop"
+                );
+            }
+            for observation in &report.key_observations {
+                // 只有源码确认的物理 J 按下命中；释放与未知/其它键码都不构成动作。
+                let Some(ControlledKey::J) =
+                    controlled_key_press(observation.xkb_keycode, observation.pressed)
+                else {
+                    continue;
+                };
+                // 每次有效按下最多产生一次动作：本循环对一次观察只走一次 resolve+dispatch。
+                presses += 1;
+                let before = state.compositor.current_workspace;
+                let chord = KeyChord::new(Modifiers::default(), Key::J);
+                let Some(input_event) = keybindings.resolve(chord) else {
+                    failure =
+                        Some("本地无修饰 J 映射缺失（KeybindingMap 未返回 InputEvent）".to_owned());
+                    break;
+                };
+                let Some(action) = controlled_action_for_input_event(input_event) else {
+                    failure = Some(format!(
+                        "本地映射返回了 R3.1 未授权的 InputEvent: {input_event:?}"
+                    ));
+                    break;
+                };
+                state.dispatch_action(action);
+                let after = state.compositor.current_workspace;
+                if !workspace_exists(&state, after) {
+                    failure = Some(format!(
+                        "动作后 workspace {after} 不在 State 的 workspace 列表中"
+                    ));
+                    break;
+                }
+                if after == before {
+                    failure = Some(format!("NextWorkspace 未改变 workspace（仍为 {before}）"));
+                    break;
+                }
+                actions += 1;
+                transitions.push((before, after));
+                println!(
+                    "R3.1 controlled input action: press={presses} action={actions} workspace {before} -> {after}"
+                );
+            }
+            if failure.is_some() {
+                if stop_reason == "unknown" {
+                    stop_reason = "action_invariant";
+                }
+                break;
+            }
+            match signal_receiver.try_recv() {
+                Ok(StopSignal::Requested { origin }) => {
+                    if origin == "stop" {
+                        stop_reason = "stop_requested";
+                        println!(
+                            "R3.1 controlled input stop accepted: origin=stop presses={presses} actions={actions}"
+                        );
+                    } else {
+                        // EOF 只表示 stdin 结束，不是用户显式停止；R3.1 在自己的调用路径中
+                        // 判失败，不改变 R2 路径把 EOF 视为停止来源的既有语义。
+                        failure =
+                            Some("stdin 在显式 stop 前结束（EOF 不是 R3.1 的显式停止）".to_owned());
+                        stop_reason = "eof";
+                        println!(
+                            "R3.1 controlled input EOF rejected: presses={presses} actions={actions}"
+                        );
+                    }
+                    break;
+                }
+                Ok(StopSignal::InputError(message)) => {
+                    failure = Some(format!("stdin 停止输入错误: {message}"));
+                    stop_reason = "stop_input_error";
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    failure = Some("stdin 停止 reader 线程异常结束（未发出信号）".to_owned());
+                    stop_reason = "stop_input_error";
+                    break;
+                }
+            }
+            thread::sleep(INPUT_TEST_PUMP_INTERVAL);
+        }
+        if failure.is_none() && stop_reason == "unknown" {
+            // deadline 到期而没有任何显式 stop：watchdog 必须判失败。
+            failure = Some(format!(
+                "在 {}s watchdog 内未收到显式 stop",
+                INPUT_TEST_DEADLINE.as_secs()
+            ));
+            stop_reason = "deadline";
+        }
+
+        // 先销毁唯一 owner（Winit/EGL 与本次 socket/.lock），再核对本次资源已清理。
+        // R3.1 不创建 SHM，因此只使用 socket-only 核对，不复用“必须有 SHM 路径”的 R2 门禁。
+        drop(coordinator);
+        let residue_check =
+            residue::ensure_owned_socket_resources_reclaimed(&runtime_dir, &socket_path);
+
+        // 成功门禁：至少一次有效按下；每次有效按下恰有一次动作；前后 workspace 都必须存在。
+        let target_workspace = state.compositor.current_workspace;
+        let target_workspace_exists = workspace_exists(&state, target_workspace);
+        let mut failures: Vec<String> = Vec::new();
+        if let Some(message) = failure {
+            failures.push(message);
+        }
+        if !startup_workspace_exists {
+            failures.push(format!("启动 workspace {startup_workspace} 不存在"));
+        }
+        if presses == 0 {
+            failures.push("未观察到无修饰键 J 的有效按下（无有效按键）".to_owned());
+        }
+        if actions != presses {
+            failures.push(format!(
+                "动作次数 {actions} 与有效按下次数 {presses} 不一致（重复或缺失动作）"
+            ));
+        }
+        if !target_workspace_exists {
+            failures.push(format!(
+                "目标 workspace {target_workspace} 不在 State 的 workspace 列表中"
+            ));
+        }
+        if let Err(error) = residue_check {
+            failures.push(format!("残留核对失败: {error}"));
+        }
+        // R3.1 成功门禁：停止原因必须是用户输入的显式 stop；EOF 与其它终止原因不通过。
+        if !accepts_explicit_stop(stop_reason) {
+            failures.push(format!(
+                "R3.1 成功门禁要求显式 stop，实际停止原因: {stop_reason}"
+            ));
+        }
+        if !failures.is_empty() {
+            return Err(format!(
+                "R3.1 input test 失败（{stop_reason}）: {}",
+                failures.join("；")
+            )
+            .into());
+        }
+
+        let transitions_text = transitions
+            .iter()
+            .map(|(before, after)| format!("{before}->{after}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        println!(
+            "R3.1 controlled keyboard input: startup_workspace={startup_workspace} target_workspace={target_workspace} presses={presses} actions={actions} transitions={transitions_text} pumps={pumps} stop={stop_reason} focus_observed={focus_observed} socket_clean=true lock_clean=true"
+        );
+        Ok(())
+    }
+
     pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
         let args: Vec<String> = std::env::args().collect();
+        if args.iter().any(|arg| arg == "--input-test") {
+            return run_input_test();
+        }
         if args.iter().any(|arg| arg == "--sustained") {
             let disconnect = args.iter().any(|arg| arg == "--disconnect-test");
             return run_sustained(disconnect);
@@ -2153,7 +2610,9 @@ mod residue_reclaim_tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use crate::residue::ensure_owned_resources_reclaimed;
+    use crate::residue::{
+        ensure_owned_resources_reclaimed, ensure_owned_socket_resources_reclaimed,
+    };
 
     /// 候选路径：`sky-r2-residue-{tag}-{pid}-{attempt}`。
     ///
@@ -2307,6 +2766,43 @@ mod residue_reclaim_tests {
         assert!(
             error.contains("socket") && error.contains("lock") && error.contains("SHM"),
             "错误必须同时包含 socket/`.lock`/SHM，实际: {error}"
+        );
+    }
+
+    /// 准备：临时目录里只有与本次无关的其它文件（含一个残留 SHM 文件）。
+    /// 执行：socket-only 核对（R3.1 不创建 SHM，不提供 SHM 路径）。
+    /// 断言：返回 `Ok`，且无关文件未被检查、更未被删除。
+    /// Red 依据：旧入口只有“必须有 SHM 路径”的版本，`None` 必然失败关闭。
+    #[test]
+    fn socket_only_check_does_not_require_shm() {
+        let dir = TempRuntimeDir::new("r3-no-shm");
+        let socket = dir.path().join("wayland-sky-mirror-r3-424242");
+        let unrelated_shm = dir.path().join("sky-mirror-r2-shm-other.bin");
+        fs::write(&unrelated_shm, [0u8; 4]).expect("写入无关 SHM 文件失败");
+        let result = ensure_owned_socket_resources_reclaimed(dir.path(), &socket);
+        assert_eq!(
+            result,
+            Ok(()),
+            "R3.1 socket-only 核对不得要求 SHM 路径: {result:?}"
+        );
+        assert!(unrelated_shm.exists(), "核对不得删除任何非本次资源");
+    }
+
+    /// 准备：本次 socket 与 `<socket>.lock` 同时残留。
+    /// 执行：socket-only 核对。
+    /// 断言：一次错误聚合点名两者精确路径。
+    /// Red 依据：函数缺失时本测试无法编译，目标核对行为不存在。
+    #[test]
+    fn socket_only_check_reports_socket_and_lock() {
+        let dir = TempRuntimeDir::new("r3-socket-lock");
+        let socket = dir.path().join("wayland-sky-mirror-r3-424242");
+        fs::write(&socket, b"").expect("写入 socket 文件失败");
+        fs::write(socket.with_extension("lock"), b"").expect("写入 .lock 失败");
+        let error = ensure_owned_socket_resources_reclaimed(dir.path(), &socket)
+            .expect_err("socket/`.lock` 残留必须核对失败");
+        assert!(
+            error.contains("socket") && error.contains("wayland-sky-mirror-r3-424242.lock"),
+            "错误必须点名 socket 与 `.lock` 精确路径，实际: {error}"
         );
     }
 

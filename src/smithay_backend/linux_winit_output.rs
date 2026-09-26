@@ -15,6 +15,7 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         egl::ffi::egl as egl_ffi,
+        input::{InputEvent as SmithayInputEvent, KeyState, KeyboardKeyEvent},
         renderer::{
             Color32F, ExportMem, Frame, ImportMemWl, Renderer, Texture, TextureMapping,
             element::{Id, Kind, texture::TextureRenderElement},
@@ -80,6 +81,35 @@ pub(crate) struct NestedWinitShmPresentReport {
     pub source_buffer_retained: bool,
     /// 此步骤不发送 frame done，必须由之后的成功完成门单独授权。
     pub client_frame_done_sent: bool,
+}
+
+/// R3.1 受控切片中的一次 Winit 键盘观察（纯数据，不持有平台 resource）。
+///
+/// `xkb_keycode` 来自 Smithay `KeyboardKeyEvent::key_code().raw()`：XKB/Wayland keycode
+/// 约定（物理 J = 44，即 winit scancode 36 + 8）。锁定的 Smithay 0.7.0 Winit 适配丢弃
+/// `ModifiersChanged`，因此这里没有修饰键字段，也不得由调用方补造修饰状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NestedWinitKeyObservation {
+    /// 物理键的 XKB keycode；物理 J 为 44。
+    pub xkb_keycode: u32,
+    /// 该键盘事件是按下（`true`）还是释放（`false`）。
+    pub pressed: bool,
+}
+
+/// 一次 R3.1 Winit 宿主事件泵送的观测结果。
+///
+/// 该报告只证明本进程观察到哪些宿主事件；它不证明 Core 状态已改变，也不证明生产
+/// 键盘/指针支持。关闭与退出必须由调用方当作失败并立即停止后续泵送。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct NestedWinitInputPumpReport {
+    /// 本次泵送收到的键盘事件；按下与释放都在内，由调用方决定如何映射。
+    pub key_observations: Vec<NestedWinitKeyObservation>,
+    /// 本次泵送是否观察到焦点事件及其状态；`None` 表示本批无焦点事件。
+    pub focus_observed: Option<bool>,
+    /// 宿主是否请求关闭窗口。
+    pub close_requested: bool,
+    /// 宿主 event loop 是否已退出及其退出码。
+    pub exit_code: Option<i32>,
 }
 
 /// Winit output 的唯一资源 owner。
@@ -1180,6 +1210,32 @@ impl NestedWinitOutputOwner {
             }
             thread::sleep(WINIT_PRESENT_PUMP_INTERVAL);
         }
+    }
+
+    /// R3.1 受控键盘模式：泵送一次 Winit 宿主事件，只观测键盘/焦点/关闭信号。
+    ///
+    /// 该方法不创建 SHM、不导入 buffer、不渲染、不修改 Core；它只解决 Winit 0.30
+    /// 要求外部循环周期性 `dispatch_new_events` 才能收到真实按键的问题。调用方必须在
+    /// 观察到关闭/退出后立即停止再次泵送：对已关闭的 event loop 重复 dispatch 属于
+    /// Winit 声明的应用错误，本 owner 不做兜底重试。
+    pub(crate) fn pump_input_test_events(&mut self) -> NestedWinitInputPumpReport {
+        let mut report = NestedWinitInputPumpReport::default();
+        let status = self.event_loop.dispatch_new_events(|event| match event {
+            WinitEvent::Input(SmithayInputEvent::Keyboard { event }) => {
+                report.key_observations.push(NestedWinitKeyObservation {
+                    xkb_keycode: event.key_code().raw(),
+                    pressed: event.state() == KeyState::Pressed,
+                });
+            }
+            WinitEvent::Focus(focused) => report.focus_observed = Some(focused),
+            WinitEvent::CloseRequested => report.close_requested = true,
+            // Resized/Redraw/pointer/touch 等宿主事件与本切片无关，保持被忽略。
+            _ => {}
+        });
+        if let PumpStatus::Exit(code) = status {
+            report.exit_code = Some(code);
+        }
+        report
     }
 
     /// 导入一个已由 coordinator 原子验证过的 SHM buffer，并呈现到真实 Winit/EGL/GLES target。

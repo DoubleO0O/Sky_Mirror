@@ -47,7 +47,10 @@ use crate::{
             RuntimeToplevelAdmissionEnqueueReport, RuntimeToplevelAdmissionQueueOwner,
             RuntimeToplevelUnmapDrainReport,
         },
-        linux_winit_output::{NestedWinitOutputOwner, NestedWinitShmPresentReport},
+        linux_winit_output::{
+            NestedWinitFirstFrameReport, NestedWinitInputPumpReport, NestedWinitOutputOwner,
+            NestedWinitShmPresentReport,
+        },
         linux_wl_surface_identity::{
             AdapterSurfaceCommitObservation, SurfaceIdentityError, SurfaceIdentityKey,
         },
@@ -4801,6 +4804,51 @@ impl NestedRuntimeCoordinator {
         }
         self.winit_output_owner = Some(NestedWinitOutputOwner::new()?);
         Ok(())
+    }
+
+    /// R3.1 受控键盘模式：经唯一 Winit owner 泵送一批宿主事件。
+    ///
+    /// 该方法不做 accept/dispatch、不消费 SHM commit、不渲染、不修改 Core；它只把
+    /// owner 观测到的纯数据报告转交调用方。owner 未初始化时返回错误而不是静默空转。
+    pub(crate) fn pump_winit_input_test_events(
+        &mut self,
+    ) -> Result<NestedWinitInputPumpReport, Box<dyn std::error::Error>> {
+        let owner =
+            self.winit_output_owner
+                .as_mut()
+                .ok_or_else(|| -> Box<dyn std::error::Error> {
+                    "Winit output owner 尚未初始化，无法泵送受控键盘事件".into()
+                })?;
+        Ok(owner.pump_input_test_events())
+    }
+
+    /// R3.1 启动帧：经唯一 Winit owner 提交一次固定背景首帧，并检查报告不变量。
+    ///
+    /// 只供受控调用方在 owner 初始化后、进入输入泵送循环前调用；它不创建 SHM、不转移
+    /// client resource、不修改 Core。报告缺少关键步骤（renderer bind／clear／submit）或
+    /// 冒充 client buffer 与 frame done 时返回错误，由调用方失败关闭并清理本次资源。
+    pub(crate) fn present_winit_input_test_startup_frame(
+        &mut self,
+    ) -> Result<NestedWinitFirstFrameReport, Box<dyn std::error::Error>> {
+        let owner =
+            self.winit_output_owner
+                .as_mut()
+                .ok_or_else(|| -> Box<dyn std::error::Error> {
+                    "Winit output owner 尚未初始化，无法提交 R3.1 启动帧".into()
+                })?;
+        let report = owner.present_first_frame()?;
+        if !report.target_created
+            || !report.renderer_bound
+            || !report.first_frame_cleared
+            || !report.backbuffer_submitted
+            || report.target_size.0 <= 0
+            || report.target_size.1 <= 0
+            || report.client_buffer_imported
+            || report.client_frame_done_sent
+        {
+            return Err(format!("R3.1 启动首帧报告不满足预期: {report:?}").into());
+        }
+        Ok(report)
     }
 
     /// 返回最近一次真实 SHM render 原子尝试；报告不持有平台 resource。
